@@ -1,0 +1,115 @@
+# Russian translation of xfce-net-plugin
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: ru\n"
+
+msgid "Properties — Network"
+msgstr "Свойства — Сеть"
+
+msgid "Close"
+msgstr "Закрыть"
+
+msgid "Appearance"
+msgstr "Внешний вид"
+
+msgid "Square button"
+msgstr "Квадратная кнопка"
+
+msgid "Plugin size:"
+msgstr "Размер плагина:"
+
+msgid "Use panel size"
+msgstr "Использовать размер панели"
+
+msgid "Icon size:"
+msgstr "Размер значка:"
+
+msgid "Not connected"
+msgstr "Не подключено"
+
+msgid "Connected to %s (%s)"
+msgstr "Подключено к %s (%s)"
+
+msgid " · VPN active"
+msgstr " · VPN активен"
+
+msgid "VPN active"
+msgstr "VPN активен"
+
+msgid "Networks"
+msgstr "Сети"
+
+msgid "Forget network \"%s\"?"
+msgstr "Забыть сеть \"%s\"?"
+
+msgid "Confirm"
+msgstr "Подтвердить"
+
+msgid "Connect"
+msgstr "Подключить"
+
+msgid "Incorrect password"
+msgstr "Неверный пароль"
+
+msgid "Connected"
+msgstr "Подключено"
+
+msgid "Disconnect"
+msgstr "Отключить"
+
+msgid "Saved network"
+msgstr "Сохранённая сеть"
+
+msgid "Connect automatically"
+msgstr "Подключаться автоматически"
+
+msgid "Forget"
+msgstr "Забыть"
+
+msgid "Password"
+msgstr "Пароль"
+
+msgid "Advanced settings…"
+msgstr "Дополнительные параметры…"
+
+msgid "Connect to hidden network…"
+msgstr "Подключиться к скрытой сети…"
+
+msgid "Refresh"
+msgstr "Обновить"
+
+
+msgid "Updating…"
+msgstr "Обновление…"
+
+msgid "Popup width:"
+msgstr "Ширина попапа:"
+
+msgid "Popup height:"
+msgstr "Высота попапа:"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Connected to <b>%s</b>"
+msgstr "Подключено к <b>%s</b>"
+
+msgid "Connect to hidden network"
+msgstr "Подключиться к скрытой сети"
+
+msgid "Cancel"
+msgstr "Отмена"
+
+msgid "Network name:"
+msgstr "Имя сети:"
+
+msgid "Security:"
+msgstr "Безопасность:"
+
+msgid "None"
+msgstr "Нет"
+
+msgid "Password:"
+msgstr "Пароль:"

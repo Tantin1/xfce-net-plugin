@@ -1,0 +1,115 @@
+# Japanese translation of xfce-net-plugin
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: ja\n"
+
+msgid "Properties — Network"
+msgstr "プロパティ — ネットワーク"
+
+msgid "Close"
+msgstr "閉じる"
+
+msgid "Appearance"
+msgstr "外観"
+
+msgid "Square button"
+msgstr "正方形ボタン"
+
+msgid "Plugin size:"
+msgstr "プラグインサイズ："
+
+msgid "Use panel size"
+msgstr "パネルサイズを使用"
+
+msgid "Icon size:"
+msgstr "アイコンサイズ："
+
+msgid "Not connected"
+msgstr "未接続"
+
+msgid "Connected to %s (%s)"
+msgstr "%s (%s) に接続済み"
+
+msgid " · VPN active"
+msgstr " · VPN 有効"
+
+msgid "VPN active"
+msgstr "VPN 有効"
+
+msgid "Networks"
+msgstr "ネットワーク"
+
+msgid "Forget network \"%s\"?"
+msgstr "ネットワーク \"%s\" を忘れますか？"
+
+msgid "Confirm"
+msgstr "確認"
+
+msgid "Connect"
+msgstr "接続"
+
+msgid "Incorrect password"
+msgstr "パスワードが正しくありません"
+
+msgid "Connected"
+msgstr "接続済み"
+
+msgid "Disconnect"
+msgstr "切断"
+
+msgid "Saved network"
+msgstr "保存済みネットワーク"
+
+msgid "Connect automatically"
+msgstr "自動的に接続"
+
+msgid "Forget"
+msgstr "忘れる"
+
+msgid "Password"
+msgstr "パスワード"
+
+msgid "Advanced settings…"
+msgstr "詳細設定…"
+
+msgid "Connect to hidden network…"
+msgstr "非表示ネットワークに接続…"
+
+msgid "Refresh"
+msgstr "更新"
+
+
+msgid "Updating…"
+msgstr "更新中…"
+
+msgid "Popup width:"
+msgstr "ポップアップの幅:"
+
+msgid "Popup height:"
+msgstr "ポップアップの高さ:"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Connected to <b>%s</b>"
+msgstr "<b>%s</b> に接続済み"
+
+msgid "Connect to hidden network"
+msgstr "非公開ネットワークに接続"
+
+msgid "Cancel"
+msgstr "キャンセル"
+
+msgid "Network name:"
+msgstr "ネットワーク名:"
+
+msgid "Security:"
+msgstr "セキュリティ:"
+
+msgid "None"
+msgstr "なし"
+
+msgid "Password:"
+msgstr "パスワード:"

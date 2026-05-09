@@ -1,0 +1,115 @@
+# German translation of xfce-net-plugin
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: de\n"
+
+msgid "Properties — Network"
+msgstr "Eigenschaften — Netzwerk"
+
+msgid "Close"
+msgstr "Schließen"
+
+msgid "Appearance"
+msgstr "Erscheinungsbild"
+
+msgid "Square button"
+msgstr "Quadratische Schaltfläche"
+
+msgid "Plugin size:"
+msgstr "Plugin-Größe:"
+
+msgid "Use panel size"
+msgstr "Panelgröße verwenden"
+
+msgid "Icon size:"
+msgstr "Symbolgröße:"
+
+msgid "Not connected"
+msgstr "Nicht verbunden"
+
+msgid "Connected to %s (%s)"
+msgstr "Verbunden mit %s (%s)"
+
+msgid " · VPN active"
+msgstr " · VPN aktiv"
+
+msgid "VPN active"
+msgstr "VPN aktiv"
+
+msgid "Networks"
+msgstr "Netzwerke"
+
+msgid "Forget network \"%s\"?"
+msgstr "Netzwerk \"%s\" vergessen?"
+
+msgid "Confirm"
+msgstr "Bestätigen"
+
+msgid "Connect"
+msgstr "Verbinden"
+
+msgid "Incorrect password"
+msgstr "Falsches Passwort"
+
+msgid "Connected"
+msgstr "Verbunden"
+
+msgid "Disconnect"
+msgstr "Trennen"
+
+msgid "Saved network"
+msgstr "Gespeichertes Netzwerk"
+
+msgid "Connect automatically"
+msgstr "Automatisch verbinden"
+
+msgid "Forget"
+msgstr "Vergessen"
+
+msgid "Password"
+msgstr "Passwort"
+
+msgid "Advanced settings…"
+msgstr "Erweiterte Einstellungen…"
+
+msgid "Connect to hidden network…"
+msgstr "Mit verstecktem Netzwerk verbinden…"
+
+msgid "Refresh"
+msgstr "Aktualisieren"
+
+
+msgid "Updating…"
+msgstr "Aktualisiere…"
+
+msgid "Popup width:"
+msgstr "Popup-Breite:"
+
+msgid "Popup height:"
+msgstr "Popup-Höhe:"
+
+msgid "Wi-Fi"
+msgstr "WLAN"
+
+msgid "Connected to <b>%s</b>"
+msgstr "Verbunden mit <b>%s</b>"
+
+msgid "Connect to hidden network"
+msgstr "Mit verborgenem Netzwerk verbinden"
+
+msgid "Cancel"
+msgstr "Abbrechen"
+
+msgid "Network name:"
+msgstr "Netzwerkname:"
+
+msgid "Security:"
+msgstr "Sicherheit:"
+
+msgid "None"
+msgstr "Keine"
+
+msgid "Password:"
+msgstr "Passwort:"

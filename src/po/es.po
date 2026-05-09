@@ -1,0 +1,114 @@
+# Spanish translation of xfce-net-plugin
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: es\n"
+
+msgid "Properties — Network"
+msgstr "Propiedades — Red"
+
+msgid "Close"
+msgstr "Cerrar"
+
+msgid "Appearance"
+msgstr "Apariencia"
+
+msgid "Square button"
+msgstr "Botón cuadrado"
+
+msgid "Plugin size:"
+msgstr "Tamaño del plugin:"
+
+msgid "Use panel size"
+msgstr "Usar tamaño del panel"
+
+msgid "Icon size:"
+msgstr "Tamaño del ícono:"
+
+msgid "Not connected"
+msgstr "No conectado"
+
+msgid "Connected to %s (%s)"
+msgstr "Conectado a %s (%s)"
+
+msgid " · VPN active"
+msgstr " · VPN activa"
+
+msgid "VPN active"
+msgstr "VPN activa"
+
+msgid "Networks"
+msgstr "Redes"
+
+msgid "Forget network \"%s\"?"
+msgstr "¿Olvidar la red \"%s\"?"
+
+msgid "Confirm"
+msgstr "Confirmar"
+
+msgid "Connect"
+msgstr "Conectar"
+
+msgid "Incorrect password"
+msgstr "Contraseña incorrecta"
+
+msgid "Connected"
+msgstr "Conectado"
+
+msgid "Disconnect"
+msgstr "Desconectar"
+
+msgid "Saved network"
+msgstr "Red guardada"
+
+msgid "Connect automatically"
+msgstr "Conectar automáticamente"
+
+msgid "Forget"
+msgstr "Olvidar"
+
+msgid "Password"
+msgstr "Contraseña"
+
+msgid "Advanced settings…"
+msgstr "Configuración avanzada…"
+
+msgid "Connect to hidden network…"
+msgstr "Conectar a red oculta…"
+
+msgid "Refresh"
+msgstr "Actualizar"
+
+
+msgid "Updating…"
+msgstr "Actualizando…"
+
+msgid "Popup width:"
+msgstr "Ancho del popup:"
+
+msgid "Popup height:"
+msgstr "Alto del popup:"
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Connected to <b>%s</b>"
+msgstr "Conectado a <b>%s</b>"
+
+msgid "Connect to hidden network"
+msgstr "Conectar a red oculta"
+
+msgid "Cancel"
+msgstr "Cancelar"
+
+msgid "Network name:"
+msgstr "Nombre de red:"
+
+msgid "Security:"
+msgstr "Seguridad:"
+
+msgid "None"
+msgstr "Ninguna"
+
+msgid "Password:"
+msgstr "Contraseña:"

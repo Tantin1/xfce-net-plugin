@@ -1,0 +1,115 @@
+# Chinese (Simplified) translation of xfce-net-plugin
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: zh_CN\n"
+
+msgid "Properties — Network"
+msgstr "属性 — 网络"
+
+msgid "Close"
+msgstr "关闭"
+
+msgid "Appearance"
+msgstr "外观"
+
+msgid "Square button"
+msgstr "方形按钮"
+
+msgid "Plugin size:"
+msgstr "插件大小："
+
+msgid "Use panel size"
+msgstr "使用面板大小"
+
+msgid "Icon size:"
+msgstr "图标大小："
+
+msgid "Not connected"
+msgstr "未连接"
+
+msgid "Connected to %s (%s)"
+msgstr "已连接到 %s (%s)"
+
+msgid " · VPN active"
+msgstr " · VPN 已激活"
+
+msgid "VPN active"
+msgstr "VPN 已激活"
+
+msgid "Networks"
+msgstr "网络"
+
+msgid "Forget network \"%s\"?"
+msgstr "忘记网络\"%s\"？"
+
+msgid "Confirm"
+msgstr "确认"
+
+msgid "Connect"
+msgstr "连接"
+
+msgid "Incorrect password"
+msgstr "密码错误"
+
+msgid "Connected"
+msgstr "已连接"
+
+msgid "Disconnect"
+msgstr "断开连接"
+
+msgid "Saved network"
+msgstr "已保存的网络"
+
+msgid "Connect automatically"
+msgstr "自动连接"
+
+msgid "Forget"
+msgstr "忘记"
+
+msgid "Password"
+msgstr "密码"
+
+msgid "Advanced settings…"
+msgstr "高级设置…"
+
+msgid "Connect to hidden network…"
+msgstr "连接到隐藏网络…"
+
+msgid "Refresh"
+msgstr "刷新"
+
+
+msgid "Updating…"
+msgstr "正在刷新…"
+
+msgid "Popup width:"
+msgstr "弹窗宽度："
+
+msgid "Popup height:"
+msgstr "弹窗高度："
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Connected to <b>%s</b>"
+msgstr "已连接到 <b>%s</b>"
+
+msgid "Connect to hidden network"
+msgstr "连接到隐藏网络"
+
+msgid "Cancel"
+msgstr "取消"
+
+msgid "Network name:"
+msgstr "网络名称："
+
+msgid "Security:"
+msgstr "安全性："
+
+msgid "None"
+msgstr "无"
+
+msgid "Password:"
+msgstr "密码："

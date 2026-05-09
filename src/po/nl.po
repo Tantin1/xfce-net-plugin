@@ -1,0 +1,115 @@
+# Dutch translation of xfce-net-plugin
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: nl\n"
+
+msgid "Properties — Network"
+msgstr "Eigenschappen — Netwerk"
+
+msgid "Close"
+msgstr "Sluiten"
+
+msgid "Appearance"
+msgstr "Uiterlijk"
+
+msgid "Square button"
+msgstr "Vierkante knop"
+
+msgid "Plugin size:"
+msgstr "Plugingrootte:"
+
+msgid "Use panel size"
+msgstr "Panelgrootte gebruiken"
+
+msgid "Icon size:"
+msgstr "Pictogramgrootte:"
+
+msgid "Not connected"
+msgstr "Niet verbonden"
+
+msgid "Connected to %s (%s)"
+msgstr "Verbonden met %s (%s)"
+
+msgid " · VPN active"
+msgstr " · VPN actief"
+
+msgid "VPN active"
+msgstr "VPN actief"
+
+msgid "Networks"
+msgstr "Netwerken"
+
+msgid "Forget network \"%s\"?"
+msgstr "Netwerk \"%s\" vergeten?"
+
+msgid "Confirm"
+msgstr "Bevestigen"
+
+msgid "Connect"
+msgstr "Verbinden"
+
+msgid "Incorrect password"
+msgstr "Onjuist wachtwoord"
+
+msgid "Connected"
+msgstr "Verbonden"
+
+msgid "Disconnect"
+msgstr "Verbreken"
+
+msgid "Saved network"
+msgstr "Opgeslagen netwerk"
+
+msgid "Connect automatically"
+msgstr "Automatisch verbinden"
+
+msgid "Forget"
+msgstr "Vergeten"
+
+msgid "Password"
+msgstr "Wachtwoord"
+
+msgid "Advanced settings…"
+msgstr "Geavanceerde instellingen…"
+
+msgid "Connect to hidden network…"
+msgstr "Verbinden met verborgen netwerk…"
+
+msgid "Refresh"
+msgstr "Vernieuwen"
+
+
+msgid "Updating…"
+msgstr "Bijwerken…"
+
+msgid "Popup width:"
+msgstr "Popupbreedte:"
+
+msgid "Popup height:"
+msgstr "Popuphoogte:"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Connected to <b>%s</b>"
+msgstr "Verbonden met <b>%s</b>"
+
+msgid "Connect to hidden network"
+msgstr "Verbinden met verborgen netwerk"
+
+msgid "Cancel"
+msgstr "Annuleren"
+
+msgid "Network name:"
+msgstr "Netwerknaam:"
+
+msgid "Security:"
+msgstr "Beveiliging:"
+
+msgid "None"
+msgstr "Geen"
+
+msgid "Password:"
+msgstr "Wachtwoord:"
