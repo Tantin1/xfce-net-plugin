@@ -27,27 +27,42 @@ Plugin de panel para Xfce que reemplaza a `nm-applet`. Muestra el estado de la r
 - Configuración persistente en `~/.config/xfce4/panel/xfce-net-plugin.ini`
 - Internacionalización: es, en, de, fr, pt_BR, it, nl, pl, ru, zh_CN, ja
 
-### Dependencias
+### Instalación
 
-- GTK 3.24.38 o superior
-- libxfce4panel 4.18 o superior
-- NetworkManager 1.42 o superior
-- gettext
+#### Paquetes pre-compilados
 
-### Compilación e instalación
+> Próximamente: paquetes `.deb` y `.pkg` en la sección [Releases](../../releases).
+
+#### Compilar desde fuente
+
+**Arch Linux (CachyOS, Manjaro, EndeavourOS, Garuda, etc.)**
 
 ```bash
+sudo pacman -S cmake pkgconf gtk3 xfce4-panel gettext
+```
+
+**Debian 12 / Debian 13**
+
+```bash
+sudo apt install cmake pkg-config libgtk-3-dev libxfce4panel-2.0-dev gettext
+```
+
+**Compilación e instalación (todas las distros)**
+
+```bash
+git clone https://github.com/Tantin1/xfce-net-plugin.git
 cd xfce-net-plugin
 mkdir build && cmake -S src -B build
 cmake --build build
 sudo cmake --install build
-xfce4-panel --quit && sleep 1 && xfce4-panel &
+xfce4-panel -r
 ```
 
 ### Compatibilidad
 
-- CachyOS (rolling)
-- Debian 12
+- Arch Linux (CachyOS, Manjaro, EndeavourOS, Garuda, etc.)
+- Debian 12 (Bookworm)
+- Debian 13 (Trixie)
 - Xfce 4.18+ sobre X11
 
 ### Licencia
@@ -85,16 +100,30 @@ An Xfce panel plugin that replaces `nm-applet`. Shows Wi-Fi status and lets you 
 - Persistent config at `~/.config/xfce4/panel/xfce-net-plugin.ini`
 - Internationalization: es, en, de, fr, pt_BR, it, nl, pl, ru, zh_CN, ja
 
-### Dependencies
+### Installation
 
-- GTK 3.24.38 or higher
-- libxfce4panel 4.18 or higher
-- NetworkManager 1.42 or higher
-- gettext
+#### Pre-built packages
 
-### Build & Install
+> Coming soon: `.deb` and `.pkg` packages in the [Releases](../../releases) section.
+
+#### Build from source
+
+**Arch Linux (CachyOS, Manjaro, EndeavourOS, Garuda, etc.)**
 
 ```bash
+sudo pacman -S cmake pkgconf gtk3 xfce4-panel gettext
+```
+
+**Debian 12 / Debian 13**
+
+```bash
+sudo apt install cmake pkg-config libgtk-3-dev libxfce4panel-2.0-dev gettext
+```
+
+**Build & install (all distros)**
+
+```bash
+git clone https://github.com/Tantin1/xfce-net-plugin.git
 cd xfce-net-plugin
 mkdir build && cmake -S src -B build
 cmake --build build
@@ -104,8 +133,9 @@ xfce4-panel -r
 
 ### Compatibility
 
-- CachyOS (rolling)
-- Debian 12
+- Arch Linux (CachyOS, Manjaro, EndeavourOS, Garuda, etc.)
+- Debian 12 (Bookworm)
+- Debian 13 (Trixie)
 - Xfce 4.18+ on X11
 
 ### License
