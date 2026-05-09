@@ -31,7 +31,10 @@ Plugin de panel para Xfce que reemplaza a `nm-applet`. Muestra el estado de la r
 
 #### Paquetes pre-compilados
 
-> Próximamente: paquetes `.deb` y `.pkg` en la sección [Releases](../../releases).
+| Distro | Paquete |
+|--------|---------|
+| Debian 12 / Debian 13 (amd64) | [xfce-net-plugin_1.0.0-1_amd64.deb](https://github.com/Tantin1/xfce-net-plugin/releases/tag/v1.0.0) |
+| Arch Linux y derivadas (x86_64) | [xfce-net-plugin-1.0.0-1-x86_64.pkg.tar.zst](https://github.com/Tantin1/xfce-net-plugin/releases/tag/v1.0.0) |
 
 #### Compilar desde fuente
 
@@ -104,7 +107,10 @@ An Xfce panel plugin that replaces `nm-applet`. Shows Wi-Fi status and lets you 
 
 #### Pre-built packages
 
-> Coming soon: `.deb` and `.pkg` packages in the [Releases](../../releases) section.
+| Distro | Package |
+|--------|---------|
+| Debian 12 / Debian 13 (amd64) | [xfce-net-plugin_1.0.0-1_amd64.deb](https://github.com/Tantin1/xfce-net-plugin/releases/tag/v1.0.0) |
+| Arch Linux and derivatives (x86_64) | [xfce-net-plugin-1.0.0-1-x86_64.pkg.tar.zst](https://github.com/Tantin1/xfce-net-plugin/releases/tag/v1.0.0) |
 
 #### Build from source
 
