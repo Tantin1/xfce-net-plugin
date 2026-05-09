@@ -8,10 +8,9 @@
 
 Plugin de panel para Xfce que reemplaza a `nm-applet`. Muestra el estado de la red Wi-Fi y permite conectarse, desconectarse y gestionar redes directamente desde el panel, sin depender de herramientas externas.
 
-### Capturas
+### Captura
 
-![Panel](screenshots/panel.png)
-![Popup](screenshots/popup.png)
+![Plugin](screenshots/plugin.png)
 
 ### Características
 
@@ -84,10 +83,9 @@ Desarrollado por [Tantin1](https://github.com/Tantin1).
 
 An Xfce panel plugin that replaces `nm-applet`. Shows Wi-Fi status and lets you connect, disconnect, and manage networks directly from the panel, without relying on external tools.
 
-### Screenshots
+### Screenshot
 
-![Panel](screenshots/panel.png)
-![Popup](screenshots/popup.png)
+![Plugin](screenshots/plugin.png)
 
 ### Features
 
