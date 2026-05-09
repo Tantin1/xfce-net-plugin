@@ -99,7 +99,7 @@ cd xfce-net-plugin
 mkdir build && cmake -S src -B build
 cmake --build build
 sudo cmake --install build
-xfce4-panel --quit && sleep 1 && xfce4-panel &
+xfce4-panel -r
 ```
 
 ### Compatibility
