@@ -38,10 +38,12 @@ target_link_libraries(xfce-net-plugin PRIVATE
     ${Intl_LIBRARIES}
 )
 
-if(EXISTS "/usr/lib/x86_64-linux-gnu/xfce4/panel/plugins")
-    set(XFCE_PLUGIN_DIR "/usr/lib/x86_64-linux-gnu/xfce4/panel/plugins")
-else()
-    set(XFCE_PLUGIN_DIR "/usr/lib/xfce4/panel/plugins")
+if(NOT XFCE_PLUGIN_DIR)
+    if(EXISTS "/usr/lib/x86_64-linux-gnu/xfce4/panel/plugins")
+        set(XFCE_PLUGIN_DIR "/usr/lib/x86_64-linux-gnu/xfce4/panel/plugins")
+    else()
+        set(XFCE_PLUGIN_DIR "/usr/lib/xfce4/panel/plugins")
+    endif()
 endif()
 message(STATUS "Plugin install dir: ${XFCE_PLUGIN_DIR}")
 
