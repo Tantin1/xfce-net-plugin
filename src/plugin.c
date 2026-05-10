@@ -414,6 +414,9 @@ on_nm_changed (gpointer user_data)
         { FILE *f = fopen("/tmp/icon_debug.txt","a"); if(f){ fprintf(f,"on_nm_changed: connected=%d vpn=%d strength=%d\n", connected, vpn, strength); fclose(f); } }
 
         if (!connected) {
+            GSList *eths = nm_get_ethernet_devices (np->conn);
+            gboolean wired = (eths != NULL);
+            nm_device_list_free (eths);
             if (vpn) {
                 static const gchar *f[] = {
                     "network-wireless-secure-symbolic",
@@ -421,6 +424,8 @@ on_nm_changed (gpointer user_data)
                     "network-vpn-symbolic",
                     "network-wireless-symbolic", NULL };
                 icon_name = icon_with_fallback (f);
+            } else if (wired) {
+                icon_name = "network-wired-symbolic";
             } else {
                 icon_name = "network-wireless-disconnected-symbolic";
             }
