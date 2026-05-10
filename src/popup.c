@@ -146,11 +146,19 @@ get_primary_ssid (GDBusConnection *conn)
 
 /* ---------- callback del switch de Wi-Fi ---------- */
 
+typedef struct {
+    GDBusConnection *conn;
+    NetPopup        *popup;
+} WifiSwitchData;
+
 static gboolean
-on_wifi_switch_toggled (GtkSwitch *sw, gboolean state, gpointer conn)
+on_wifi_switch_toggled (GtkSwitch *sw, gboolean state, gpointer user_data)
 {
     (void) sw;
-    nm_set_wifi_enabled ((GDBusConnection *) conn, state);
+    WifiSwitchData *d = user_data;
+    nm_set_wifi_enabled (d->conn, state);
+    for (GSList *l = d->popup->device_switches; l; l = l->next)
+        gtk_widget_set_sensitive (GTK_WIDGET (l->data), state);
     return FALSE;
 }
 
@@ -725,6 +733,7 @@ make_device_section (GDBusConnection *conn, NmDevice *dev, NetPopup *popup,
         GtkWidget *dev_switch = gtk_switch_new ();
         gtk_switch_set_active (GTK_SWITCH (dev_switch),
                                nm_get_device_enabled (conn, dev->object_path));
+        gtk_widget_set_sensitive (dev_switch, nm_get_wifi_enabled (conn));
 
         DeviceSwitchData *d = g_new0 (DeviceSwitchData, 1);
         d->conn        = conn;
@@ -735,6 +744,7 @@ make_device_section (GDBusConnection *conn, NmDevice *dev, NetPopup *popup,
         g_signal_connect (dev_switch, "state-set",
                           G_CALLBACK (on_device_switch_toggled), d);
         gtk_box_pack_end (GTK_BOX (header_row), dev_switch, FALSE, FALSE, 0);
+        popup->device_switches = g_slist_append (popup->device_switches, dev_switch);
 
         gtk_box_pack_start (GTK_BOX (section), header_row, FALSE, FALSE, 0);
     }
@@ -1083,6 +1093,8 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
     g_list_foreach (children, (GFunc) gtk_widget_destroy, NULL);
     g_list_free (children);
     popup->current_expand_box = NULL;
+    g_slist_free (popup->device_switches);
+    popup->device_switches = NULL;
     popup->popup_width  = popup_width;
     popup->popup_height = popup_height;
     gtk_widget_set_size_request (popup->window, popup_width, -1);
@@ -1146,8 +1158,13 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
     GtkWidget *wifi_switch = gtk_switch_new ();
     gtk_switch_set_active (GTK_SWITCH (wifi_switch),
                            nm_get_wifi_enabled (conn));
+    WifiSwitchData *wsd = g_new0 (WifiSwitchData, 1);
+    wsd->conn  = conn;
+    wsd->popup = popup;
+    g_object_set_data_full (G_OBJECT (wifi_switch), "wifi-switch-data", wsd,
+                            (GDestroyNotify) g_free);
     g_signal_connect (wifi_switch, "state-set",
-                      G_CALLBACK (on_wifi_switch_toggled), conn);
+                      G_CALLBACK (on_wifi_switch_toggled), wsd);
     gtk_box_pack_start (GTK_BOX (wifi_row), wifi_switch, FALSE, FALSE, 0);
 
     
@@ -1173,20 +1190,13 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
     gtk_box_pack_start (GTK_BOX (popup->top_box), sep, FALSE, FALSE, 0);
     /* -------------------------------- */
 
-    gint n_devices = g_slist_length (devices);
-    for (d = devices; d; d = d->next) {
-        GtkWidget *section = make_device_section (conn, d->data, popup, n_devices > 1);
-        gtk_box_pack_start (GTK_BOX (popup->content_box), section,
-                            FALSE, FALSE, 0);
-    }
-
     /* ---- Sección Ethernet (solo si hay cable) ---- */
     GSList *eth_devices = nm_get_ethernet_devices (conn);
     for (d = eth_devices; d; d = d->next) {
         NmDevice  *dev = d->data;
 
         GtkWidget *eth_sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
-        gtk_box_pack_start (GTK_BOX (popup->content_box), eth_sep, FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (popup->top_box), eth_sep, FALSE, FALSE, 0);
 
         GtkWidget *eth_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
         gtk_widget_set_margin_start  (eth_row, 12);
@@ -1210,10 +1220,17 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
                                      "dim-label");
         gtk_box_pack_end (GTK_BOX (eth_row), eth_status, FALSE, FALSE, 0);
 
-        gtk_box_pack_start (GTK_BOX (popup->content_box), eth_row, FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (popup->top_box), eth_row, FALSE, FALSE, 0);
     }
     nm_device_list_free (eth_devices);
     /* ---------------------------------------------- */
+
+    gint n_devices = g_slist_length (devices);
+    for (d = devices; d; d = d->next) {
+        GtkWidget *section = make_device_section (conn, d->data, popup, n_devices > 1);
+        gtk_box_pack_start (GTK_BOX (popup->content_box), section,
+                            FALSE, FALSE, 0);
+    }
 
     /* ---- Sección VPN (solo si hay perfiles configurados) ---- */
     GtkWidget *vpn_section = make_vpn_section (conn);

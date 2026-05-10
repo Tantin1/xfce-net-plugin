@@ -17,6 +17,7 @@ typedef struct {
     gint       popup_width;
     gint       popup_height;
     GtkWidget *button;
+    GSList    *device_switches;
 } NetPopup;
 
 NetPopup *popup_create  (XfcePanelPlugin *plugin, GtkWidget *button);
