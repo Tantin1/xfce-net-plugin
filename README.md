@@ -40,13 +40,13 @@ Plugin de panel para Xfce que reemplaza a `nm-applet`. Muestra el estado de la r
 **Arch Linux (CachyOS, Manjaro, EndeavourOS, Garuda, etc.)**
 
 ```bash
-sudo pacman -S cmake pkgconf gtk3 xfce4-panel gettext
+sudo pacman -S git cmake pkgconf gtk3 xfce4-panel gettext
 ```
 
 **Debian 12 / Debian 13**
 
 ```bash
-sudo apt install cmake pkg-config libgtk-3-dev libxfce4panel-2.0-dev gettext
+sudo apt install git cmake pkg-config libgtk-3-dev libxfce4panel-2.0-dev gettext
 ```
 
 **Compilación e instalación (todas las distros)**
@@ -115,13 +115,13 @@ An Xfce panel plugin that replaces `nm-applet`. Shows Wi-Fi status and lets you 
 **Arch Linux (CachyOS, Manjaro, EndeavourOS, Garuda, etc.)**
 
 ```bash
-sudo pacman -S cmake pkgconf gtk3 xfce4-panel gettext
+sudo pacman -S git cmake pkgconf gtk3 xfce4-panel gettext
 ```
 
 **Debian 12 / Debian 13**
 
 ```bash
-sudo apt install cmake pkg-config libgtk-3-dev libxfce4panel-2.0-dev gettext
+sudo apt install git cmake pkg-config libgtk-3-dev libxfce4panel-2.0-dev gettext
 ```
 
 **Build & install (all distros)**
