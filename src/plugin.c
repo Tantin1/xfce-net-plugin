@@ -107,6 +107,8 @@ load_config (NetPlugin *np)
     np->plugin_size    = DEFAULT_PLUGIN_SIZE;
     np->use_panel_icon = DEFAULT_USE_PANEL_ICON;
     np->icon_size      = DEFAULT_ICON_SIZE;
+    np->popup_width    = DEFAULT_POPUP_WIDTH;
+    np->popup_height   = DEFAULT_POPUP_HEIGHT;
 
     if (!g_key_file_load_from_file (kf, path, G_KEY_FILE_NONE, &err)) {
         g_clear_error (&err);
