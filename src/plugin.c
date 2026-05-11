@@ -14,7 +14,7 @@
 typedef struct {
     XfcePanelPlugin *plugin;
     GtkWidget       *button;
-    GtkWidget       *icon;
+    GtkWidget       *icon_box;   /* contenedor del ícono en el botón */
     GtkWidget       *stack;
     GtkWidget       *spinner;
     NetPopup        *popup;
@@ -36,7 +36,76 @@ typedef struct {
 
     /* estado de conexión en progreso */
     gboolean        connecting;
+
+    /* último ícono mostrado (para reconstruir al cambiar tamaño) */
+    gint     last_strength;
+    gboolean last_secure;
+    gboolean last_connected;
+    gboolean last_vpn;
+    gboolean last_wired;
 } NetPlugin;
+
+/* ---------- actualizar ícono del botón del panel ---------- */
+
+static void
+update_panel_icon (NetPlugin *np,
+                   gboolean connected, gint strength,
+                   gboolean secure, gboolean vpn, gboolean wired)
+{
+    gint icon_px = np->use_panel_icon
+                   ? xfce_panel_plugin_get_icon_size (np->plugin)
+                   : np->icon_size;
+
+    /* Guardar estado para poder reconstruir al cambiar tamaño */
+    np->last_strength  = strength;
+    np->last_secure    = secure;
+    np->last_connected = connected;
+    np->last_vpn       = vpn;
+    np->last_wired     = wired;
+
+    /* Limpiar contenedor */
+    GList *kids = gtk_container_get_children (GTK_CONTAINER (np->icon_box));
+    g_list_foreach (kids, (GFunc) gtk_widget_destroy, NULL);
+    g_list_free (kids);
+
+    GtkWidget *new_icon;
+
+    if (!connected) {
+        if (wired) {
+            if (vpn) {
+                GtkWidget *overlay  = gtk_overlay_new ();
+                GtkWidget *base_img = gtk_image_new_from_icon_name (
+                                          "network-wired-symbolic", GTK_ICON_SIZE_BUTTON);
+                GtkWidget *lock_img = gtk_image_new_from_icon_name (
+                                          "nm-secure-lock", GTK_ICON_SIZE_BUTTON);
+                gtk_image_set_pixel_size (GTK_IMAGE (base_img), icon_px);
+                gtk_image_set_pixel_size (GTK_IMAGE (lock_img), icon_px);
+                gtk_widget_set_halign (lock_img, GTK_ALIGN_FILL);
+                gtk_widget_set_valign (lock_img, GTK_ALIGN_FILL);
+                gtk_container_add (GTK_CONTAINER (overlay), base_img);
+                gtk_overlay_add_overlay (GTK_OVERLAY (overlay), lock_img);
+                gtk_widget_set_size_request (overlay, icon_px, icon_px);
+                gtk_widget_show_all (overlay);
+                new_icon = overlay;
+            } else {
+                new_icon = gtk_image_new_from_icon_name (
+                               "network-wired-symbolic", GTK_ICON_SIZE_BUTTON);
+                gtk_image_set_pixel_size (GTK_IMAGE (new_icon), icon_px);
+            }
+        } else {
+            new_icon = gtk_image_new_from_icon_name (
+                           "network-wireless-disconnected-symbolic",
+                           GTK_ICON_SIZE_BUTTON);
+            gtk_image_set_pixel_size (GTK_IMAGE (new_icon), icon_px);
+        }
+    } else {
+        /* Para el panel: secure solo si hay VPN */
+        new_icon = make_signal_icon (strength, vpn, icon_px);
+    }
+
+    gtk_box_pack_start (GTK_BOX (np->icon_box), new_icon, TRUE, TRUE, 0);
+    gtk_widget_show_all (np->icon_box);
+}
 
 /* ---------- aplicar configuración visual ---------- */
 
@@ -77,13 +146,10 @@ apply_config (NetPlugin *np)
         g_free (css);
     }
 
-    /* ---- tamaño del ícono ---- */
-    if (np->use_panel_icon) {
-        gint icon_px = xfce_panel_plugin_get_icon_size (plugin);
-        gtk_image_set_pixel_size (GTK_IMAGE (np->icon), icon_px);
-    } else {
-        gtk_image_set_pixel_size (GTK_IMAGE (np->icon), np->icon_size);
-    }
+    /* Reconstruir ícono con el nuevo tamaño */
+    update_panel_icon (np,
+                       np->last_connected, np->last_strength,
+                       np->last_secure, np->last_vpn, np->last_wired);
 }
 
 /* ---------- leer / guardar configuración ---------- */
@@ -371,150 +437,77 @@ net_plugin_set_connecting (gpointer np_ptr, gboolean connecting)
 
 /* ---------- callback de refresco por señales DBus ---------- */
 
-static const gchar *
-icon_with_fallback (const gchar **names)
-{
-    GtkIconTheme *theme = gtk_icon_theme_get_default ();
-    for (gint i = 0; names[i]; i++) {
-        gboolean found = gtk_icon_theme_has_icon (theme, names[i]);
-        { FILE *f = fopen("/tmp/icon_debug.txt","a"); if(f){ fprintf(f,"icon_with_fallback: %s -> %s\n", names[i], found ? "SI" : "NO"); fclose(f); } }
-        if (found)
-            return names[i];
-    }
-    return names[0];
-}
-
 static void
 on_nm_changed (gpointer user_data)
 {
     NetPlugin *np = user_data;
 
-    /* Actualizar ícono del botón: buscar AP activo y su intensidad */
-    {
-        const gchar *icon_name;
-        gboolean     connected = FALSE;
-        gint         strength  = 0;
+    gboolean connected = FALSE;
+    gint     strength  = 0;
+    gboolean secure    = FALSE;
 
-        GSList *devices = nm_get_wifi_devices (np->conn);
-        for (GSList *l = devices; l; l = l->next) {
-            NmDevice *dev = l->data;
-            GSList   *aps = nm_get_access_points (np->conn, dev->object_path);
-            for (GSList *a = aps; a; a = a->next) {
-                NmAccessPoint *ap = a->data;
-                if (ap->active) {
-                    connected = TRUE;
-                    strength  = ap->strength;
-                }
+    GSList *devices = nm_get_wifi_devices (np->conn);
+    for (GSList *l = devices; l; l = l->next) {
+        NmDevice *dev = l->data;
+        GSList   *aps = nm_get_access_points (np->conn, dev->object_path);
+        for (GSList *a = aps; a; a = a->next) {
+            NmAccessPoint *ap = a->data;
+            if (ap->active) {
+                connected = TRUE;
+                strength  = ap->strength;
+                secure    = ap->secure;
             }
-            nm_ap_list_free (aps);
         }
-        nm_device_list_free (devices);
+        nm_ap_list_free (aps);
+    }
+    nm_device_list_free (devices);
 
-        gboolean vpn = nm_get_vpn_active (np->conn);
-        { FILE *f = fopen("/tmp/icon_debug.txt","a"); if(f){ fprintf(f,"on_nm_changed: connected=%d vpn=%d strength=%d\n", connected, vpn, strength); fclose(f); } }
+    gboolean vpn   = nm_get_vpn_active (np->conn);
+    gboolean wired = FALSE;
+    if (!connected) {
+        GSList *eths = nm_get_ethernet_devices (np->conn);
+        wired = (eths != NULL);
+        nm_device_list_free (eths);
+    }
+
+    update_panel_icon (np, connected, strength, secure, vpn, wired);
+
+    /* Tooltip del botón */
+    {
+        GString *tip = g_string_new (NULL);
 
         if (!connected) {
-            GSList *eths = nm_get_ethernet_devices (np->conn);
-            gboolean wired = (eths != NULL);
-            nm_device_list_free (eths);
-            if (vpn) {
-                static const gchar *f[] = {
-                    "network-wireless-secure-symbolic",
-                    "network-wireless-secure",
-                    "network-vpn-symbolic",
-                    "network-wireless-symbolic", NULL };
-                icon_name = icon_with_fallback (f);
-            } else if (wired) {
-                icon_name = "network-wired-symbolic";
-            } else {
-                icon_name = "network-wireless-disconnected-symbolic";
-            }
-        } else if (strength >= 80) {
-            if (vpn) {
-                static const gchar *f[] = {
-                    "network-wireless-secure-signal-excellent-symbolic",
-                    "network-wireless-secure-signal-excellent",
-                    "network-vpn-symbolic",
-                    "network-wireless-signal-excellent-symbolic", NULL };
-                icon_name = icon_with_fallback (f);
-            } else {
-                icon_name = "network-wireless-signal-excellent-symbolic";
-            }
-        } else if (strength >= 55) {
-            if (vpn) {
-                static const gchar *f[] = {
-                    "network-wireless-secure-signal-good-symbolic",
-                    "network-wireless-secure-signal-good",
-                    "network-vpn-symbolic",
-                    "network-wireless-signal-good-symbolic", NULL };
-                icon_name = icon_with_fallback (f);
-            } else {
-                icon_name = "network-wireless-signal-good-symbolic";
-            }
-        } else if (strength >= 30) {
-            if (vpn) {
-                static const gchar *f[] = {
-                    "network-wireless-secure-signal-ok-symbolic",
-                    "network-wireless-secure-signal-ok",
-                    "network-vpn-symbolic",
-                    "network-wireless-signal-ok-symbolic", NULL };
-                icon_name = icon_with_fallback (f);
-            } else {
-                icon_name = "network-wireless-signal-ok-symbolic";
-            }
+            g_string_append (tip, _("Not connected"));
         } else {
-            if (vpn) {
-                static const gchar *f[] = {
-                    "network-wireless-secure-signal-weak-symbolic",
-                    "network-wireless-secure-signal-weak",
-                    "network-vpn-symbolic",
-                    "network-wireless-signal-weak-symbolic", NULL };
-                icon_name = icon_with_fallback (f);
-            } else {
-                icon_name = "network-wireless-signal-weak-symbolic";
-            }
-        }
-
-        gtk_image_set_from_icon_name (GTK_IMAGE (np->icon),
-                                      icon_name, GTK_ICON_SIZE_BUTTON);
-
-        /* Tooltip del botón */
-        {
-            GString *tip = g_string_new (NULL);
-
-            if (!connected) {
-                g_string_append (tip, _("Not connected"));
-            } else {
-                GSList *devs2 = nm_get_wifi_devices (np->conn);
-                for (GSList *l = devs2; l; l = l->next) {
-                    NmDevice *dev = l->data;
-                    GSList   *aps = nm_get_access_points (np->conn, dev->object_path);
-                    for (GSList *a = aps; a; a = a->next) {
-                        NmAccessPoint *ap = a->data;
-                        if (ap->active) {
-                            const gchar *band;
-                            if (ap->frequency >= 5925)      band = "6G";
-                            else if (ap->frequency >= 5000) band = "5G";
-                            else                            band = "2.4G";
-                            g_string_append_printf (tip, _("Connected to %s (%s)"),
-                                                    ap->ssid, band);
-                        }
+            GSList *devs2 = nm_get_wifi_devices (np->conn);
+            for (GSList *l = devs2; l; l = l->next) {
+                NmDevice *dev = l->data;
+                GSList   *aps = nm_get_access_points (np->conn, dev->object_path);
+                for (GSList *a = aps; a; a = a->next) {
+                    NmAccessPoint *ap = a->data;
+                    if (ap->active) {
+                        const gchar *band;
+                        if (ap->frequency >= 5925)      band = "6G";
+                        else if (ap->frequency >= 5000) band = "5G";
+                        else                            band = "2.4G";
+                        g_string_append_printf (tip, _("Connected to %s (%s)"),
+                                                ap->ssid, band);
                     }
-                    nm_ap_list_free (aps);
                 }
-                nm_device_list_free (devs2);
+                nm_ap_list_free (aps);
             }
-
-            if (vpn) {
-                if (tip->len > 0)
-                    g_string_append (tip, _(" · VPN active"));
-                else
-                    g_string_append (tip, _("VPN active"));
-            }
-
-            gtk_widget_set_tooltip_text (np->button, tip->str);
-            g_string_free (tip, TRUE);
+            nm_device_list_free (devs2);
         }
+
+        if (vpn) {
+            if (tip->len > 0)
+                g_string_append (tip, _(" · VPN active"));
+            else
+                g_string_append (tip, _("VPN active"));
+        }
+
+        gtk_widget_set_tooltip_text (np->button, tip->str);
+        g_string_free (tip, TRUE);
     }
 
     /* Si el popup está abierto y no hay expand activo, reconstruirlo */
@@ -570,6 +563,13 @@ net_plugin_new (XfcePanelPlugin *plugin)
     np->plugin    = plugin;
     np->conn      = nm_dbus_connect ();
 
+    /* Valores iniciales del último estado */
+    np->last_strength  = 0;
+    np->last_secure    = FALSE;
+    np->last_connected = FALSE;
+    np->last_vpn       = FALSE;
+    np->last_wired     = FALSE;
+
     load_config (np);
 
     np->button = gtk_toggle_button_new ();
@@ -578,12 +578,20 @@ net_plugin_new (XfcePanelPlugin *plugin)
     xfce_panel_plugin_set_shrink (plugin, TRUE);
     xfce_panel_plugin_set_small  (plugin, TRUE);
 
-    np->icon    = gtk_image_new_from_icon_name ("network-wireless-symbolic",
-                                                 GTK_ICON_SIZE_BUTTON);
+    /* Contenedor del ícono — se reconstruye en update_panel_icon */
+    np->icon_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+
+    /* Ícono inicial: desconectado */
+    GtkWidget *init_icon = gtk_image_new_from_icon_name (
+                               "network-wireless-disconnected-symbolic",
+                               GTK_ICON_SIZE_BUTTON);
+    gtk_image_set_pixel_size (GTK_IMAGE (init_icon), np->icon_size);
+    gtk_box_pack_start (GTK_BOX (np->icon_box), init_icon, TRUE, TRUE, 0);
+
     np->spinner = gtk_spinner_new ();
     np->stack   = gtk_stack_new ();
-    gtk_stack_add_named (GTK_STACK (np->stack), np->icon,    "icon");
-    gtk_stack_add_named (GTK_STACK (np->stack), np->spinner, "spinner");
+    gtk_stack_add_named (GTK_STACK (np->stack), np->icon_box, "icon");
+    gtk_stack_add_named (GTK_STACK (np->stack), np->spinner,  "spinner");
     gtk_stack_set_visible_child_name (GTK_STACK (np->stack), "icon");
     gtk_container_add (GTK_CONTAINER (np->button), np->stack);
     gtk_widget_show_all (np->button);

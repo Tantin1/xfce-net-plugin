@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 project(xfce-net-plugin C)
 
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    set(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH "Install prefix" FORCE)
+endif()
+
 find_package(PkgConfig REQUIRED)
 find_package(Intl REQUIRED)
 
@@ -49,6 +53,11 @@ message(STATUS "Plugin install dir: ${XFCE_PLUGIN_DIR}")
 
 install(FILES "${CMAKE_BINARY_DIR}/libxfce-net-plugin.so"
     DESTINATION "${XFCE_PLUGIN_DIR}"
+)
+
+# Ícono de candado fallback en hicolor
+install(FILES "${CMAKE_SOURCE_DIR}/icons/nm-secure-lock.svg"
+    DESTINATION "${CMAKE_INSTALL_PREFIX}/share/icons/hicolor/scalable/apps"
 )
 
 # Compilar e instalar traducciones

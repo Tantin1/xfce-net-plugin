@@ -371,8 +371,6 @@ do_connect (RowData *rd)
     if (connect_btn)
         gtk_widget_set_sensitive (connect_btn, FALSE);
 
-    
-
     gboolean ok = nm_add_and_activate_connection (rd->conn, rd->device_path,
                                                    rd->ap_path, rd->ssid,
                                                    saved_pw ? saved_pw : password,
@@ -380,8 +378,6 @@ do_connect (RowData *rd)
 
     if (ok)
         ok = nm_wait_for_connected (rd->conn, rd->device_path);
-
-    
 
     if (!ok) {
         /* Borrar perfil mal guardado */
@@ -454,42 +450,41 @@ on_eye_released (GtkWidget *btn, RowData *rd)
 
 /* ---------- construccion de filas de red ---------- */
 
-static GtkWidget *
-make_signal_icon (gint strength, gboolean secure)
+GtkWidget *
+make_signal_icon (gint strength, gboolean secure, gint icon_size)
 {
     const gchar *level;
-    gchar        icon_name[80];
-    GtkWidget   *img;
+    gchar        icon_name[64];
 
-    if (strength >= 80)
-        level = "excellent";
-    else if (strength >= 55)
-        level = "good";
-    else if (strength >= 30)
-        level = "ok";
-    else
-        level = "weak";
+    if      (strength >= 80) level = "excellent";
+    else if (strength >= 55) level = "good";
+    else if (strength >= 30) level = "ok";
+    else                     level = "weak";
 
-    if (secure) {
-        GtkIconTheme *theme = gtk_icon_theme_get_default ();
-        g_snprintf (icon_name, sizeof (icon_name),
-                    "network-wireless-secure-signal-%s-symbolic", level);
-        if (!gtk_icon_theme_has_icon (theme, icon_name)) {
-            g_snprintf (icon_name, sizeof (icon_name),
-                        "network-wireless-secure-signal-%s", level);
-        }
-        if (!gtk_icon_theme_has_icon (theme, icon_name)) {
-            g_snprintf (icon_name, sizeof (icon_name),
-                        "network-wireless-signal-%s-symbolic", level);
-        }
-        img = gtk_image_new_from_icon_name (icon_name, GTK_ICON_SIZE_MENU);
-    } else {
-        g_snprintf (icon_name, sizeof (icon_name),
-                    "network-wireless-signal-%s-symbolic", level);
-        img = gtk_image_new_from_icon_name (icon_name, GTK_ICON_SIZE_MENU);
-    }
+    g_snprintf (icon_name, sizeof icon_name,
+                "network-wireless-signal-%s-symbolic", level);
 
-    return img;
+    GtkWidget *signal_img = gtk_image_new_from_icon_name (
+                                icon_name, GTK_ICON_SIZE_MENU);
+    gtk_image_set_pixel_size (GTK_IMAGE (signal_img), icon_size);
+
+    if (!secure)
+        return signal_img;
+
+    /* Superponer candado en esquina inferior derecha */
+    GtkWidget *overlay  = gtk_overlay_new ();
+    GtkWidget *lock_img = gtk_image_new_from_icon_name (
+                              "nm-secure-lock", GTK_ICON_SIZE_MENU);
+    gtk_image_set_pixel_size (GTK_IMAGE (lock_img), icon_size);
+    gtk_widget_set_halign (lock_img, GTK_ALIGN_FILL);
+    gtk_widget_set_valign (lock_img, GTK_ALIGN_FILL);
+
+    gtk_container_add    (GTK_CONTAINER (overlay), signal_img);
+    gtk_overlay_add_overlay (GTK_OVERLAY (overlay), lock_img);
+    gtk_widget_set_size_request (overlay, icon_size, icon_size);
+    gtk_widget_show_all (overlay);
+
+    return overlay;
 }
 
 static GtkWidget *
@@ -515,7 +510,7 @@ make_ap_row (NmAccessPoint   *ap,
     gtk_widget_set_margin_top    (row, 8);
     gtk_widget_set_margin_bottom (row, 8);
 
-    signal_icon = make_signal_icon (ap->strength, ap->secure);
+    signal_icon = make_signal_icon (ap->strength, ap->secure, 16);
     gtk_box_pack_start (GTK_BOX (row), signal_icon, FALSE, FALSE, 0);
 
     ssid_label = gtk_label_new (NULL);
@@ -556,7 +551,6 @@ make_ap_row (NmAccessPoint   *ap,
     }
 
     gtk_box_pack_start (GTK_BOX (row), ssid_label, TRUE, TRUE, 0);
-
     gtk_box_pack_start (GTK_BOX (outer), row, FALSE, FALSE, 0);
 
     /* ---- área expandible ---- */
@@ -952,7 +946,6 @@ on_hidden_network_clicked (GtkWidget *btn, NetPopup *popup)
     gtk_grid_attach (GTK_GRID (grid), pass_label, 0, 2, 1, 1);
     gtk_grid_attach (GTK_GRID (grid), pass_box,   1, 2, 1, 1);
 
-    /* Guardar referencias a los widgets en el diálogo para el callback */
     g_object_set_data (G_OBJECT (dialog), "ssid_entry", ssid_entry);
     g_object_set_data (G_OBJECT (dialog), "sec_combo",  sec_combo);
     g_object_set_data (G_OBJECT (dialog), "pass_entry", pass_entry);
@@ -966,11 +959,6 @@ on_advanced_clicked (GtkWidget *btn, gpointer user_data)
 {
     (void) btn; (void) user_data;
 
-    if (g_find_program_in_path ("nm-connection-editor")) {
-        g_spawn_command_line_async ("nm-connection-editor", NULL);
-        return;
-    }
-    
     if (g_find_program_in_path ("nm-connection-editor")) {
         g_spawn_command_line_async ("nm-connection-editor", NULL);
         return;
@@ -1167,8 +1155,6 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
                       G_CALLBACK (on_wifi_switch_toggled), wsd);
     gtk_box_pack_start (GTK_BOX (wifi_row), wifi_switch, FALSE, FALSE, 0);
 
-    
-
     /* Texto de estado debajo */
     GtkWidget *status_label = gtk_label_new (NULL);
     if (primary_ssid) {
@@ -1188,7 +1174,6 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
 
     GtkWidget *sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
     gtk_box_pack_start (GTK_BOX (popup->top_box), sep, FALSE, FALSE, 0);
-    /* -------------------------------- */
 
     /* ---- Sección Ethernet (solo si hay cable) ---- */
     GSList *eth_devices = nm_get_ethernet_devices (conn);
@@ -1223,7 +1208,6 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
         gtk_box_pack_start (GTK_BOX (popup->top_box), eth_row, FALSE, FALSE, 0);
     }
     nm_device_list_free (eth_devices);
-    /* ---------------------------------------------- */
 
     gint n_devices = g_slist_length (devices);
     for (d = devices; d; d = d->next) {
@@ -1237,9 +1221,6 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
     if (vpn_section)
         gtk_box_pack_start (GTK_BOX (popup->content_box), vpn_section,
                             FALSE, FALSE, 0);
-    /* --------------------------------------------------------- */
-
-    
 
     g_object_set_data (G_OBJECT (popup->window), "conn", conn);
 
