@@ -113,3 +113,21 @@ msgstr "无"
 
 msgid "Password:"
 msgstr "密码："
+
+msgid "Disabled"
+msgstr "已禁用"
+
+msgid "Enabled – not connected"
+msgstr "已启用 – 未连接"
+
+msgid "Disconnecting…"
+msgstr "正在断开…"
+
+msgid "Connecting…"
+msgstr "正在连接…"
+
+msgid "Connection failed"
+msgstr "连接失败"
+
+msgid "Show separators"
+msgstr "显示分隔线"

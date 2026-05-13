@@ -145,3 +145,21 @@ msgstr ""
 
 msgid "Password:"
 msgstr ""
+
+msgid "Disabled"
+msgstr ""
+
+msgid "Enabled – not connected"
+msgstr ""
+
+msgid "Disconnecting…"
+msgstr ""
+
+msgid "Connecting…"
+msgstr ""
+
+msgid "Connection failed"
+msgstr ""
+
+msgid "Show separators"
+msgstr ""

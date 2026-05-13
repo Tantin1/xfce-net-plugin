@@ -113,3 +113,21 @@ msgstr "なし"
 
 msgid "Password:"
 msgstr "パスワード:"
+
+msgid "Disabled"
+msgstr "無効"
+
+msgid "Enabled – not connected"
+msgstr "有効 – 未接続"
+
+msgid "Disconnecting…"
+msgstr "切断中…"
+
+msgid "Connecting…"
+msgstr "接続中…"
+
+msgid "Connection failed"
+msgstr "接続失敗"
+
+msgid "Show separators"
+msgstr "区切り線を表示"

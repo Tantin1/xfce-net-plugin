@@ -8,7 +8,57 @@
 #define NM_WIFI_IFACE  "org.freedesktop.NetworkManager.Device.Wireless"
 #define NM_AP_IFACE    "org.freedesktop.NetworkManager.AccessPoint"
 
-/* ---------- posicionamiento: solo se llama al abrir ---------- */
+/* Timeout de seguridad (ms) para operaciones conectar/desconectar.
+ * Si NM no confirma en este tiempo, asumimos fallo. */
+#define OP_TIMEOUT_MS 20000
+
+/* Cooldown del botón Actualizar (ms) entre escaneos. */
+#define SCAN_COOLDOWN_MS 5000
+
+/* ================================================================
+ * Operaciones en curso
+ *
+ * Cuando el usuario aprieta Conectar o Desconectar, registramos
+ * la operación en popup->ops_in_progress, indexada por device_path.
+ * El handler reactivo, cuando llega una señal DBus, mira la tabla
+ * y decide si tiene que cerrar el expand, restaurar el botón, etc.
+ * ================================================================ */
+
+typedef enum {
+    OP_CONNECT,
+    OP_DISCONNECT
+} OpKind;
+
+typedef struct {
+    OpKind     kind;
+    gchar     *ssid;          /* SSID destino (para CONNECT) o el actualmente conectado (DISCONNECT) */
+    gchar     *device_path;
+    GtkWidget *expand_box;    /* Expand a cerrar al confirmar (puede ser NULL si la fila se destruye antes). */
+    GtkWidget *action_btn;    /* Botón a restaurar si falla. */
+    GtkWidget *pass_entry;    /* Entry de contraseña, si aplica (para mostrar error inline). */
+    GtkWidget *error_label;   /* Label de error reusable, si se crea. */
+    guint      timeout_id;    /* Fuente de timeout de 20s. */
+    NetPopup  *popup;
+} OpInProgress;
+
+static void op_free (gpointer p);
+static gboolean op_timeout_cb (gpointer user_data);
+static void schedule_refresh_ui (NetPopup *popup);
+
+/* ---------- prototipos anticipados ---------- */
+
+static void rebuild_ui (NetPopup *popup);
+static void update_top_status (NetPopup *popup);
+static void update_eth_section (NetPopup *popup);
+static void update_vpn_section (NetPopup *popup);
+static void update_devices_section (NetPopup *popup);
+static GtkWidget *make_ap_row (NmAccessPoint *ap, NetPopup *popup,
+                               const gchar *device_path);
+static void on_forget_clicked  (GtkWidget *btn, gpointer rd_ptr);
+static void on_connect_clicked (GtkWidget *btn, gpointer rd_ptr);
+static void on_nm_signal_popup (gpointer user_data);
+
+/* ---------- posicionamiento ---------- */
 
 static void
 position_popup (NetPopup *popup, GtkWidget *button)
@@ -49,9 +99,10 @@ position_popup (NetPopup *popup, GtkWidget *button)
 static gchar *
 get_primary_ssid (GDBusConnection *conn)
 {
+    GSList      *devices, *d;
+    gchar       *result       = NULL;
+    const gchar *primary_dev  = NULL;
     GVariant    *v, *inner;
-    const gchar *primary_path;
-    gchar       *result = NULL;
 
     v = g_dbus_connection_call_sync (
             conn, NM_BUS_NAME, NM_OBJECT_PATH,
@@ -59,396 +110,234 @@ get_primary_ssid (GDBusConnection *conn)
             g_variant_new ("(ss)", NM_IFACE, "PrimaryConnection"),
             G_VARIANT_TYPE ("(v)"),
             G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
-    if (!v) return NULL;
+    if (v) {
+        g_variant_get (v, "(v)", &inner);
+        const gchar *primary_path = g_variant_get_string (inner, NULL);
 
-    g_variant_get (v, "(v)", &inner);
-    primary_path = g_variant_get_string (inner, NULL);
-
-    if (!primary_path || g_strcmp0 (primary_path, "/") == 0) {
-        g_variant_unref (inner);
-        g_variant_unref (v);
-        return NULL;
-    }
-
-    GVariant *dev_v = g_dbus_connection_call_sync (
-            conn, NM_BUS_NAME, primary_path,
-            "org.freedesktop.DBus.Properties", "Get",
-            g_variant_new ("(ss)",
-                "org.freedesktop.NetworkManager.Connection.Active",
-                "Devices"),
-            G_VARIANT_TYPE ("(v)"),
-            G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
-
-    if (dev_v) {
-        GVariant    *dev_inner, *dev_array;
-        g_variant_get (dev_v, "(v)", &dev_inner);
-        dev_array = dev_inner;
-
-        if (g_variant_n_children (dev_array) > 0) {
-            GVariant    *dev_path_v = g_variant_get_child_value (dev_array, 0);
-            const gchar *dev_path   = g_variant_get_string (dev_path_v, NULL);
-
-            GVariant *ap_v = g_dbus_connection_call_sync (
-                    conn, NM_BUS_NAME, dev_path,
+        if (primary_path && g_strcmp0 (primary_path, "/") != 0) {
+            GVariant *dev_v = g_dbus_connection_call_sync (
+                    conn, NM_BUS_NAME, primary_path,
                     "org.freedesktop.DBus.Properties", "Get",
-                    g_variant_new ("(ss)", NM_WIFI_IFACE, "ActiveAccessPoint"),
+                    g_variant_new ("(ss)",
+                        "org.freedesktop.NetworkManager.Connection.Active",
+                        "Devices"),
                     G_VARIANT_TYPE ("(v)"),
                     G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
+            if (dev_v) {
+                GVariant *dev_inner;
+                g_variant_get (dev_v, "(v)", &dev_inner);
+                if (g_variant_n_children (dev_inner) > 0) {
+                    GVariant *dev_path_v = g_variant_get_child_value (dev_inner, 0);
+                    primary_dev = g_variant_get_string (dev_path_v, NULL);
 
-            if (ap_v) {
-                GVariant    *ap_inner;
-                const gchar *ap_path;
-                g_variant_get (ap_v, "(v)", &ap_inner);
-                ap_path = g_variant_get_string (ap_inner, NULL);
-
-                if (ap_path && g_strcmp0 (ap_path, "/") != 0) {
-                    GVariant *ssid_v = g_dbus_connection_call_sync (
-                            conn, NM_BUS_NAME, ap_path,
-                            "org.freedesktop.DBus.Properties", "Get",
-                            g_variant_new ("(ss)", NM_AP_IFACE, "Ssid"),
-                            G_VARIANT_TYPE ("(v)"),
-                            G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
-
-                    if (ssid_v) {
-                        GVariant     *ssid_inner;
-                        GVariantIter *iter;
-                        GString      *ssid_str = g_string_new (NULL);
-                        guchar        c;
-
-                        g_variant_get (ssid_v, "(v)", &ssid_inner);
-                        iter = g_variant_iter_new (ssid_inner);
-                        while (g_variant_iter_next (iter, "y", &c))
-                            g_string_append_c (ssid_str, (gchar) c);
-                        g_variant_iter_free (iter);
-
-                        if (ssid_str->len > 0)
-                            result = g_string_free (ssid_str, FALSE);
-                        else
-                            g_string_free (ssid_str, TRUE);
-
-                        g_variant_unref (ssid_inner);
-                        g_variant_unref (ssid_v);
+                    devices = nm_get_wifi_devices (conn);
+                    for (d = devices; d && !result; d = d->next) {
+                        NmDevice *dev = d->data;
+                        if (g_strcmp0 (dev->object_path, primary_dev) == 0) {
+                            GSList *aps = nm_get_access_points (conn, dev->object_path);
+                            for (GSList *a = aps; a; a = a->next) {
+                                NmAccessPoint *ap = a->data;
+                                if (ap->active && ap->ssid && *ap->ssid) {
+                                    result = g_strdup (ap->ssid);
+                                    break;
+                                }
+                            }
+                            nm_ap_list_free (aps);
+                        }
                     }
+                    nm_device_list_free (devices);
+                    g_variant_unref (dev_path_v);
                 }
-                g_variant_unref (ap_inner);
-                g_variant_unref (ap_v);
+                g_variant_unref (dev_inner);
+                g_variant_unref (dev_v);
             }
-            g_variant_unref (dev_path_v);
         }
-        g_variant_unref (dev_inner);
-        g_variant_unref (dev_v);
+        g_variant_unref (inner);
+        g_variant_unref (v);
     }
 
-    g_variant_unref (inner);
-    g_variant_unref (v);
+    /* Fallback: cualquier adaptador Wi-Fi con AP activo */
+    if (!result) {
+        devices = nm_get_wifi_devices (conn);
+        for (d = devices; d && !result; d = d->next) {
+            NmDevice *dev = d->data;
+            GSList   *aps = nm_get_access_points (conn, dev->object_path);
+            for (GSList *a = aps; a; a = a->next) {
+                NmAccessPoint *ap = a->data;
+                if (ap->active && ap->ssid && *ap->ssid) {
+                    result = g_strdup (ap->ssid);
+                    break;
+                }
+            }
+            nm_ap_list_free (aps);
+        }
+        nm_device_list_free (devices);
+    }
+
     return result;
 }
 
-/* ---------- callback del switch de Wi-Fi ---------- */
+/* ---------- Operaciones en curso: helpers ---------- */
 
-typedef struct {
-    GDBusConnection *conn;
-    NetPopup        *popup;
-} WifiSwitchData;
-
-static gboolean
-on_wifi_switch_toggled (GtkSwitch *sw, gboolean state, gpointer user_data)
+static void
+op_free (gpointer p)
 {
-    (void) sw;
-    WifiSwitchData *d = user_data;
-    nm_set_wifi_enabled (d->conn, state);
-    for (GSList *l = d->popup->device_switches; l; l = l->next)
-        gtk_widget_set_sensitive (GTK_WIDGET (l->data), state);
-    return FALSE;
+    OpInProgress *op = p;
+    if (!op) return;
+    if (op->timeout_id) {
+        g_source_remove (op->timeout_id);
+        op->timeout_id = 0;
+    }
+    g_free (op->ssid);
+    g_free (op->device_path);
+    g_free (op);
 }
 
-typedef struct {
-    NetPopup        *popup;
-    GDBusConnection *conn;
-    GtkWidget       *button;
-    XfcePanelPlugin *plugin;
-    GSList          *devices;
-} RefreshData;
+/* Si todavía existe el botón y el error_label, restaurar el botón y mostrar error. */
+static void
+op_show_error (OpInProgress *op)
+{
+    if (op->action_btn && GTK_IS_BUTTON (op->action_btn)) {
+        gtk_widget_set_sensitive (op->action_btn, TRUE);
+        gtk_button_set_label (GTK_BUTTON (op->action_btn),
+                              op->kind == OP_CONNECT ? _("Connect") : _("Disconnect"));
+    }
+    if (op->pass_entry && GTK_IS_ENTRY (op->pass_entry))
+        gtk_widget_set_sensitive (op->pass_entry, TRUE);
+    if (op->kind == OP_CONNECT && op->expand_box && GTK_IS_WIDGET (op->expand_box)) {
+        GtkWidget *err_label = g_object_get_data (G_OBJECT (op->expand_box), "error-label");
+        if (!err_label) {
+            err_label = gtk_label_new (_("Incorrect password"));
+            gtk_style_context_add_class (
+                gtk_widget_get_style_context (err_label), "error");
+            gtk_label_set_xalign (GTK_LABEL (err_label), 0.0);
+            gtk_box_pack_start (GTK_BOX (op->expand_box),
+                                err_label, FALSE, FALSE, 0);
+            gtk_box_reorder_child (GTK_BOX (op->expand_box), err_label, 0);
+            g_object_set_data (G_OBJECT (op->expand_box),
+                               "error-label", err_label);
+        }
+        gtk_widget_show (err_label);
+        if (op->pass_entry && GTK_IS_ENTRY (op->pass_entry))
+            gtk_entry_set_text (GTK_ENTRY (op->pass_entry), "");
+    }
+}
 
 static gboolean
-on_refresh_reenable (gpointer popup_ptr)
+op_timeout_cb (gpointer user_data)
 {
-    NetPopup *popup = popup_ptr;
-    popup->scanning = FALSE;
+    OpInProgress *op = user_data;
+    op->timeout_id = 0;
+    op_show_error (op);
+    /* Si era CONNECT y nunca se conectó, borrar el perfil que se acaba de guardar. */
+    if (op->kind == OP_CONNECT && op->ssid)
+        nm_forget_connection (op->popup->conn, op->ssid);
+    g_hash_table_remove (op->popup->ops_in_progress, op->device_path);
     return G_SOURCE_REMOVE;
 }
 
-static void
-on_refresh_clicked (GtkWidget *btn, NetPopup *popup)
+/* Verifica si un dispositivo está en state==100 (activado). */
+static gboolean
+device_is_activated (GDBusConnection *conn, const gchar *device_path)
 {
-    GDBusConnection *conn = g_object_get_data (G_OBJECT (popup->window), "conn");
-    if (!conn) return;
-
-    popup->scanning = TRUE;
-    gtk_widget_set_sensitive (btn, FALSE);
-    GtkWidget *lbl = g_object_get_data (G_OBJECT (btn), "label");
-    if (lbl) gtk_label_set_text (GTK_LABEL (lbl), _("Updating…"));
-    g_timeout_add_seconds (5, on_refresh_reenable, popup);
-
-    GSList *devs = nm_get_wifi_devices (conn);
-    for (GSList *l = devs; l; l = l->next) {
-        NmDevice *dev = l->data;
-        nm_request_scan (conn, dev->object_path);
-    }
-    nm_device_list_free (devs);
+    GVariant *v = g_dbus_connection_call_sync (
+            conn, NM_BUS_NAME, device_path,
+            "org.freedesktop.DBus.Properties", "Get",
+            g_variant_new ("(ss)",
+                "org.freedesktop.NetworkManager.Device", "State"),
+            G_VARIANT_TYPE ("(v)"),
+            G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
+    if (!v) return FALSE;
+    GVariant *inner;
+    g_variant_get (v, "(v)", &inner);
+    guint32 state = g_variant_get_uint32 (inner);
+    g_variant_unref (inner);
+    g_variant_unref (v);
+    return (state == 100);
 }
 
-/* ---------- datos para el callback de expansion ---------- */
-
-typedef struct {
-    NetPopup        *popup;
-    GtkWidget       *expand_box;
-    gchar           *ssid;
-    gchar           *ap_path;
-    gboolean         secure;
-    gboolean         active;
-    gboolean         saved;
-    gchar           *device_path;
-    GDBusConnection *conn;
-    GtkWidget       *pass_entry;
-    GtkWidget       *autoconnect_check;
-} RowData;
-
-static void
-row_data_free (RowData *rd)
+/* Verifica si un dispositivo está desconectado (state < 100 y > 30 = "disconnected" o menos). */
+static gboolean
+device_is_disconnected (GDBusConnection *conn, const gchar *device_path)
 {
-    g_free (rd->ssid);
-    g_free (rd->ap_path);
-    g_free (rd->device_path);
-    g_free (rd);
+    GVariant *v = g_dbus_connection_call_sync (
+            conn, NM_BUS_NAME, device_path,
+            "org.freedesktop.DBus.Properties", "Get",
+            g_variant_new ("(ss)",
+                "org.freedesktop.NetworkManager.Device", "State"),
+            G_VARIANT_TYPE ("(v)"),
+            G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
+    if (!v) return FALSE;
+    GVariant *inner;
+    g_variant_get (v, "(v)", &inner);
+    guint32 state = g_variant_get_uint32 (inner);
+    g_variant_unref (inner);
+    g_variant_unref (v);
+    /* 30 = DISCONNECTED, 20 = UNAVAILABLE, 10 = UNMANAGED */
+    return (state <= 30);
 }
 
+/* Revisa todas las operaciones en curso y resuelve las que ya se completaron. */
 static void
-on_row_clicked (GtkWidget *event_box, GdkEventButton *event, RowData *rd)
+check_ops_progress (NetPopup *popup)
 {
-    (void) event;
-    (void) event_box;
+    if (!popup->ops_in_progress) return;
 
-    gboolean ya_abierto = (rd->popup->current_expand_box == rd->expand_box);
+    GHashTableIter iter;
+    gpointer       key, value;
+    GSList        *to_remove = NULL;
 
-    if (rd->popup->current_expand_box) {
-        gtk_widget_hide (rd->popup->current_expand_box);
-        rd->popup->current_expand_box = NULL;
-    }
+    g_hash_table_iter_init (&iter, popup->ops_in_progress);
+    while (g_hash_table_iter_next (&iter, &key, &value)) {
+        OpInProgress *op = value;
+        const gchar  *device_path = key;
 
-    if (!ya_abierto) {
-        gtk_widget_show (rd->expand_box);
-        rd->popup->current_expand_box = rd->expand_box;
-    }
-}
-
-/* ---------- prototipos anticipados ---------- */
-
-static GtkWidget *make_ap_row (NmAccessPoint *ap, NetPopup *popup,
-                                const gchar *device_path, GDBusConnection *conn);
-static void on_forget_clicked  (GtkWidget *btn, RowData *rd);
-static void on_connect_clicked (GtkWidget *btn, RowData *rd);
-
-/* ---------- helper: reemplaza una fila en su contenedor ---------- */
-
-static void
-refresh_row (RowData *rd)
-{
-    GSList        *aps;
-    NmAccessPoint *updated_ap = NULL;
-
-    aps = nm_get_access_points (rd->conn, rd->device_path);
-    for (GSList *a = aps; a; a = a->next) {
-        NmAccessPoint *ap = a->data;
-        if (g_strcmp0 (ap->ssid, rd->ssid) == 0) {
-            updated_ap = ap;
-            break;
-        }
-    }
-
-    if (!updated_ap) {
-        nm_ap_list_free (aps);
-        return;
-    }
-
-    GtkWidget *old_row = gtk_widget_get_parent (rd->expand_box);
-    while (old_row && !GTK_IS_BOX (gtk_widget_get_parent (old_row)))
-        old_row = gtk_widget_get_parent (old_row);
-
-    GtkWidget *section = gtk_widget_get_parent (old_row);
-    gint position = 0;
-    GList *children = gtk_container_get_children (GTK_CONTAINER (section));
-    for (GList *l = children; l; l = l->next, position++)
-        if (l->data == old_row) break;
-    g_list_free (children);
-
-    GtkWidget *new_row = make_ap_row (updated_ap, rd->popup,
-                                      rd->device_path, rd->conn);
-    gtk_box_pack_start (GTK_BOX (section), new_row, FALSE, FALSE, 0);
-    gtk_box_reorder_child (GTK_BOX (section), new_row, position);
-    gtk_widget_show_all (new_row);
-    gtk_widget_destroy (old_row);
-
-    nm_ap_list_free (aps);
-}
-
-/* ---------- callbacks de botones ---------- */
-
-static void
-on_disconnect_clicked (GtkWidget *btn, RowData *rd)
-{
-    (void) btn;
-    nm_disconnect_device (rd->conn, rd->device_path);
-    g_usleep (1000000);
-    refresh_row (rd);
-}
-
-static void
-on_forget_response (GtkDialog *dialog, gint response, RowData *rd)
-{
-    gtk_widget_destroy (GTK_WIDGET (dialog));
-    if (response != GTK_RESPONSE_YES)
-        return;
-    nm_forget_connection (rd->conn, rd->ssid);
-    g_usleep (500000);
-    refresh_row (rd);
-}
-
-static void
-on_forget_clicked (GtkWidget *btn, RowData *rd)
-{
-    (void) btn;
-
-    GtkWidget *dialog = gtk_message_dialog_new (
-        NULL,
-        0,
-        GTK_MESSAGE_QUESTION,
-        GTK_BUTTONS_YES_NO,
-        _("Forget network \"%s\"?"), rd->ssid);
-    gtk_window_set_title (GTK_WINDOW (dialog), _("Confirm"));
-    gtk_window_set_position (GTK_WINDOW (dialog), GTK_WIN_POS_CENTER);
-    g_signal_connect (dialog, "response", G_CALLBACK (on_forget_response), rd);
-    gtk_widget_show_all (dialog);
-}
-
-static void
-do_connect (RowData *rd)
-{
-    gchar       *saved_pw    = NULL;
-    const gchar *password    = NULL;
-    gboolean     autoconnect = TRUE;
-
-    if (rd->pass_entry)
-        password = gtk_entry_get_text (GTK_ENTRY (rd->pass_entry));
-    if (!password || !*password)
-        saved_pw = nm_get_saved_password (rd->conn, rd->ssid);
-
-    if (rd->autoconnect_check)
-        autoconnect = gtk_toggle_button_get_active (
-                          GTK_TOGGLE_BUTTON (rd->autoconnect_check));
-
-    /* Deshabilitar botón Conectar mientras espera */
-    GtkWidget *connect_btn = NULL;
-    GtkWidget *action_row  = gtk_widget_get_parent (rd->expand_box);
-    (void) action_row;
-    {
-        GList *kids = gtk_container_get_children (GTK_CONTAINER (rd->expand_box));
-        for (GList *k = kids; k; k = k->next) {
-            if (GTK_IS_BOX (k->data)) {
-                GList *row_kids = gtk_container_get_children (GTK_CONTAINER (k->data));
-                for (GList *r = row_kids; r; r = r->next) {
-                    if (GTK_IS_BUTTON (r->data)) {
-                        const gchar *lbl = gtk_button_get_label (GTK_BUTTON (r->data));
-                        if (g_strcmp0 (lbl, _("Connect")) == 0)
-                            connect_btn = r->data;
+        if (op->kind == OP_CONNECT) {
+            if (device_is_activated (popup->conn, device_path)) {
+                /* Verificar que el AP activo coincida con el SSID que pedimos
+                 * (puede que se haya conectado a otra red distinta por algún motivo). */
+                gchar *active_ssid = NULL;
+                GSList *aps = nm_get_access_points (popup->conn, device_path);
+                for (GSList *a = aps; a; a = a->next) {
+                    NmAccessPoint *ap = a->data;
+                    if (ap->active) {
+                        active_ssid = g_strdup (ap->ssid);
+                        break;
                     }
                 }
-                g_list_free (row_kids);
+                nm_ap_list_free (aps);
+
+                if (active_ssid && g_strcmp0 (active_ssid, op->ssid) == 0) {
+                    /* Confirmado: marcamos para eliminar. */
+                    to_remove = g_slist_append (to_remove, g_strdup (device_path));
+                    if (op->expand_box && GTK_IS_WIDGET (op->expand_box)) {
+                        gtk_widget_hide (op->expand_box);
+                        if (popup->current_expand_box == op->expand_box)
+                            popup->current_expand_box = NULL;
+                    }
+                }
+                g_free (active_ssid);
+            }
+        } else { /* OP_DISCONNECT */
+            if (device_is_disconnected (popup->conn, device_path)) {
+                to_remove = g_slist_append (to_remove, g_strdup (device_path));
+                if (op->expand_box && GTK_IS_WIDGET (op->expand_box)) {
+                    gtk_widget_hide (op->expand_box);
+                    if (popup->current_expand_box == op->expand_box)
+                        popup->current_expand_box = NULL;
+                }
             }
         }
-        g_list_free (kids);
-    }
-    if (connect_btn)
-        gtk_widget_set_sensitive (connect_btn, FALSE);
-
-    gboolean ok = nm_add_and_activate_connection (rd->conn, rd->device_path,
-                                                   rd->ap_path, rd->ssid,
-                                                   saved_pw ? saved_pw : password,
-                                                   autoconnect);
-
-    if (ok)
-        ok = nm_wait_for_connected (rd->conn, rd->device_path);
-
-    if (!ok) {
-        /* Borrar perfil mal guardado */
-        nm_forget_connection (rd->conn, rd->ssid);
-
-        /* Mostrar error en el expand */
-        if (rd->pass_entry) {
-            gtk_entry_set_text (GTK_ENTRY (rd->pass_entry), "");
-
-            GtkWidget *err_label = g_object_get_data (
-                                       G_OBJECT (rd->expand_box), "error-label");
-            if (!err_label) {
-                err_label = gtk_label_new (_("Incorrect password"));
-                gtk_style_context_add_class (
-                    gtk_widget_get_style_context (err_label), "error");
-                gtk_label_set_xalign (GTK_LABEL (err_label), 0.0);
-                gtk_box_pack_start (GTK_BOX (rd->expand_box),
-                                    err_label, FALSE, FALSE, 0);
-                gtk_box_reorder_child (GTK_BOX (rd->expand_box), err_label, 0);
-                g_object_set_data (G_OBJECT (rd->expand_box),
-                                   "error-label", err_label);
-            }
-            gtk_widget_show (err_label);
-        }
-
-        if (connect_btn)
-            gtk_widget_set_sensitive (connect_btn, TRUE);
-
-        g_free (saved_pw);
-        return;
     }
 
-    g_free (saved_pw);
-    refresh_row (rd);
-}
-
-static void
-on_connect_clicked (GtkWidget *btn, RowData *rd)
-{
-    (void) btn;
-    do_connect (rd);
-}
-
-static gboolean
-on_pass_entry_key_press (GtkWidget *widget, GdkEventKey *event, RowData *rd)
-{
-    (void) widget;
-    if (event->keyval == GDK_KEY_Return || event->keyval == GDK_KEY_KP_Enter) {
-        do_connect (rd);
-        return GDK_EVENT_STOP;
+    for (GSList *l = to_remove; l; l = l->next) {
+        g_hash_table_remove (popup->ops_in_progress, l->data);
+        g_free (l->data);
     }
-    return GDK_EVENT_PROPAGATE;
+    g_slist_free (to_remove);
 }
 
-static void
-on_eye_pressed (GtkWidget *btn, RowData *rd)
-{
-    (void) btn;
-    if (rd->pass_entry)
-        gtk_entry_set_visibility (GTK_ENTRY (rd->pass_entry), TRUE);
-}
-
-static void
-on_eye_released (GtkWidget *btn, RowData *rd)
-{
-    (void) btn;
-    if (rd->pass_entry)
-        gtk_entry_set_visibility (GTK_ENTRY (rd->pass_entry), FALSE);
-}
-
-/* ---------- construccion de filas de red ---------- */
+/* ---------- ícono de señal Wi-Fi (usado también por plugin.c) ---------- */
 
 GtkWidget *
 make_signal_icon (gint strength, gboolean secure, gint icon_size)
@@ -471,7 +360,6 @@ make_signal_icon (gint strength, gboolean secure, gint icon_size)
     if (!secure)
         return signal_img;
 
-    /* Superponer candado en esquina inferior derecha */
     GtkWidget *overlay  = gtk_overlay_new ();
     GtkWidget *lock_img = gtk_image_new_from_icon_name (
                               "nm-secure-lock", GTK_ICON_SIZE_MENU);
@@ -487,17 +375,289 @@ make_signal_icon (gint strength, gboolean secure, gint icon_size)
     return overlay;
 }
 
+/* ---------- callback del switch Wi-Fi global ---------- */
+
+static gboolean
+on_wifi_switch_toggled (GtkSwitch *sw, gboolean state, gpointer user_data)
+{
+    (void) sw;
+    NetPopup *popup = user_data;
+    nm_set_wifi_enabled (popup->conn, state);
+    for (GSList *l = popup->device_switches; l; l = l->next)
+        gtk_widget_set_sensitive (GTK_WIDGET (l->data), state);
+    return FALSE;
+}
+
+/* ---------- callback del switch por adaptador ---------- */
+
+typedef struct {
+    GDBusConnection *conn;
+    gchar           *device_path;
+} DeviceSwitchData;
+
+static void
+device_switch_data_free (DeviceSwitchData *d)
+{
+    g_free (d->device_path);
+    g_free (d);
+}
+
+static gboolean
+on_device_switch_toggled (GtkSwitch *sw, gboolean state, gpointer user_data)
+{
+    (void) sw;
+    DeviceSwitchData *d = user_data;
+    nm_set_device_enabled_async (d->conn, d->device_path, state);
+    return FALSE;
+}
+
+/* ---------- Actualizar (botón) ---------- */
+
+static gboolean
+on_refresh_reenable (gpointer popup_ptr)
+{
+    NetPopup *popup = popup_ptr;
+    popup->scanning = FALSE;
+    popup->scan_timeout_id = 0;
+    if (popup->refresh_button && GTK_IS_WIDGET (popup->refresh_button)) {
+        gtk_widget_set_sensitive (popup->refresh_button, TRUE);
+        if (popup->refresh_label)
+            gtk_label_set_text (GTK_LABEL (popup->refresh_label), _("Refresh"));
+    }
+    return G_SOURCE_REMOVE;
+}
+
+static void
+on_refresh_clicked (GtkWidget *btn, NetPopup *popup)
+{
+    if (popup->scanning) return;
+
+    popup->scanning = TRUE;
+    gtk_widget_set_sensitive (btn, FALSE);
+    if (popup->refresh_label)
+        gtk_label_set_text (GTK_LABEL (popup->refresh_label), _("Updating…"));
+    popup->scan_timeout_id =
+        g_timeout_add (SCAN_COOLDOWN_MS, on_refresh_reenable, popup);
+
+    GSList *devs = nm_get_wifi_devices (popup->conn);
+    for (GSList *l = devs; l; l = l->next) {
+        NmDevice *dev = l->data;
+        nm_request_scan (popup->conn, dev->object_path);
+    }
+    nm_device_list_free (devs);
+}
+
+/* ---------- callbacks de filas de red ---------- */
+
+typedef struct {
+    NetPopup        *popup;
+    GtkWidget       *expand_box;
+    GtkWidget       *action_btn;     /* Conectar / Desconectar */
+    gchar           *ssid;
+    gchar           *ap_path;
+    gboolean         secure;
+    gboolean         active;
+    gboolean         saved;
+    gchar           *device_path;
+    GtkWidget       *pass_entry;
+    GtkWidget       *autoconnect_check;
+} RowData;
+
+static void
+row_data_free (RowData *rd)
+{
+    g_free (rd->ssid);
+    g_free (rd->ap_path);
+    g_free (rd->device_path);
+    g_free (rd);
+}
+
+static void
+on_row_clicked (GtkWidget *event_box, GdkEventButton *event, gpointer rd_ptr)
+{
+    (void) event;
+    (void) event_box;
+    RowData *rd = rd_ptr;
+
+    gboolean ya_abierto = (rd->popup->current_expand_box == rd->expand_box);
+
+    if (rd->popup->current_expand_box) {
+        gtk_widget_hide (rd->popup->current_expand_box);
+        rd->popup->current_expand_box = NULL;
+    }
+
+    if (!ya_abierto) {
+        gtk_widget_show (rd->expand_box);
+        rd->popup->current_expand_box = rd->expand_box;
+    }
+}
+
+/* ---------- conectar / desconectar ---------- */
+
+static void
+on_disconnect_clicked (GtkWidget *btn, gpointer rd_ptr)
+{
+    RowData *rd = rd_ptr;
+
+    gtk_widget_set_sensitive (btn, FALSE);
+    gtk_button_set_label (GTK_BUTTON (btn), _("Disconnecting…"));
+
+    OpInProgress *op = g_new0 (OpInProgress, 1);
+    op->kind        = OP_DISCONNECT;
+    op->ssid        = g_strdup (rd->ssid);
+    op->device_path = g_strdup (rd->device_path);
+    op->expand_box  = rd->expand_box;
+    op->action_btn  = btn;
+    op->popup       = rd->popup;
+    op->timeout_id  = g_timeout_add (OP_TIMEOUT_MS, op_timeout_cb, op);
+    g_hash_table_replace (rd->popup->ops_in_progress,
+                          g_strdup (rd->device_path), op);
+
+    nm_disconnect_device_async (rd->popup->conn, rd->device_path);
+}
+
+static void
+on_forget_response (GtkDialog *dialog, gint response, gpointer rd_ptr)
+{
+    RowData *rd = rd_ptr;
+    gtk_widget_destroy (GTK_WIDGET (dialog));
+    if (response != GTK_RESPONSE_YES)
+        return;
+    nm_forget_connection (rd->popup->conn, rd->ssid);
+
+    /* Cerrar el expand para que update_devices_section pueda reconstruir las
+     * filas (regla 1A bloquea la reconstrucción mientras hay expand abierto).
+     * NM no emite señal de device al borrar un perfil de conexión, así que
+     * forzamos el refresh nosotros. */
+    if (rd->expand_box) {
+        gtk_widget_hide (rd->expand_box);
+        if (rd->popup->current_expand_box == rd->expand_box)
+            rd->popup->current_expand_box = NULL;
+    }
+    schedule_refresh_ui (rd->popup);
+}
+
+static void
+on_forget_clicked (GtkWidget *btn, gpointer rd_ptr)
+{
+    (void) btn;
+    RowData *rd = rd_ptr;
+
+    GtkWidget *dialog = gtk_message_dialog_new (
+        NULL,
+        0,
+        GTK_MESSAGE_QUESTION,
+        GTK_BUTTONS_YES_NO,
+        _("Forget network \"%s\"?"), rd->ssid);
+    gtk_window_set_title (GTK_WINDOW (dialog), _("Confirm"));
+    gtk_window_set_deletable (GTK_WINDOW (dialog), FALSE);
+    gtk_window_set_position (GTK_WINDOW (dialog), GTK_WIN_POS_CENTER);
+    g_signal_connect (dialog, "response", G_CALLBACK (on_forget_response), rd);
+    gtk_widget_show_all (dialog);
+}
+
+static void
+do_connect (RowData *rd)
+{
+    gchar       *saved_pw    = NULL;
+    const gchar *password    = NULL;
+    gboolean     autoconnect = TRUE;
+
+    if (rd->pass_entry)
+        password = gtk_entry_get_text (GTK_ENTRY (rd->pass_entry));
+    if (!password || !*password)
+        saved_pw = nm_get_saved_password (rd->popup->conn, rd->ssid);
+
+    if (rd->autoconnect_check)
+        autoconnect = gtk_toggle_button_get_active (
+                          GTK_TOGGLE_BUTTON (rd->autoconnect_check));
+
+    /* Ocultar label de error previo, si existía. */
+    GtkWidget *prev_err = g_object_get_data (G_OBJECT (rd->expand_box), "error-label");
+    if (prev_err)
+        gtk_widget_hide (prev_err);
+
+    /* UI inmediata: botón a "Conectando…", deshabilitado. Entry también. */
+    gtk_widget_set_sensitive (rd->action_btn, FALSE);
+    gtk_button_set_label (GTK_BUTTON (rd->action_btn), _("Connecting…"));
+    if (rd->pass_entry)
+        gtk_widget_set_sensitive (rd->pass_entry, FALSE);
+
+    /* Registrar operación en curso. */
+    OpInProgress *op = g_new0 (OpInProgress, 1);
+    op->kind        = OP_CONNECT;
+    op->ssid        = g_strdup (rd->ssid);
+    op->device_path = g_strdup (rd->device_path);
+    op->expand_box  = rd->expand_box;
+    op->action_btn  = rd->action_btn;
+    op->pass_entry  = rd->pass_entry;
+    op->popup       = rd->popup;
+    op->timeout_id  = g_timeout_add (OP_TIMEOUT_MS, op_timeout_cb, op);
+    g_hash_table_replace (rd->popup->ops_in_progress,
+                          g_strdup (rd->device_path), op);
+
+    /* Si hay perfil guardado y no se ingresó password, usar ActivateConnection.
+     * Si no, usar AddAndActivate (creará/sobrescribirá el perfil). */
+    if (saved_pw && (!password || !*password)) {
+        nm_activate_connection_async (rd->popup->conn, rd->device_path,
+                                      rd->ap_path, rd->ssid);
+    } else {
+        nm_add_and_activate_connection_async (rd->popup->conn, rd->device_path,
+                                              rd->ap_path, rd->ssid,
+                                              saved_pw ? saved_pw : password,
+                                              autoconnect);
+    }
+
+    g_free (saved_pw);
+}
+
+static void
+on_connect_clicked (GtkWidget *btn, gpointer rd_ptr)
+{
+    (void) btn;
+    do_connect ((RowData *) rd_ptr);
+}
+
+static gboolean
+on_pass_entry_key_press (GtkWidget *widget, GdkEventKey *event, gpointer rd_ptr)
+{
+    (void) widget;
+    if (event->keyval == GDK_KEY_Return || event->keyval == GDK_KEY_KP_Enter) {
+        do_connect ((RowData *) rd_ptr);
+        return GDK_EVENT_STOP;
+    }
+    return GDK_EVENT_PROPAGATE;
+}
+
+static void
+on_eye_pressed (GtkWidget *btn, gpointer rd_ptr)
+{
+    (void) btn;
+    RowData *rd = rd_ptr;
+    if (rd->pass_entry)
+        gtk_entry_set_visibility (GTK_ENTRY (rd->pass_entry), TRUE);
+}
+
+static void
+on_eye_released (GtkWidget *btn, gpointer rd_ptr)
+{
+    (void) btn;
+    RowData *rd = rd_ptr;
+    if (rd->pass_entry)
+        gtk_entry_set_visibility (GTK_ENTRY (rd->pass_entry), FALSE);
+}
+
+/* ---------- construcción de una fila de red ---------- */
+
 static GtkWidget *
-make_ap_row (NmAccessPoint   *ap,
-             NetPopup        *popup,
-             const gchar     *device_path,
-             GDBusConnection *conn)
+make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
 {
     GtkWidget *outer, *event_box, *row, *ssid_label, *signal_icon;
     GtkWidget *expand_box, *action_btn, *action_row;
     GtkWidget *forget_btn = NULL;
     GtkWidget *pass_entry = NULL;
     GtkWidget *autoconnect_check_widget = NULL;
+    GDBusConnection *conn = popup->conn;
 
     outer     = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
     event_box = gtk_event_box_new ();
@@ -520,16 +680,14 @@ make_ap_row (NmAccessPoint   *ap,
 
     {
         const gchar *band;
-        if (ap->frequency >= 5925)
-            band = "6G";
-        else if (ap->frequency >= 5000)
-            band = "5G";
-        else
-            band = "2.4G";
+        if (ap->frequency >= 5925)      band = "6G";
+        else if (ap->frequency >= 5000) band = "5G";
+        else                            band = "2.4G";
 
         if (ap->active) {
-            gchar *markup = g_markup_printf_escaped ("<b>%s</b>  <small><span alpha='60%%'>%s</span></small>",
-                                                     ap->ssid, band);
+            gchar *markup = g_markup_printf_escaped (
+                "<b>%s</b>  <small><span alpha='60%%'>%s</span></small>",
+                ap->ssid, band);
             gtk_label_set_markup (GTK_LABEL (ssid_label), markup);
             g_free (markup);
             GtkWidget *check = gtk_image_new_from_icon_name (
@@ -543,8 +701,9 @@ make_ap_row (NmAccessPoint   *ap,
             gtk_box_pack_end (GTK_BOX (row), check, FALSE, FALSE, 0);
             gtk_box_pack_end (GTK_BOX (row), connected_right, FALSE, FALSE, 4);
         } else {
-            gchar *markup = g_markup_printf_escaped ("%s  <small><span alpha='60%%'>%s</span></small>",
-                                                     ap->ssid, band);
+            gchar *markup = g_markup_printf_escaped (
+                "%s  <small><span alpha='60%%'>%s</span></small>",
+                ap->ssid, band);
             gtk_label_set_markup (GTK_LABEL (ssid_label), markup);
             g_free (markup);
         }
@@ -559,6 +718,7 @@ make_ap_row (NmAccessPoint   *ap,
     gtk_widget_set_margin_end    (expand_box, 12);
     gtk_widget_set_margin_top    (expand_box, 4);
     gtk_widget_set_margin_bottom (expand_box, 8);
+    
 
     if (ap->active) {
         action_btn = gtk_button_new_with_label (_("Disconnect"));
@@ -631,18 +791,23 @@ make_ap_row (NmAccessPoint   *ap,
     RowData *rd     = g_new0 (RowData, 1);
     rd->popup       = popup;
     rd->expand_box  = expand_box;
+    rd->action_btn  = action_btn;
     rd->ssid        = g_strdup (ap->ssid);
     rd->ap_path     = g_strdup (ap->object_path);
     rd->secure      = ap->secure;
     rd->active      = ap->active;
     rd->saved       = ap->active ? FALSE : nm_has_saved_connection (conn, ap->ssid);
     rd->device_path = g_strdup (device_path);
-    rd->conn              = conn;
     rd->pass_entry        = pass_entry;
     rd->autoconnect_check = autoconnect_check_widget;
 
     g_object_set_data_full (G_OBJECT (outer), "row-data", rd,
                             (GDestroyNotify) row_data_free);
+    /* Marca el SSID y device_path en el event_box para identificar la fila desde afuera. */
+    g_object_set_data_full (G_OBJECT (event_box), "ssid",
+                            g_strdup (ap->ssid), g_free);
+    g_object_set_data_full (G_OBJECT (event_box), "device-path",
+                            g_strdup (device_path), g_free);
 
     g_signal_connect (event_box, "button-press-event",
                       G_CALLBACK (on_row_clicked), rd);
@@ -680,35 +845,28 @@ make_ap_row (NmAccessPoint   *ap,
     return event_box;
 }
 
-typedef struct {
-    GDBusConnection *conn;
-    gchar           *device_path;
-} DeviceSwitchData;
-
-static void
-device_switch_data_free (DeviceSwitchData *d)
-{
-    g_free (d->device_path);
-    g_free (d);
-}
-
-static gboolean
-on_device_switch_toggled (GtkSwitch *sw, gboolean state, gpointer user_data)
-{
-    (void) sw;
-    DeviceSwitchData *d = user_data;
-    nm_set_device_enabled (d->conn, d->device_path, state);
-    return FALSE;
-}
+/* ---------- sección por adaptador ---------- */
 
 static GtkWidget *
-make_device_section (GDBusConnection *conn, NmDevice *dev, NetPopup *popup,
-                     gboolean show_header)
+make_device_section (NetPopup *popup, NmDevice *dev, gboolean show_header)
 {
     GtkWidget *section, *separator;
     GSList    *aps, *a;
+    GDBusConnection *conn = popup->conn;
 
     section = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+
+    if (popup->show_separators) {
+        GtkWidget *mod_sep = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+        gtk_widget_set_size_request (mod_sep, -1, 2);
+        gtk_style_context_add_class (gtk_widget_get_style_context (mod_sep), "module-sep");
+        GtkCssProvider *sc = gtk_css_provider_new ();
+        gtk_css_provider_load_from_data (sc, ".module-sep { background-color: mix(@theme_bg_color, @theme_fg_color, 0.3); min-height: 2px; }", -1, NULL);
+        gtk_style_context_add_provider (gtk_widget_get_style_context (mod_sep),
+            GTK_STYLE_PROVIDER (sc), GTK_STYLE_PROVIDER_PRIORITY_USER);
+        g_object_unref (sc);
+        gtk_box_pack_start (GTK_BOX (section), mod_sep, FALSE, FALSE, 0);
+    }
 
     if (show_header) {
         GtkWidget *header_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
@@ -743,12 +901,13 @@ make_device_section (GDBusConnection *conn, NmDevice *dev, NetPopup *popup,
         gtk_box_pack_start (GTK_BOX (section), header_row, FALSE, FALSE, 0);
     }
 
-    separator = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
-    gtk_box_pack_start (GTK_BOX (section), separator, FALSE, FALSE, 0);
-
     aps = nm_get_access_points (conn, dev->object_path);
     for (a = aps; a; a = a->next) {
-        GtkWidget *r = make_ap_row (a->data, popup, dev->object_path, conn);
+        if (popup->show_separators) {
+            separator = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
+            gtk_box_pack_start (GTK_BOX (section), separator, FALSE, FALSE, 0);
+        }
+        GtkWidget *r = make_ap_row (a->data, popup, dev->object_path);
         gtk_box_pack_start (GTK_BOX (section), r, FALSE, FALSE, 0);
     }
     nm_ap_list_free (aps);
@@ -776,22 +935,37 @@ on_vpn_switch_toggled (GtkSwitch *sw, gboolean state, gpointer user_data)
     (void) sw;
     VpnSwitchData *d = user_data;
     if (state)
-        nm_activate_vpn   (d->conn, d->conn_path);
+        nm_activate_vpn_async   (d->conn, d->conn_path);
     else
-        nm_deactivate_vpn (d->conn, d->conn_path);
+        nm_deactivate_vpn_async (d->conn, d->conn_path);
     return FALSE;
 }
 
-static GtkWidget *
-make_vpn_section (GDBusConnection *conn)
+static void
+fill_vpn_section (NetPopup *popup)
 {
-    GSList *vpns = nm_get_vpn_connections (conn);
-    if (!vpns) return NULL;
+    /* Vacía y rellena popup->vpn_section. */
+    GList *kids = gtk_container_get_children (GTK_CONTAINER (popup->vpn_section));
+    g_list_foreach (kids, (GFunc) gtk_widget_destroy, NULL);
+    g_list_free (kids);
 
-    GtkWidget *section = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+    GSList *vpns = nm_get_vpn_connections (popup->conn);
+    if (!vpns) {
+        gtk_widget_hide (popup->vpn_section);
+        return;
+    }
 
-    GtkWidget *sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
-    gtk_box_pack_start (GTK_BOX (section), sep, FALSE, FALSE, 0);
+    if (popup->show_separators) {
+        GtkWidget *sep = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+        gtk_widget_set_size_request (sep, -1, 2);
+        gtk_style_context_add_class (gtk_widget_get_style_context (sep), "module-sep");
+        GtkCssProvider *sc = gtk_css_provider_new ();
+        gtk_css_provider_load_from_data (sc, ".module-sep { background-color: mix(@theme_bg_color, @theme_fg_color, 0.3); min-height: 2px; }", -1, NULL);
+        gtk_style_context_add_provider (gtk_widget_get_style_context (sep),
+            GTK_STYLE_PROVIDER (sc), GTK_STYLE_PROVIDER_PRIORITY_USER);
+        g_object_unref (sc);
+        gtk_box_pack_start (GTK_BOX (popup->vpn_section), sep, FALSE, FALSE, 0);
+    }
 
     GtkWidget *header_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_set_margin_start  (header_row, 12);
@@ -803,7 +977,7 @@ make_vpn_section (GDBusConnection *conn)
     gtk_label_set_markup (GTK_LABEL (header), "<b><small>VPN</small></b>");
     gtk_label_set_xalign (GTK_LABEL (header), 0.0);
     gtk_box_pack_start (GTK_BOX (header_row), header, TRUE, TRUE, 0);
-    gtk_box_pack_start (GTK_BOX (section), header_row, FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (popup->vpn_section), header_row, FALSE, FALSE, 0);
 
     for (GSList *l = vpns; l; l = l->next) {
         NmVpnConnection *vpn = l->data;
@@ -824,7 +998,7 @@ make_vpn_section (GDBusConnection *conn)
         gtk_switch_set_active (GTK_SWITCH (sw), vpn->active);
 
         VpnSwitchData *d = g_new0 (VpnSwitchData, 1);
-        d->conn      = conn;
+        d->conn      = popup->conn;
         d->conn_path = g_strdup (vpn->conn_path);
         g_object_set_data_full (G_OBJECT (sw), "vpn-switch-data", d,
                                 (GDestroyNotify) vpn_switch_data_free);
@@ -833,25 +1007,318 @@ make_vpn_section (GDBusConnection *conn)
                           G_CALLBACK (on_vpn_switch_toggled), d);
         gtk_box_pack_end (GTK_BOX (row), sw, FALSE, FALSE, 0);
 
-        gtk_box_pack_start (GTK_BOX (section), row, FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (popup->vpn_section), row, FALSE, FALSE, 0);
     }
 
     nm_vpn_list_free (vpns);
-    return section;
+    gtk_widget_show_all (popup->vpn_section);
 }
 
-/* ---------- event handlers ---------- */
+/* ---------- sección Ethernet ---------- */
 
-static gboolean
-on_key_press (GtkWidget *widget, GdkEventKey *event, NetPopup *popup)
+static void
+fill_eth_section (NetPopup *popup)
 {
-    (void) widget;
-    if (event->keyval == GDK_KEY_Escape) {
-        popup_hide (popup);
-        return GDK_EVENT_STOP;
+    GList *kids = gtk_container_get_children (GTK_CONTAINER (popup->eth_section));
+    g_list_foreach (kids, (GFunc) gtk_widget_destroy, NULL);
+    g_list_free (kids);
+
+    GSList *eth_devices = nm_get_ethernet_devices (popup->conn);
+    if (!eth_devices) {
+        gtk_widget_hide (popup->eth_section);
+        return;
     }
-    return GDK_EVENT_PROPAGATE;
+
+    for (GSList *d = eth_devices; d; d = d->next) {
+        NmDevice *dev = d->data;
+
+        if (popup->show_separators) {
+            GtkWidget *eth_sep = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+            gtk_widget_set_size_request (eth_sep, -1, 2);
+            gtk_style_context_add_class (gtk_widget_get_style_context (eth_sep), "module-sep");
+            GtkCssProvider *sc = gtk_css_provider_new ();
+            gtk_css_provider_load_from_data (sc, ".module-sep { background-color: mix(@theme_bg_color, @theme_fg_color, 0.3); min-height: 2px; }", -1, NULL);
+            gtk_style_context_add_provider (gtk_widget_get_style_context (eth_sep),
+                GTK_STYLE_PROVIDER (sc), GTK_STYLE_PROVIDER_PRIORITY_USER);
+            g_object_unref (sc);
+            gtk_box_pack_start (GTK_BOX (popup->eth_section), eth_sep, FALSE, FALSE, 0);
+        }
+
+        GtkWidget *eth_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+        gtk_widget_set_margin_start  (eth_row, 12);
+        gtk_widget_set_margin_end    (eth_row, 12);
+        gtk_widget_set_margin_top    (eth_row, 8);
+        gtk_widget_set_margin_bottom (eth_row, 8);
+
+        GtkWidget *eth_icon = gtk_image_new_from_icon_name (
+                                  "network-wired-symbolic", GTK_ICON_SIZE_MENU);
+        gtk_box_pack_start (GTK_BOX (eth_row), eth_icon, FALSE, FALSE, 4);
+
+        GtkWidget *eth_label = gtk_label_new (NULL);
+        gchar *eth_markup = g_markup_printf_escaped ("<b>%s</b>", dev->iface);
+        gtk_label_set_markup (GTK_LABEL (eth_label), eth_markup);
+        g_free (eth_markup);
+        gtk_label_set_xalign (GTK_LABEL (eth_label), 0.0);
+        gtk_box_pack_start (GTK_BOX (eth_row), eth_label, TRUE, TRUE, 0);
+
+        GtkWidget *eth_status = gtk_label_new (_("Connected"));
+        gtk_style_context_add_class (gtk_widget_get_style_context (eth_status),
+                                     "dim-label");
+        gtk_box_pack_end (GTK_BOX (eth_row), eth_status, FALSE, FALSE, 0);
+
+        gtk_box_pack_start (GTK_BOX (popup->eth_section), eth_row, FALSE, FALSE, 0);
+    }
+    nm_device_list_free (eth_devices);
+
+    gtk_widget_show_all (popup->eth_section);
 }
+
+/* ---------- update functions: actualizan widgets in-place ---------- */
+
+static void
+update_top_status (NetPopup *popup)
+{
+    if (!popup->ui_built) return;
+
+    gchar *primary_ssid = get_primary_ssid (popup->conn);
+
+    /* Ícono superior */
+    if (primary_ssid)
+        gtk_image_set_from_icon_name (GTK_IMAGE (popup->status_icon),
+                                      "network-wireless-symbolic", GTK_ICON_SIZE_MENU);
+    else
+        gtk_image_set_from_icon_name (GTK_IMAGE (popup->status_icon),
+                                      "network-wireless-disconnected-symbolic", GTK_ICON_SIZE_MENU);
+
+    /* Label de estado */
+    if (primary_ssid) {
+        gchar *markup = g_markup_printf_escaped (
+                            _("Connected to <b>%s</b>"), primary_ssid);
+        gtk_label_set_markup (GTK_LABEL (popup->status_label), markup);
+        g_free (markup);
+    } else if (!nm_get_wifi_enabled (popup->conn)) {
+        gtk_label_set_text (GTK_LABEL (popup->status_label), _("Disabled"));
+    } else {
+        gtk_label_set_text (GTK_LABEL (popup->status_label), _("Enabled – not connected"));
+    }
+
+    g_free (primary_ssid);
+
+    /* Switch global: sincronizar sin disparar handler */
+    g_signal_handler_block (popup->wifi_switch, popup->wifi_switch_handler);
+    gboolean wifi_on = nm_get_wifi_enabled (popup->conn);
+    gtk_switch_set_active (GTK_SWITCH (popup->wifi_switch), wifi_on);
+    gtk_switch_set_state  (GTK_SWITCH (popup->wifi_switch), wifi_on);
+    g_signal_handler_unblock (popup->wifi_switch, popup->wifi_switch_handler);
+
+    /* Switches por adaptador: sensitividad según switch global */
+    for (GSList *l = popup->device_switches; l; l = l->next)
+        gtk_widget_set_sensitive (GTK_WIDGET (l->data), wifi_on);
+}
+
+static void
+update_eth_section (NetPopup *popup)
+{
+    if (!popup->ui_built) return;
+    fill_eth_section (popup);
+}
+
+static void
+update_vpn_section (NetPopup *popup)
+{
+    if (!popup->ui_built) return;
+    fill_vpn_section (popup);
+}
+
+static void
+update_devices_section (NetPopup *popup)
+{
+    if (!popup->ui_built) return;
+
+    /* Si hay un expand abierto NO reconstruimos la lista de filas
+     * (regla 1A: congelar filas mientras el usuario interactúa).
+     * Pero igual chequeamos las operaciones en curso. */
+    if (popup->current_expand_box) {
+        check_ops_progress (popup);
+        return;
+    }
+
+    /* Limpiar y reconstruir todas las secciones de adaptadores. */
+    GList *kids = gtk_container_get_children (GTK_CONTAINER (popup->content_box));
+    for (GList *k = kids; k; k = k->next) {
+        /* Saltar la sección VPN, que tiene tag */
+        if (k->data == popup->vpn_section) continue;
+        gtk_widget_destroy (GTK_WIDGET (k->data));
+    }
+    g_list_free (kids);
+
+    g_slist_free (popup->device_switches);
+    popup->device_switches = NULL;
+
+    GSList *devices = nm_get_wifi_devices (popup->conn);
+    gint    n_devices = g_slist_length (devices);
+    for (GSList *d = devices; d; d = d->next) {
+        GtkWidget *section = make_device_section (popup, d->data, n_devices > 1);
+        gtk_box_pack_start (GTK_BOX (popup->content_box), section, FALSE, FALSE, 0);
+        gtk_box_reorder_child (GTK_BOX (popup->content_box), section, -1);
+    }
+    nm_device_list_free (devices);
+
+    /* La sección VPN debe quedar al final. */
+    gtk_box_reorder_child (GTK_BOX (popup->content_box), popup->vpn_section, -1);
+
+    gtk_widget_show_all (popup->content_box);
+
+    /* Tras reconstruir, los expand_boxes vuelven a no_show_all + hidden por make_ap_row,
+     * así que no quedan abiertos. */
+    popup->current_expand_box = NULL;
+
+    /* Las operaciones en curso ya no tienen sus widgets antiguos, las descartamos. */
+    g_hash_table_remove_all (popup->ops_in_progress);
+}
+
+/* ---------- refresh coalescido ---------- */
+
+/* Idle source: una sola pasada de actualización por ráfaga de señales. */
+static gboolean
+refresh_ui_cb (gpointer user_data)
+{
+    NetPopup *popup = user_data;
+    g_object_set_data (G_OBJECT (popup->window), "refresh-pending", NULL);
+
+    if (!popup->ui_built) return G_SOURCE_REMOVE;
+    if (!gtk_widget_get_visible (popup->window)) return G_SOURCE_REMOVE;
+
+    /* Primero chequear si alguna operación en curso ya se confirmó. */
+    check_ops_progress (popup);
+
+    /* Después refrescar las partes que no dependen del expand abierto. */
+    update_top_status     (popup);
+    update_eth_section    (popup);
+    update_vpn_section    (popup);
+    update_devices_section (popup);
+
+    return G_SOURCE_REMOVE;
+}
+
+static void
+schedule_refresh_ui (NetPopup *popup)
+{
+    if (!popup) return;
+    if (!gtk_widget_get_visible (popup->window)) return;
+    /* Coalescer: si ya hay un refresh pendiente, no encolar otro. */
+    if (g_object_get_data (G_OBJECT (popup->window), "refresh-pending"))
+        return;
+    g_object_set_data (G_OBJECT (popup->window), "refresh-pending",
+                       GINT_TO_POINTER (1));
+    g_idle_add (refresh_ui_cb, popup);
+}
+
+/* Callback que NM dispara: agendamos refresh idle (coalescido). */
+static void
+on_nm_signal_popup (gpointer user_data)
+{
+    NetPopup *popup = user_data;
+    schedule_refresh_ui (popup);
+}
+
+/* ---------- construcción inicial de la UI ---------- */
+
+static void
+rebuild_ui (NetPopup *popup)
+{
+    GDBusConnection *conn = popup->conn;
+
+    /* Limpiar zonas (por si rebuild_ui se llama dos veces) */
+    GList *children = gtk_container_get_children (GTK_CONTAINER (popup->content_box));
+    g_list_foreach (children, (GFunc) gtk_widget_destroy, NULL);
+    g_list_free (children);
+
+    GList *top_children = gtk_container_get_children (GTK_CONTAINER (popup->top_box));
+    g_list_foreach (top_children, (GFunc) gtk_widget_destroy, NULL);
+    g_list_free (top_children);
+
+    g_slist_free (popup->device_switches);
+    popup->device_switches = NULL;
+    popup->current_expand_box = NULL;
+
+    /* ---- Barra superior fija ---- */
+    GtkWidget *top_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_widget_set_margin_start  (top_row, 12);
+    gtk_widget_set_margin_end    (top_row, 12);
+    gtk_widget_set_margin_top    (top_row, 8);
+    gtk_widget_set_margin_bottom (top_row, 8);
+
+    popup->status_icon = gtk_image_new_from_icon_name (
+                             "network-wireless-disconnected-symbolic",
+                             GTK_ICON_SIZE_MENU);
+    gtk_widget_set_valign (popup->status_icon, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_bottom (popup->status_icon, 22);
+    gtk_box_pack_start (GTK_BOX (top_row), popup->status_icon, FALSE, FALSE, 0);
+
+    GtkWidget *center_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
+    gtk_box_pack_start (GTK_BOX (top_row), center_box, TRUE, TRUE, 0);
+
+    /* Botón Actualizar */
+    popup->refresh_button = gtk_button_new ();
+    GtkWidget *refresh_box  = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+    GtkWidget *refresh_icon = gtk_image_new_from_icon_name (
+                                  "view-refresh-symbolic", GTK_ICON_SIZE_MENU);
+    popup->refresh_label = gtk_label_new (popup->scanning ? _("Updating…") : _("Refresh"));
+    gtk_box_pack_start (GTK_BOX (refresh_box), refresh_icon,  FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (refresh_box), popup->refresh_label, FALSE, FALSE, 0);
+    gtk_container_add  (GTK_CONTAINER (popup->refresh_button), refresh_box);
+    gtk_button_set_relief (GTK_BUTTON (popup->refresh_button), GTK_RELIEF_NONE);
+    gtk_widget_set_valign (popup->refresh_button, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_bottom (popup->refresh_button, 16);
+    gtk_widget_set_sensitive (popup->refresh_button, !popup->scanning);
+    g_signal_connect (popup->refresh_button, "clicked",
+                      G_CALLBACK (on_refresh_clicked), popup);
+    gtk_box_pack_end (GTK_BOX (top_row), popup->refresh_button, FALSE, FALSE, 0);
+
+    /* Fila Wi-Fi + switch */
+    GtkWidget *wifi_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+    gtk_box_pack_start (GTK_BOX (center_box), wifi_row, FALSE, FALSE, 0);
+
+    GtkWidget *wifi_label = gtk_label_new (_("Wi-Fi"));
+    gtk_label_set_xalign (GTK_LABEL (wifi_label), 0.0);
+    gtk_box_pack_start (GTK_BOX (wifi_row), wifi_label, FALSE, FALSE, 0);
+
+    popup->wifi_switch = gtk_switch_new ();
+    gtk_switch_set_active (GTK_SWITCH (popup->wifi_switch),
+                           nm_get_wifi_enabled (conn));
+    popup->wifi_switch_handler = g_signal_connect (
+        popup->wifi_switch, "state-set",
+        G_CALLBACK (on_wifi_switch_toggled), popup);
+    gtk_box_pack_start (GTK_BOX (wifi_row), popup->wifi_switch, FALSE, FALSE, 0);
+
+    /* Label de estado */
+    popup->status_label = gtk_label_new (NULL);
+    gtk_label_set_xalign (GTK_LABEL (popup->status_label), 0.0);
+    gtk_label_set_ellipsize (GTK_LABEL (popup->status_label), PANGO_ELLIPSIZE_END);
+    gtk_box_pack_start (GTK_BOX (center_box), popup->status_label, FALSE, FALSE, 0);
+
+    gtk_box_pack_start (GTK_BOX (popup->top_box), top_row, FALSE, FALSE, 0);
+
+
+    /* Contenedor sección Ethernet (vacío por defecto, se llena en update_eth_section). */
+    popup->eth_section = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_pack_start (GTK_BOX (popup->top_box), popup->eth_section, FALSE, FALSE, 0);
+
+    /* Contenedor sección VPN (al fondo del content_box, se llena en update_vpn_section). */
+    popup->vpn_section = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_pack_end (GTK_BOX (popup->content_box), popup->vpn_section, FALSE, FALSE, 0);
+
+    popup->ui_built = TRUE;
+
+    /* Llenar las secciones por primera vez. */
+    update_top_status      (popup);
+    update_eth_section     (popup);
+    update_devices_section (popup);
+    update_vpn_section     (popup);
+}
+
+/* ---------- diálogo "Conectar a red oculta" ---------- */
 
 static void
 on_eye_clicked (GtkWidget *btn, GtkEntry *entry)
@@ -876,10 +1343,9 @@ on_hidden_response (GtkDialog *dialog, gint response, GDBusConnection *conn)
             GSList *devs = nm_get_wifi_devices (conn);
             if (devs) {
                 NmDevice *dev = devs->data;
-                nm_add_and_activate_connection (conn, dev->object_path,
-                                                "/", ssid,
-                                                secure ? password : NULL,
-                                                TRUE);
+                nm_add_and_activate_connection_async (
+                    conn, dev->object_path, "/", ssid,
+                    secure ? password : NULL, TRUE);
                 nm_device_list_free (devs);
             }
         }
@@ -891,8 +1357,7 @@ static void
 on_hidden_network_clicked (GtkWidget *btn, NetPopup *popup)
 {
     (void) btn;
-
-    GDBusConnection *conn = g_object_get_data (G_OBJECT (popup->window), "conn");
+    GDBusConnection *conn = popup->conn;
     if (!conn) return;
 
     GtkWidget *dialog = gtk_dialog_new_with_buttons (
@@ -975,6 +1440,19 @@ on_advanced_clicked (GtkWidget *btn, gpointer user_data)
         g_spawn_command_line_async ("xterm -e nmtui", NULL);
         return;
     }
+}
+
+/* ---------- event handlers de la ventana ---------- */
+
+static gboolean
+on_key_press (GtkWidget *widget, GdkEventKey *event, NetPopup *popup)
+{
+    (void) widget;
+    if (event->keyval == GDK_KEY_Escape) {
+        popup_hide (popup);
+        return GDK_EVENT_STOP;
+    }
+    return GDK_EVENT_PROPAGATE;
 }
 
 static gboolean
@@ -1062,171 +1540,54 @@ popup_create (XfcePanelPlugin *plugin, GtkWidget *button)
     g_signal_connect (win, "key-press-event", G_CALLBACK (on_key_press), popup);
 
     popup->window = win;
+    popup->ops_in_progress = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                                     g_free, op_free);
     return popup;
 }
 
 void
 popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
-            GSList *devices, GDBusConnection *conn,
+            GDBusConnection *conn,
             gint popup_width, gint popup_height)
 {
     GdkDisplay *display;
     GdkSeat    *seat;
-    GSList     *d;
     (void) plugin;
 
-    /* Limpiar zona scrolleable */
-    GList *children = gtk_container_get_children (
-                          GTK_CONTAINER (popup->content_box));
-    g_list_foreach (children, (GFunc) gtk_widget_destroy, NULL);
-    g_list_free (children);
-    popup->current_expand_box = NULL;
-    g_slist_free (popup->device_switches);
-    popup->device_switches = NULL;
+    popup->conn         = conn;
     popup->popup_width  = popup_width;
     popup->popup_height = popup_height;
     gtk_widget_set_size_request (popup->window, popup_width, -1);
     gtk_widget_set_size_request (popup->scroll, popup_width, popup_height);
 
-    /* Limpiar y reconstruir zona fija superior */
-    GList *top_children = gtk_container_get_children (
-                              GTK_CONTAINER (popup->top_box));
-    g_list_foreach (top_children, (GFunc) gtk_widget_destroy, NULL);
-    g_list_free (top_children);
-
-    /* ---- Barra superior fija ---- */
-    GtkWidget *top_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
-    gtk_widget_set_margin_start  (top_row, 12);
-    gtk_widget_set_margin_end    (top_row, 12);
-    gtk_widget_set_margin_top    (top_row, 8);
-    gtk_widget_set_margin_bottom (top_row, 8);
-
-    /* Ícono de señal o desconectado */
-    gchar       *primary_ssid = get_primary_ssid (conn);
-    GtkWidget   *top_icon;
-    if (primary_ssid)
-        top_icon = gtk_image_new_from_icon_name (
-                       "network-wireless-symbolic", GTK_ICON_SIZE_MENU);
-    else
-        top_icon = gtk_image_new_from_icon_name (
-                       "network-wireless-disconnected-symbolic", GTK_ICON_SIZE_MENU);
-    gtk_widget_set_valign (top_icon, GTK_ALIGN_CENTER);
-    gtk_widget_set_margin_bottom (top_icon, 22);
-    gtk_box_pack_start (GTK_BOX (top_row), top_icon, FALSE, FALSE, 0);
-
-    /* Columna central: "Wi-Fi [switch]" arriba, estado abajo */
-    GtkWidget *center_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
-    gtk_box_pack_start (GTK_BOX (top_row), center_box, TRUE, TRUE, 0);
-
-    GtkWidget *refresh_btn   = gtk_button_new ();
-    GtkWidget *refresh_box   = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
-    GtkWidget *refresh_icon  = gtk_image_new_from_icon_name (
-                                   "view-refresh-symbolic", GTK_ICON_SIZE_MENU);
-    GtkWidget *refresh_label = gtk_label_new (popup->scanning ? _("Updating…") : _("Refresh"));
-    gtk_box_pack_start (GTK_BOX (refresh_box), refresh_icon,  FALSE, FALSE, 0);
-    gtk_box_pack_start (GTK_BOX (refresh_box), refresh_label, FALSE, FALSE, 0);
-    gtk_container_add  (GTK_CONTAINER (refresh_btn), refresh_box);
-    gtk_button_set_relief (GTK_BUTTON (refresh_btn), GTK_RELIEF_NONE);
-    gtk_widget_set_valign (refresh_btn, GTK_ALIGN_CENTER);
-    gtk_widget_set_margin_bottom (refresh_btn, 16);
-    gtk_widget_set_sensitive (refresh_btn, !popup->scanning);
-    g_object_set_data (G_OBJECT (refresh_btn), "label", refresh_label);
-    g_signal_connect (refresh_btn, "clicked",
-                      G_CALLBACK (on_refresh_clicked), popup);
-    gtk_box_pack_end (GTK_BOX (top_row), refresh_btn, FALSE, FALSE, 0);
-
-    /* Fila Wi-Fi + switch */
-    GtkWidget *wifi_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
-    gtk_box_pack_start (GTK_BOX (center_box), wifi_row, FALSE, FALSE, 0);
-
-    GtkWidget *wifi_label = gtk_label_new (_("Wi-Fi"));
-    gtk_label_set_xalign (GTK_LABEL (wifi_label), 0.0);
-    gtk_box_pack_start (GTK_BOX (wifi_row), wifi_label, FALSE, FALSE, 0);
-
-    GtkWidget *wifi_switch = gtk_switch_new ();
-    gtk_switch_set_active (GTK_SWITCH (wifi_switch),
-                           nm_get_wifi_enabled (conn));
-    WifiSwitchData *wsd = g_new0 (WifiSwitchData, 1);
-    wsd->conn  = conn;
-    wsd->popup = popup;
-    g_object_set_data_full (G_OBJECT (wifi_switch), "wifi-switch-data", wsd,
-                            (GDestroyNotify) g_free);
-    g_signal_connect (wifi_switch, "state-set",
-                      G_CALLBACK (on_wifi_switch_toggled), wsd);
-    gtk_box_pack_start (GTK_BOX (wifi_row), wifi_switch, FALSE, FALSE, 0);
-
-    /* Texto de estado debajo */
-    GtkWidget *status_label = gtk_label_new (NULL);
-    if (primary_ssid) {
-        gchar *markup = g_markup_printf_escaped (
-                            _("Connected to <b>%s</b>"), primary_ssid);
-        gtk_label_set_markup (GTK_LABEL (status_label), markup);
-        g_free (markup);
+    /* Construir UI si es la primera vez. */
+    if (!popup->ui_built) {
+        rebuild_ui (popup);
     } else {
-        gtk_label_set_text (GTK_LABEL (status_label), _("Not connected"));
-    }
-    g_free (primary_ssid);
-    gtk_label_set_xalign (GTK_LABEL (status_label), 0.0);
-    gtk_label_set_ellipsize (GTK_LABEL (status_label), PANGO_ELLIPSIZE_END);
-    gtk_box_pack_start (GTK_BOX (center_box), status_label, FALSE, FALSE, 0);
-
-    gtk_box_pack_start (GTK_BOX (popup->top_box), top_row, FALSE, FALSE, 0);
-
-    GtkWidget *sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
-    gtk_box_pack_start (GTK_BOX (popup->top_box), sep, FALSE, FALSE, 0);
-
-    /* ---- Sección Ethernet (solo si hay cable) ---- */
-    GSList *eth_devices = nm_get_ethernet_devices (conn);
-    for (d = eth_devices; d; d = d->next) {
-        NmDevice  *dev = d->data;
-
-        GtkWidget *eth_sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
-        gtk_box_pack_start (GTK_BOX (popup->top_box), eth_sep, FALSE, FALSE, 0);
-
-        GtkWidget *eth_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-        gtk_widget_set_margin_start  (eth_row, 12);
-        gtk_widget_set_margin_end    (eth_row, 12);
-        gtk_widget_set_margin_top    (eth_row, 8);
-        gtk_widget_set_margin_bottom (eth_row, 8);
-
-        GtkWidget *eth_icon = gtk_image_new_from_icon_name (
-                                  "network-wired-symbolic", GTK_ICON_SIZE_MENU);
-        gtk_box_pack_start (GTK_BOX (eth_row), eth_icon, FALSE, FALSE, 4);
-
-        GtkWidget *eth_label = gtk_label_new (NULL);
-        gchar *eth_markup = g_markup_printf_escaped ("<b>%s</b>", dev->iface);
-        gtk_label_set_markup (GTK_LABEL (eth_label), eth_markup);
-        g_free (eth_markup);
-        gtk_label_set_xalign (GTK_LABEL (eth_label), 0.0);
-        gtk_box_pack_start (GTK_BOX (eth_row), eth_label, TRUE, TRUE, 0);
-
-        GtkWidget *eth_status = gtk_label_new (_("Connected"));
-        gtk_style_context_add_class (gtk_widget_get_style_context (eth_status),
-                                     "dim-label");
-        gtk_box_pack_end (GTK_BOX (eth_row), eth_status, FALSE, FALSE, 0);
-
-        gtk_box_pack_start (GTK_BOX (popup->top_box), eth_row, FALSE, FALSE, 0);
-    }
-    nm_device_list_free (eth_devices);
-
-    gint n_devices = g_slist_length (devices);
-    for (d = devices; d; d = d->next) {
-        GtkWidget *section = make_device_section (conn, d->data, popup, n_devices > 1);
-        gtk_box_pack_start (GTK_BOX (popup->content_box), section,
-                            FALSE, FALSE, 0);
+        /* Ya estaba construida; refrescar estado por las dudas. */
+        update_top_status      (popup);
+        update_eth_section     (popup);
+        update_devices_section (popup);
+        update_vpn_section     (popup);
     }
 
-    /* ---- Sección VPN (solo si hay perfiles configurados) ---- */
-    GtkWidget *vpn_section = make_vpn_section (conn);
-    if (vpn_section)
-        gtk_box_pack_start (GTK_BOX (popup->content_box), vpn_section,
-                            FALSE, FALSE, 0);
-
-    g_object_set_data (G_OBJECT (popup->window), "conn", conn);
+    /* Suscribirse a señales DBus de NM (las gestiona el popup mientras está abierto). */
+    if (!popup->signal_ids)
+        popup->signal_ids = nm_subscribe_signals (conn, on_nm_signal_popup, popup);
 
     gtk_widget_show_all (popup->window);
     position_popup (popup, button);
     gtk_window_present (GTK_WINDOW (popup->window));
+
+    /* Pedir escaneo al abrir. */
+    {
+        GSList *devs = nm_get_wifi_devices (conn);
+        for (GSList *l = devs; l; l = l->next) {
+            NmDevice *dev = l->data;
+            nm_request_scan (conn, dev->object_path);
+        }
+        nm_device_list_free (devs);
+    }
 
     display = gtk_widget_get_display (popup->window);
     seat    = gdk_display_get_default_seat (display);
@@ -1267,6 +1628,30 @@ popup_hide (NetPopup *popup)
         popup->press_handler = 0;
     }
 
+    /* Desuscribirse de las señales DBus mientras está cerrado: el plugin
+     * sigue suscripto por su cuenta para mantener el ícono del panel al día. */
+    if (popup->signal_ids) {
+        nm_unsubscribe_signals (popup->conn, popup->signal_ids);
+        popup->signal_ids = NULL;
+    }
+
+    /* Cancelar timeouts de operaciones en curso. Las acciones DBus ya enviadas
+     * a NM siguen su curso (NM las ejecutará), pero la UI no espera más. */
+    g_hash_table_remove_all (popup->ops_in_progress);
+
+    /* Cancelar cooldown del botón Actualizar. */
+    if (popup->scan_timeout_id) {
+        g_source_remove (popup->scan_timeout_id);
+        popup->scan_timeout_id = 0;
+    }
+    popup->scanning = FALSE;
+
+    /* Cerrar expand abierto para que al reabrir el popup esté limpio. */
+    if (popup->current_expand_box) {
+        gtk_widget_hide (popup->current_expand_box);
+        popup->current_expand_box = NULL;
+    }
+
     if (popup->button)
         g_signal_handlers_block_matched (popup->button,
             G_SIGNAL_MATCH_DATA, 0, 0, NULL, NULL, popup->button);
@@ -1281,6 +1666,8 @@ popup_destroy (NetPopup *popup)
 {
     if (!popup) return;
     popup_hide (popup);
+    if (popup->ops_in_progress)
+        g_hash_table_destroy (popup->ops_in_progress);
     gtk_widget_destroy (popup->window);
     g_free (popup);
 }

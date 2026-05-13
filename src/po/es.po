@@ -112,3 +112,21 @@ msgstr "Ninguna"
 
 msgid "Password:"
 msgstr "Contraseña:"
+
+msgid "Disabled"
+msgstr "Desactivado"
+
+msgid "Enabled – not connected"
+msgstr "Activado – no conectado"
+
+msgid "Disconnecting…"
+msgstr "Desconectando…"
+
+msgid "Connecting…"
+msgstr "Conectando…"
+
+msgid "Connection failed"
+msgstr "Error de conexión"
+
+msgid "Show separators"
+msgstr "Mostrar separadores"

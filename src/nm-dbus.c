@@ -52,6 +52,25 @@ get_property (GDBusConnection *conn,
     return value;
 }
 
+/* Callback genérico para llamadas async: solo loggea el error si hubo.
+ * No necesita user_data porque la confirmación del cambio real llega
+ * por señal DBus, no por este callback. */
+static void
+on_async_done (GObject *src, GAsyncResult *res, gpointer user_data)
+{
+    const gchar *op_name = user_data;
+    GError      *err = NULL;
+    GVariant    *result = g_dbus_connection_call_finish (
+                              G_DBUS_CONNECTION (src), res, &err);
+    if (result) {
+        g_variant_unref (result);
+    } else if (err) {
+        g_warning ("nm-dbus async: %s falló: %s",
+                   op_name ? op_name : "(?)", err->message);
+        g_error_free (err);
+    }
+}
+
 GSList *
 nm_get_wifi_devices (GDBusConnection *conn)
 {
@@ -230,25 +249,16 @@ nm_ap_list_free (GSList *list)
     g_slist_free (list);
 }
 
-gboolean
-nm_disconnect_device (GDBusConnection *conn, const gchar *device_path)
-{
-    GVariant *result;
-    GError   *err = NULL;
+/* ---------- ACCIÓN ASYNC: desconectar dispositivo ---------- */
 
-    result = g_dbus_connection_call_sync (
+void
+nm_disconnect_device_async (GDBusConnection *conn, const gchar *device_path)
+{
+    g_dbus_connection_call (
         conn, NM_BUS_NAME, device_path, NM_DEVICE_IFACE,
         "Disconnect", NULL, NULL,
-        G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
-
-    if (!result) {
-        g_warning ("nm-dbus: Disconnect en %s: %s", device_path, err->message);
-        g_error_free (err);
-        return FALSE;
-    }
-
-    g_variant_unref (result);
-    return TRUE;
+        G_DBUS_CALL_FLAGS_NONE, 5000, NULL,
+        on_async_done, "Disconnect");
 }
 
 /* ---------- conexiones guardadas ---------- */
@@ -325,77 +335,117 @@ nm_has_saved_connection (GDBusConnection *conn, const gchar *ssid)
 gboolean
 nm_forget_connection (GDBusConnection *conn, const gchar *ssid)
 {
-    gchar    *path = find_connection_path_by_ssid (conn, ssid);
-    GVariant *result;
-    GError   *err = NULL;
-
-    if (!path) return FALSE;
+    GVariant     *result, *paths_v;
+    GError       *err = NULL;
+    gsize         n, i;
+    const gchar **paths;
+    gboolean      deleted_any = FALSE;
 
     result = g_dbus_connection_call_sync (
-        conn, NM_BUS_NAME, path, NM_CONN_IFACE,
-        "Delete", NULL, NULL,
+        conn, NM_BUS_NAME, NM_SETTINGS_PATH, NM_SETTINGS_IFACE,
+        "ListConnections", NULL, G_VARIANT_TYPE ("(ao)"),
         G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
 
-    g_free (path);
-
     if (!result) {
-        g_warning ("nm-dbus: Delete connection: %s", err->message);
+        g_warning ("nm-dbus: ListConnections: %s", err->message);
         g_error_free (err);
         return FALSE;
     }
 
+    g_variant_get (result, "(@ao)", &paths_v);
+    paths = g_variant_get_objv (paths_v, &n);
+
+    for (i = 0; i < n; i++) {
+        GVariant *settings = g_dbus_connection_call_sync (
+            conn, NM_BUS_NAME, paths[i], NM_CONN_IFACE,
+            "GetSettings", NULL, G_VARIANT_TYPE ("(a{sa{sv}})"),
+            G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
+
+        if (!settings) continue;
+
+        GVariant *outer     = g_variant_get_child_value (settings, 0);
+        GVariant *wifi_dict = NULL;
+        gboolean  match     = FALSE;
+        g_variant_lookup (outer, "802-11-wireless", "@a{sv}", &wifi_dict);
+
+        if (wifi_dict) {
+            GVariant *ssid_v = NULL;
+            g_variant_lookup (wifi_dict, "ssid", "@ay", &ssid_v);
+            if (ssid_v) {
+                gsize         len;
+                const guchar *bytes = g_variant_get_fixed_array (ssid_v, &len, 1);
+                gchar        *conn_ssid = g_strndup ((const gchar *) bytes, len);
+                if (g_strcmp0 (conn_ssid, ssid) == 0)
+                    match = TRUE;
+                g_free (conn_ssid);
+                g_variant_unref (ssid_v);
+            }
+            g_variant_unref (wifi_dict);
+        }
+        g_variant_unref (outer);
+        g_variant_unref (settings);
+
+        if (match) {
+            GError   *derr = NULL;
+            GVariant *dres = g_dbus_connection_call_sync (
+                conn, NM_BUS_NAME, paths[i], NM_CONN_IFACE,
+                "Delete", NULL, NULL,
+                G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &derr);
+            if (dres) {
+                g_variant_unref (dres);
+                deleted_any = TRUE;
+            } else {
+                g_warning ("nm-dbus: Delete %s: %s", paths[i], derr->message);
+                g_error_free (derr);
+            }
+        }
+    }
+
+    g_free (paths);
+    g_variant_unref (paths_v);
     g_variant_unref (result);
-    return TRUE;
+    return deleted_any;
 }
 
-gboolean
-nm_activate_connection (GDBusConnection *conn,
-                         const gchar     *device_path,
-                         const gchar     *ap_path,
-                         const gchar     *ssid)
+/* ---------- ACCIÓN ASYNC: activar conexión guardada ---------- */
+
+void
+nm_activate_connection_async (GDBusConnection *conn,
+                              const gchar     *device_path,
+                              const gchar     *ap_path,
+                              const gchar     *ssid)
 {
-    gchar    *conn_path = find_connection_path_by_ssid (conn, ssid);
-    GVariant *result;
-    GError   *err = NULL;
+    gchar *conn_path = find_connection_path_by_ssid (conn, ssid);
 
     if (!conn_path) {
         g_warning ("nm-dbus: ActivateConnection: no se encontró perfil para %s", ssid);
-        return FALSE;
+        return;
     }
 
-    result = g_dbus_connection_call_sync (
+    g_dbus_connection_call (
         conn, NM_BUS_NAME, NM_OBJECT_PATH, NM_IFACE,
         "ActivateConnection",
         g_variant_new ("(ooo)", conn_path, device_path,
                        ap_path ? ap_path : "/"),
         G_VARIANT_TYPE ("(o)"),
-        G_DBUS_CALL_FLAGS_NONE, 10000, NULL, &err);
+        G_DBUS_CALL_FLAGS_NONE, 10000, NULL,
+        on_async_done, "ActivateConnection");
 
     g_free (conn_path);
-
-    if (!result) {
-        g_warning ("nm-dbus: ActivateConnection %s: %s", ssid,
-                   err ? err->message : "error desconocido");
-        if (err) g_error_free (err);
-        return FALSE;
-    }
-
-    g_variant_unref (result);
-    return TRUE;
 }
 
-gboolean
-nm_add_and_activate_connection (GDBusConnection *conn,
-                                  const gchar     *device_path,
-                                  const gchar     *ap_path,
-                                  const gchar     *ssid,
-                                  const gchar     *password,
-                                  gboolean         autoconnect)
+/* ---------- ACCIÓN ASYNC: añadir y activar conexión nueva ---------- */
+
+void
+nm_add_and_activate_connection_async (GDBusConnection *conn,
+                                      const gchar     *device_path,
+                                      const gchar     *ap_path,
+                                      const gchar     *ssid,
+                                      const gchar     *password,
+                                      gboolean         autoconnect)
 {
     GVariantBuilder conn_builder, wifi_builder, ipv4_builder, ipv6_builder,
                     meta_builder;
-    GVariant        *result;
-    GError          *err = NULL;
 
     GVariantBuilder ssid_builder;
     g_variant_builder_init (&ssid_builder, G_VARIANT_TYPE ("ay"));
@@ -439,22 +489,14 @@ nm_add_and_activate_connection (GDBusConnection *conn,
                                "802-11-wireless-security", &sec_builder);
     }
 
-    result = g_dbus_connection_call_sync (
+    g_dbus_connection_call (
         conn, NM_BUS_NAME, NM_OBJECT_PATH, NM_IFACE,
         "AddAndActivateConnection",
         g_variant_new ("(a{sa{sv}}oo)",
                        &conn_builder, device_path, ap_path),
         G_VARIANT_TYPE ("(oo)"),
-        G_DBUS_CALL_FLAGS_NONE, 10000, NULL, &err);
-
-    if (!result) {
-        g_warning ("nm-dbus: AddAndActivateConnection %s: %s", ssid, err->message);
-        g_error_free (err);
-        return FALSE;
-    }
-
-    g_variant_unref (result);
-    return TRUE;
+        G_DBUS_CALL_FLAGS_NONE, 10000, NULL,
+        on_async_done, "AddAndActivateConnection");
 }
 
 /* ---------- radio Wi-Fi global ---------- */
@@ -472,32 +514,17 @@ nm_get_wifi_enabled (GDBusConnection *conn)
 void
 nm_set_wifi_enabled (GDBusConnection *conn, gboolean enabled)
 {
-    GError   *err = NULL;
-    GVariant *result = g_dbus_connection_call_sync (
+    g_dbus_connection_call (
         conn, NM_BUS_NAME, NM_OBJECT_PATH,
         "org.freedesktop.DBus.Properties", "Set",
         g_variant_new ("(ssv)", NM_IFACE, "WirelessEnabled",
                        g_variant_new_boolean (enabled)),
-        NULL, G_DBUS_CALL_FLAGS_NONE, 3000, NULL, &err);
-
-    if (!result) {
-        g_warning ("nm-dbus: SetWirelessEnabled: %s", err->message);
-        g_error_free (err);
-        return;
-    }
-    g_variant_unref (result);
+        NULL, G_DBUS_CALL_FLAGS_NONE, 3000, NULL,
+        on_async_done, "SetWirelessEnabled");
 }
 
 /* ---------- radio Wi-Fi por adaptador ---------- */
 
-/*
- * NM no tiene un toggle directo por dispositivo.
- * El estado "habilitado" lo inferimos del State del dispositivo:
- *   State >= 20 (NM_DEVICE_STATE_UNAVAILABLE) y != 10 (UNMANAGED) = habilitado
- *   State == 20 (UNAVAILABLE) con Managed=true pero sin conectar = desactivado via sw
- * En la práctica usamos Disconnect para apagar y ActivateConnection para encender.
- * Para saber si está "encendido" consultamos la propiedad Managed + State.
- */
 gboolean
 nm_get_device_enabled (GDBusConnection *conn, const gchar *device_path)
 {
@@ -509,51 +536,53 @@ nm_get_device_enabled (GDBusConnection *conn, const gchar *device_path)
     return (state > 20);
 }
 
-void
-nm_set_device_enabled (GDBusConnection *conn, const gchar *device_path,
-                        gboolean enabled)
+/* Callback intermedio para encender: tras setear Managed=true, dispara Connect. */
+static void
+on_managed_true_done (GObject *src, GAsyncResult *res, gpointer user_data)
 {
     GError   *err = NULL;
-    GVariant *result;
+    GVariant *result = g_dbus_connection_call_finish (
+                          G_DBUS_CONNECTION (src), res, &err);
+    if (result) {
+        g_variant_unref (result);
+    } else if (err) {
+        g_warning ("nm-dbus async: device set Managed=true falló: %s", err->message);
+        g_error_free (err);
+        g_free (user_data);
+        return;
+    }
 
+    gchar *device_path = user_data;
+    g_dbus_connection_call (
+        G_DBUS_CONNECTION (src), NM_BUS_NAME, device_path, NM_DEVICE_IFACE,
+        "Connect", NULL, NULL,
+        G_DBUS_CALL_FLAGS_NONE, 10000, NULL,
+        on_async_done, "device Connect");
+    g_free (device_path);
+}
+
+void
+nm_set_device_enabled_async (GDBusConnection *conn, const gchar *device_path,
+                             gboolean enabled)
+{
     if (!enabled) {
         /* Apagar: marcar el dispositivo como no gestionado por NM */
-        result = g_dbus_connection_call_sync (
+        g_dbus_connection_call (
             conn, NM_BUS_NAME, device_path,
             "org.freedesktop.DBus.Properties", "Set",
             g_variant_new ("(ssv)", NM_DEVICE_IFACE, "Managed",
                            g_variant_new_boolean (FALSE)),
-            NULL, G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
-        if (!result) {
-            g_warning ("nm-dbus: device set Managed=false: %s", err->message);
-            g_error_free (err);
-        } else {
-            g_variant_unref (result);
-        }
+            NULL, G_DBUS_CALL_FLAGS_NONE, 5000, NULL,
+            on_async_done, "device set Managed=false");
     } else {
-        /* Encender: primero devolver la gestión a NM, luego conectar */
-        result = g_dbus_connection_call_sync (
+        /* Encender: primero Managed=true, luego Connect (en el callback). */
+        g_dbus_connection_call (
             conn, NM_BUS_NAME, device_path,
             "org.freedesktop.DBus.Properties", "Set",
             g_variant_new ("(ssv)", NM_DEVICE_IFACE, "Managed",
                            g_variant_new_boolean (TRUE)),
-            NULL, G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
-        if (!result) {
-            g_warning ("nm-dbus: device set Managed=true: %s", err->message);
-            g_error_free (err);
-        } else {
-            g_variant_unref (result);
-            result = g_dbus_connection_call_sync (
-                conn, NM_BUS_NAME, device_path, NM_DEVICE_IFACE,
-                "Connect", NULL, NULL,
-                G_DBUS_CALL_FLAGS_NONE, 10000, NULL, &err);
-            if (!result) {
-                g_warning ("nm-dbus: device Connect: %s", err->message);
-                g_error_free (err);
-            } else {
-                g_variant_unref (result);
-            }
-        }
+            NULL, G_DBUS_CALL_FLAGS_NONE, 5000, NULL,
+            on_managed_true_done, g_strdup (device_path));
     }
 }
 
@@ -630,7 +659,6 @@ nm_get_vpn_connections (GDBusConnection *conn)
     gsize        n, i;
     const gchar **paths;
 
-    /* Obtener active connections para saber cuáles están activas */
     GVariant *active_v = g_dbus_connection_call_sync (
             conn, NM_BUS_NAME, NM_OBJECT_PATH,
             "org.freedesktop.DBus.Properties", "Get",
@@ -661,7 +689,6 @@ nm_get_vpn_connections (GDBusConnection *conn)
         g_variant_unref (active_v);
     }
 
-    /* Listar todas las conexiones guardadas */
     result = g_dbus_connection_call_sync (
         conn, NM_BUS_NAME, NM_SETTINGS_PATH, NM_SETTINGS_IFACE,
         "ListConnections", NULL, G_VARIANT_TYPE ("(ao)"),
@@ -745,43 +772,39 @@ nm_vpn_list_free (GSList *list)
     g_slist_free (list);
 }
 
-gboolean
-nm_activate_vpn (GDBusConnection *conn, const gchar *conn_path)
-{
-    GVariant *result;
-    GError   *err = NULL;
+/* ---------- ACCIÓN ASYNC: activar VPN ---------- */
 
-    result = g_dbus_connection_call_sync (
+void
+nm_activate_vpn_async (GDBusConnection *conn, const gchar *conn_path)
+{
+    g_dbus_connection_call (
         conn, NM_BUS_NAME, NM_OBJECT_PATH, NM_IFACE,
         "ActivateConnection",
         g_variant_new ("(ooo)", conn_path, "/", "/"),
         G_VARIANT_TYPE ("(o)"),
-        G_DBUS_CALL_FLAGS_NONE, 10000, NULL, &err);
-
-    if (!result) {
-        g_warning ("nm-dbus: ActivateConnection VPN: %s", err->message);
-        g_error_free (err);
-        return FALSE;
-    }
-    g_variant_unref (result);
-    return TRUE;
+        G_DBUS_CALL_FLAGS_NONE, 10000, NULL,
+        on_async_done, "ActivateConnection VPN");
 }
 
-gboolean
-nm_deactivate_vpn (GDBusConnection *conn, const gchar *conn_path)
+/* ---------- ACCIÓN ASYNC: desactivar VPN ---------- */
+
+/* Para desactivar hay que primero buscar el active connection path
+ * que corresponde a este conn_path. Eso requiere una llamada sync rápida
+ * (la lista de active connections + filtrado), después la deactivate va async. */
+void
+nm_deactivate_vpn_async (GDBusConnection *conn, const gchar *conn_path)
 {
     GVariant    *active_v, *inner, *array;
     gboolean     found = FALSE;
     gsize        n, i;
 
-    /* Buscar el active connection path que corresponde a este conn_path */
     active_v = g_dbus_connection_call_sync (
             conn, NM_BUS_NAME, NM_OBJECT_PATH,
             "org.freedesktop.DBus.Properties", "Get",
             g_variant_new ("(ss)", NM_IFACE, "ActiveConnections"),
             G_VARIANT_TYPE ("(v)"),
             G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
-    if (!active_v) return FALSE;
+    if (!active_v) return;
 
     g_variant_get (active_v, "(v)", &inner);
     array = inner;
@@ -797,19 +820,13 @@ nm_deactivate_vpn (GDBusConnection *conn, const gchar *conn_path)
         if (cp_v) {
             const gchar *cp = g_variant_get_string (cp_v, NULL);
             if (g_strcmp0 (cp, conn_path) == 0) {
-                GError   *err    = NULL;
-                GVariant *result = g_dbus_connection_call_sync (
+                g_dbus_connection_call (
                     conn, NM_BUS_NAME, NM_OBJECT_PATH, NM_IFACE,
                     "DeactivateConnection",
                     g_variant_new ("(o)", active_path),
-                    NULL, G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
-                if (result) {
-                    g_variant_unref (result);
-                    found = TRUE;
-                } else {
-                    g_warning ("nm-dbus: DeactivateConnection VPN: %s", err->message);
-                    g_error_free (err);
-                }
+                    NULL, G_DBUS_CALL_FLAGS_NONE, 5000, NULL,
+                    on_async_done, "DeactivateConnection VPN");
+                found = TRUE;
             }
             g_variant_unref (cp_v);
         }
@@ -818,7 +835,6 @@ nm_deactivate_vpn (GDBusConnection *conn, const gchar *conn_path)
 
     g_variant_unref (inner);
     g_variant_unref (active_v);
-    return found;
 }
 
 /* ---------- estado VPN ---------- */
@@ -930,48 +946,65 @@ nm_subscribe_signals (GDBusConnection *conn,
                       NmSignalCallback callback,
                       gpointer         user_data)
 {
-    /* Reservamos espacio para N suscripciones + terminador 0.
-     * Ajustar el tamaño si se agregan más señales. */
-    guint      *ids = g_new0 (guint, 8);
+    /* Espacio para hasta N suscripciones + terminador 0.
+     * Reservamos 64 para soportar varios adaptadores y conexiones activas. */
+    guint      *ids = g_new0 (guint, 64);
     gint        n   = 0;
 
     SignalData *sd  = g_new0 (SignalData, 1);
     sd->callback  = callback;
     sd->user_data = user_data;
 
-    /* 1. WirelessEnabled cambia en el objeto raíz de NM */
+    /* 1. PropertiesChanged en el objeto raíz de NM (WirelessEnabled,
+     *    PrimaryConnection, ActiveConnections, etc.) */
     ids[n++] = g_dbus_connection_signal_subscribe (
         conn, NM_BUS_NAME, "org.freedesktop.DBus.Properties",
         "PropertiesChanged", NM_OBJECT_PATH, NM_IFACE,
         G_DBUS_SIGNAL_FLAGS_NONE, on_nm_signal, sd, NULL);
 
-    /* 2-3-4. Para cada adaptador Wi-Fi conocido: estado + APs */
-    GSList *devices = nm_get_wifi_devices (conn);
-    for (GSList *l = devices; l && n < 7; l = l->next) {
-        NmDevice *dev = l->data;
+    /* 2. PropertiesChanged en CUALQUIER dispositivo (interfaz Device).
+     *    Sin filtrar por object_path, así capturamos altas y bajas de
+     *    adaptadores (USB tethering, etc.) sin necesidad de re-suscribir. */
+    ids[n++] = g_dbus_connection_signal_subscribe (
+        conn, NM_BUS_NAME, "org.freedesktop.DBus.Properties",
+        "PropertiesChanged", NULL, NM_DEVICE_IFACE,
+        G_DBUS_SIGNAL_FLAGS_NONE, on_nm_signal, sd, NULL);
 
-        /* Estado del dispositivo (conectado/desconectado) */
-        ids[n++] = g_dbus_connection_signal_subscribe (
-            conn, NM_BUS_NAME, "org.freedesktop.DBus.Properties",
-            "PropertiesChanged", dev->object_path, NM_WIFI_IFACE,
-            G_DBUS_SIGNAL_FLAGS_NONE, on_nm_signal, sd, NULL);
+    /* 3. PropertiesChanged en CUALQUIER adaptador wireless (ActiveAccessPoint, etc.) */
+    ids[n++] = g_dbus_connection_signal_subscribe (
+        conn, NM_BUS_NAME, "org.freedesktop.DBus.Properties",
+        "PropertiesChanged", NULL, NM_WIFI_IFACE,
+        G_DBUS_SIGNAL_FLAGS_NONE, on_nm_signal, sd, NULL);
 
-        /* Apareció un AP nuevo */
-        ids[n++] = g_dbus_connection_signal_subscribe (
-            conn, NM_BUS_NAME, NM_WIFI_IFACE,
-            "AccessPointAdded", dev->object_path, NULL,
-            G_DBUS_SIGNAL_FLAGS_NONE, on_nm_signal, sd, NULL);
+    /* 4. AccessPointAdded en cualquier adaptador wireless */
+    ids[n++] = g_dbus_connection_signal_subscribe (
+        conn, NM_BUS_NAME, NM_WIFI_IFACE,
+        "AccessPointAdded", NULL, NULL,
+        G_DBUS_SIGNAL_FLAGS_NONE, on_nm_signal, sd, NULL);
 
-        /* Desapareció un AP */
-        ids[n++] = g_dbus_connection_signal_subscribe (
-            conn, NM_BUS_NAME, NM_WIFI_IFACE,
-            "AccessPointRemoved", dev->object_path, NULL,
-            G_DBUS_SIGNAL_FLAGS_NONE, on_nm_signal, sd, NULL);
-    }
-    nm_device_list_free (devices);
+    /* 5. AccessPointRemoved en cualquier adaptador wireless */
+    ids[n++] = g_dbus_connection_signal_subscribe (
+        conn, NM_BUS_NAME, NM_WIFI_IFACE,
+        "AccessPointRemoved", NULL, NULL,
+        G_DBUS_SIGNAL_FLAGS_NONE, on_nm_signal, sd, NULL);
 
-    /* Guardamos sd en el primer slot libre para poder liberarlo luego */
-    g_object_set_data_full (G_OBJECT (conn), "nm-signal-data", sd, g_free);
+    /* 6. DeviceAdded / DeviceRemoved en el objeto raíz */
+    ids[n++] = g_dbus_connection_signal_subscribe (
+        conn, NM_BUS_NAME, NM_IFACE,
+        "DeviceAdded", NM_OBJECT_PATH, NULL,
+        G_DBUS_SIGNAL_FLAGS_NONE, on_nm_signal, sd, NULL);
+
+    ids[n++] = g_dbus_connection_signal_subscribe (
+        conn, NM_BUS_NAME, NM_IFACE,
+        "DeviceRemoved", NM_OBJECT_PATH, NULL,
+        G_DBUS_SIGNAL_FLAGS_NONE, on_nm_signal, sd, NULL);
+
+    /* Guardamos sd para poder liberarlo luego.
+     * Cuidado: si hay dos llamadores (plugin y popup), el segundo pisa al primero.
+     * Por eso indexamos por puntero al ids para que sean independientes. */
+    gchar *key = g_strdup_printf ("nm-signal-data-%p", (void *) ids);
+    g_object_set_data_full (G_OBJECT (conn), key, sd, g_free);
+    g_free (key);
 
     return ids;
 }
@@ -982,44 +1015,25 @@ nm_unsubscribe_signals (GDBusConnection *conn, guint *ids)
     if (!ids) return;
     for (gint i = 0; ids[i] != 0; i++)
         g_dbus_connection_signal_unsubscribe (conn, ids[i]);
-    g_free (ids);
-}
 
-gboolean
-nm_wait_for_connected (GDBusConnection *conn, const gchar *device_path)
-{
-    for (gint i = 0; i < 16; i++) {
-        g_usleep (500000); /* 500ms */
-        GVariant *v = get_property (conn, device_path, NM_DEVICE_IFACE, "State");
-        if (!v) continue;
-        guint32 state = g_variant_get_uint32 (v);
-        g_variant_unref (v);
-        if (state == 100) return TRUE;  /* activated */
-        if (state == 120) return FALSE; /* failed */
-    }
-    return FALSE; /* timeout */
+    gchar *key = g_strdup_printf ("nm-signal-data-%p", (void *) ids);
+    g_object_set_data (G_OBJECT (conn), key, NULL);
+    g_free (key);
+
+    g_free (ids);
 }
 
 void
 nm_request_scan (GDBusConnection *conn, const gchar *device_path)
 {
-    GVariant *result;
-    GError   *err = NULL;
     GVariantBuilder options;
-
     g_variant_builder_init (&options, G_VARIANT_TYPE ("a{sv}"));
 
-    result = g_dbus_connection_call_sync (
+    g_dbus_connection_call (
         conn, NM_BUS_NAME, device_path, NM_WIFI_IFACE,
         "RequestScan",
         g_variant_new ("(a{sv})", &options),
         NULL,
-        G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
-
-    if (!result) {
-        g_warning ("nm-dbus: RequestScan en %s: %s", device_path, err->message);
-        g_error_free (err);
-        return;
-    }
-    g_variant_unref (result);
+        G_DBUS_CALL_FLAGS_NONE, 5000, NULL,
+        on_async_done, "RequestScan");
 }

@@ -113,3 +113,21 @@ msgstr "Geen"
 
 msgid "Password:"
 msgstr "Wachtwoord:"
+
+msgid "Disabled"
+msgstr "Uitgeschakeld"
+
+msgid "Enabled – not connected"
+msgstr "Ingeschakeld – niet verbonden"
+
+msgid "Disconnecting…"
+msgstr "Verbreken…"
+
+msgid "Connecting…"
+msgstr "Verbinden…"
+
+msgid "Connection failed"
+msgstr "Verbinding mislukt"
+
+msgid "Show separators"
+msgstr "Scheidingslijnen tonen"

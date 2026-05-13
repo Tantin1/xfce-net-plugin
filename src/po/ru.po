@@ -113,3 +113,21 @@ msgstr "Нет"
 
 msgid "Password:"
 msgstr "Пароль:"
+
+msgid "Disabled"
+msgstr "Отключено"
+
+msgid "Enabled – not connected"
+msgstr "Включено – не подключено"
+
+msgid "Disconnecting…"
+msgstr "Отключение…"
+
+msgid "Connecting…"
+msgstr "Подключение…"
+
+msgid "Connection failed"
+msgstr "Ошибка подключения"
+
+msgid "Show separators"
+msgstr "Показывать разделители"

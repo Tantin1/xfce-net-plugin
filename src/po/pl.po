@@ -113,3 +113,21 @@ msgstr "Brak"
 
 msgid "Password:"
 msgstr "Hasło:"
+
+msgid "Disabled"
+msgstr "Wyłączono"
+
+msgid "Enabled – not connected"
+msgstr "Włączono – niepodłączono"
+
+msgid "Disconnecting…"
+msgstr "Rozłączanie…"
+
+msgid "Connecting…"
+msgstr "Łączenie…"
+
+msgid "Connection failed"
+msgstr "Błąd połączenia"
+
+msgid "Show separators"
+msgstr "Pokaż separatory"

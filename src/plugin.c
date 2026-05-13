@@ -10,34 +10,31 @@
 #define DEFAULT_ICON_SIZE       16
 #define DEFAULT_POPUP_WIDTH     400
 #define DEFAULT_POPUP_HEIGHT    340
+#define DEFAULT_SHOW_SEPARATORS TRUE
 
 typedef struct {
     XfcePanelPlugin *plugin;
     GtkWidget       *button;
-    GtkWidget       *icon_box;   /* contenedor del ícono en el botón */
+    GtkWidget       *icon_box;
     GtkWidget       *stack;
     GtkWidget       *spinner;
     NetPopup        *popup;
     GDBusConnection *conn;
 
-    /* configuración */
     gboolean        square_button;
     gint            plugin_size;
     gboolean        use_panel_icon;
     gint            icon_size;
     gint            popup_width;
     gint            popup_height;
+    gboolean        show_separators;
 
-    /* CSS para tamaño del botón */
     GtkCssProvider *button_css;
 
-    /* IDs de suscripción a señales DBus */
     guint *signal_ids;
 
-    /* estado de conexión en progreso */
     gboolean        connecting;
 
-    /* último ícono mostrado (para reconstruir al cambiar tamaño) */
     gint     last_strength;
     gboolean last_secure;
     gboolean last_connected;
@@ -56,14 +53,12 @@ update_panel_icon (NetPlugin *np,
                    ? xfce_panel_plugin_get_icon_size (np->plugin)
                    : np->icon_size;
 
-    /* Guardar estado para poder reconstruir al cambiar tamaño */
     np->last_strength  = strength;
     np->last_secure    = secure;
     np->last_connected = connected;
     np->last_vpn       = vpn;
     np->last_wired     = wired;
 
-    /* Limpiar contenedor */
     GList *kids = gtk_container_get_children (GTK_CONTAINER (np->icon_box));
     g_list_foreach (kids, (GFunc) gtk_widget_destroy, NULL);
     g_list_free (kids);
@@ -99,7 +94,6 @@ update_panel_icon (NetPlugin *np,
             gtk_image_set_pixel_size (GTK_IMAGE (new_icon), icon_px);
         }
     } else {
-        /* Para el panel: secure solo si hay VPN */
         new_icon = make_signal_icon (strength, vpn, icon_px);
     }
 
@@ -114,7 +108,6 @@ apply_config (NetPlugin *np)
 {
     XfcePanelPlugin *plugin = np->plugin;
 
-    /* ---- tamaño del botón via CSS ---- */
     {
         gchar *css;
         gint   ps = xfce_panel_plugin_get_size (plugin);
@@ -146,7 +139,6 @@ apply_config (NetPlugin *np)
         g_free (css);
     }
 
-    /* Reconstruir ícono con el nuevo tamaño */
     update_panel_icon (np,
                        np->last_connected, np->last_strength,
                        np->last_secure, np->last_vpn, np->last_wired);
@@ -175,6 +167,7 @@ load_config (NetPlugin *np)
     np->icon_size      = DEFAULT_ICON_SIZE;
     np->popup_width    = DEFAULT_POPUP_WIDTH;
     np->popup_height   = DEFAULT_POPUP_HEIGHT;
+    np->show_separators = DEFAULT_SHOW_SEPARATORS;
 
     if (!g_key_file_load_from_file (kf, path, G_KEY_FILE_NONE, &err)) {
         g_clear_error (&err);
@@ -186,7 +179,10 @@ load_config (NetPlugin *np)
     np->use_panel_icon = g_key_file_get_boolean  (kf, "appearance", "use_panel_icon", NULL);
     np->icon_size      = g_key_file_get_integer  (kf, "appearance", "icon_size",      NULL);
     np->popup_width    = g_key_file_get_integer  (kf, "appearance", "popup_width",    NULL);
-    np->popup_height   = g_key_file_get_integer  (kf, "appearance", "popup_height",   NULL);
+    np->popup_height    = g_key_file_get_integer  (kf, "appearance", "popup_height",    NULL);
+    np->show_separators = g_key_file_get_boolean  (kf, "appearance", "show_separators", NULL);
+    if (!g_key_file_has_key (kf, "appearance", "show_separators", NULL))
+        np->show_separators = DEFAULT_SHOW_SEPARATORS;
 
     if (np->plugin_size  == 0) np->plugin_size  = DEFAULT_PLUGIN_SIZE;
     if (np->icon_size    == 0) np->icon_size    = DEFAULT_ICON_SIZE;
@@ -213,7 +209,8 @@ save_config (NetPlugin *np)
     g_key_file_set_boolean (kf, "appearance", "use_panel_icon", np->use_panel_icon);
     g_key_file_set_integer  (kf, "appearance", "icon_size",      np->icon_size);
     g_key_file_set_integer  (kf, "appearance", "popup_width",    np->popup_width);
-    g_key_file_set_integer  (kf, "appearance", "popup_height",   np->popup_height);
+    g_key_file_set_integer  (kf, "appearance", "popup_height",    np->popup_height);
+    g_key_file_set_boolean  (kf, "appearance", "show_separators", np->show_separators);
 
     if (!g_key_file_save_to_file (kf, path, &err)) {
         g_warning ("xfce-net-plugin: no se pudo guardar config: %s", err->message);
@@ -235,6 +232,7 @@ typedef struct {
     GtkWidget   *icon_spin;
     GtkWidget   *popup_width_spin;
     GtkWidget   *popup_height_spin;
+    GtkWidget   *separators_check;
 } PropsDialog;
 
 static void
@@ -288,6 +286,15 @@ on_popup_height_changed (GtkSpinButton *spin, PropsDialog *pd)
 }
 
 static void
+on_separators_toggled (GtkToggleButton *btn, PropsDialog *pd)
+{
+    pd->np->show_separators = gtk_toggle_button_get_active (btn);
+    save_config (pd->np);
+    /* Forzar reconstrucción del popup la próxima vez que se abra */
+    pd->np->popup->ui_built = FALSE;
+}
+
+static void
 on_props_dialog_destroy (GtkWidget *win, PropsDialog *pd)
 {
     (void) win;
@@ -313,7 +320,6 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
     GtkWidget *content = gtk_dialog_get_content_area (GTK_DIALOG (dialog));
     gtk_container_set_border_width (GTK_CONTAINER (content), 12);
 
-    /* ---- frame Apariencia ---- */
     GtkWidget *frame = gtk_frame_new (_("Appearance"));
     GtkWidget *grid  = gtk_grid_new ();
     gtk_grid_set_row_spacing    (GTK_GRID (grid), 6);
@@ -323,14 +329,12 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
 
     gint row = 0;
 
-    /* botón cuadrado */
     pd->square_check = gtk_check_button_new_with_label (_("Square button"));
     gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (pd->square_check),
                                   np->square_button);
     gtk_grid_attach (GTK_GRID (grid), pd->square_check, 0, row, 2, 1);
     row++;
 
-    /* tamaño del plugin */
     GtkWidget *plugin_size_label = gtk_label_new (_("Plugin size:"));
     gtk_label_set_xalign (GTK_LABEL (plugin_size_label), 0.0);
     gtk_widget_set_margin_start (plugin_size_label, 12);
@@ -341,21 +345,18 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
     gtk_grid_attach (GTK_GRID (grid), pd->plugin_spin,   1, row, 1, 1);
     row++;
 
-    /* separador */
     GtkWidget *sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
     gtk_widget_set_margin_top    (sep, 4);
     gtk_widget_set_margin_bottom (sep, 4);
     gtk_grid_attach (GTK_GRID (grid), sep, 0, row, 2, 1);
     row++;
 
-    /* usar tamaño del panel */
     pd->panel_icon_check = gtk_check_button_new_with_label (_("Use panel size"));
     gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (pd->panel_icon_check),
                                   np->use_panel_icon);
     gtk_grid_attach (GTK_GRID (grid), pd->panel_icon_check, 0, row, 2, 1);
     row++;
 
-    /* tamaño personalizado del ícono */
     GtkWidget *icon_size_label = gtk_label_new (_("Icon size:"));
     gtk_label_set_xalign (GTK_LABEL (icon_size_label), 0.0);
     gtk_widget_set_margin_start (icon_size_label, 12);
@@ -366,14 +367,12 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
     gtk_grid_attach (GTK_GRID (grid), pd->icon_spin,   1, row, 1, 1);
     row++;
 
-    /* separador */
     GtkWidget *sep2 = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
     gtk_widget_set_margin_top    (sep2, 4);
     gtk_widget_set_margin_bottom (sep2, 4);
     gtk_grid_attach (GTK_GRID (grid), sep2, 0, row, 2, 1);
     row++;
 
-    /* ancho del popup */
     GtkWidget *popup_width_label = gtk_label_new (_("Popup width:"));
     gtk_label_set_xalign (GTK_LABEL (popup_width_label), 0.0);
     gtk_widget_set_margin_start (popup_width_label, 12);
@@ -383,7 +382,6 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
     gtk_grid_attach (GTK_GRID (grid), pd->popup_width_spin, 1, row, 1, 1);
     row++;
 
-    /* alto del popup */
     GtkWidget *popup_height_label = gtk_label_new (_("Popup height:"));
     gtk_label_set_xalign (GTK_LABEL (popup_height_label), 0.0);
     gtk_widget_set_margin_start (popup_height_label, 12);
@@ -391,10 +389,21 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
     gtk_spin_button_set_value (GTK_SPIN_BUTTON (pd->popup_height_spin), np->popup_height);
     gtk_grid_attach (GTK_GRID (grid), popup_height_label,    0, row, 1, 1);
     gtk_grid_attach (GTK_GRID (grid), pd->popup_height_spin, 1, row, 1, 1);
+    row++;
+
+    GtkWidget *sep3 = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
+    gtk_widget_set_margin_top    (sep3, 4);
+    gtk_widget_set_margin_bottom (sep3, 4);
+    gtk_grid_attach (GTK_GRID (grid), sep3, 0, row, 2, 1);
+    row++;
+
+    pd->separators_check = gtk_check_button_new_with_label (_("Show separators"));
+    gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (pd->separators_check),
+                                  np->show_separators);
+    gtk_grid_attach (GTK_GRID (grid), pd->separators_check, 0, row, 2, 1);
 
     gtk_box_pack_start (GTK_BOX (content), frame, FALSE, FALSE, 0);
 
-    /* señales */
     g_signal_connect (pd->square_check,     "toggled",
                       G_CALLBACK (on_square_toggled),      pd);
     g_signal_connect (pd->plugin_spin,      "value-changed",
@@ -407,6 +416,8 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
                       G_CALLBACK (on_popup_width_changed),  pd);
     g_signal_connect (pd->popup_height_spin, "value-changed",
                       G_CALLBACK (on_popup_height_changed), pd);
+    g_signal_connect (pd->separators_check, "toggled",
+                      G_CALLBACK (on_separators_toggled), pd);
     g_signal_connect (dialog, "destroy",
                       G_CALLBACK (on_props_dialog_destroy), pd);
 
@@ -510,14 +521,9 @@ on_nm_changed (gpointer user_data)
         g_string_free (tip, TRUE);
     }
 
-    /* Si el popup está abierto y no hay expand activo, reconstruirlo */
-    if (gtk_widget_get_visible (np->popup->window) &&
-        np->popup->current_expand_box == NULL) {
-        GSList *devs = nm_get_wifi_devices (np->conn);
-        popup_show (np->popup, np->plugin, np->button, devs, np->conn,
-                    np->popup_width, np->popup_height);
-        nm_device_list_free (devs);
-    }
+    /* IMPORTANTE: ya no reconstruimos el popup desde acá. El popup tiene su
+     * propia suscripción a señales DBus mientras está abierto. Esta función
+     * solo se ocupa del ícono y tooltip del botón del panel. */
 }
 
 /* ---------- callbacks del panel ---------- */
@@ -527,10 +533,9 @@ on_button_toggled (GtkToggleButton *btn, NetPlugin *np)
 {
     (void) btn;
     if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (np->button))) {
-        GSList *devices = nm_get_wifi_devices (np->conn);
-        popup_show (np->popup, np->plugin, np->button, devices, np->conn,
+        np->popup->show_separators = np->show_separators;
+        popup_show (np->popup, np->plugin, np->button, np->conn,
                     np->popup_width, np->popup_height);
-        nm_device_list_free (devices);
     } else {
         popup_hide (np->popup);
     }
@@ -563,7 +568,6 @@ net_plugin_new (XfcePanelPlugin *plugin)
     np->plugin    = plugin;
     np->conn      = nm_dbus_connect ();
 
-    /* Valores iniciales del último estado */
     np->last_strength  = 0;
     np->last_secure    = FALSE;
     np->last_connected = FALSE;
@@ -578,10 +582,8 @@ net_plugin_new (XfcePanelPlugin *plugin)
     xfce_panel_plugin_set_shrink (plugin, TRUE);
     xfce_panel_plugin_set_small  (plugin, TRUE);
 
-    /* Contenedor del ícono — se reconstruye en update_panel_icon */
     np->icon_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 
-    /* Ícono inicial: desconectado */
     GtkWidget *init_icon = gtk_image_new_from_icon_name (
                                "network-wireless-disconnected-symbolic",
                                GTK_ICON_SIZE_BUTTON);
@@ -607,10 +609,35 @@ net_plugin_new (XfcePanelPlugin *plugin)
     g_signal_connect (np->popup->window, "hide",
                       G_CALLBACK (on_popup_hidden), np);
 
+    on_nm_changed (np);
+
     xfce_panel_plugin_add_action_widget (plugin, np->button);
     gtk_container_add (GTK_CONTAINER (plugin), np->button);
 
     return np;
+}
+
+static void
+net_plugin_about (XfcePanelPlugin *plugin, NetPlugin *np)
+{
+    (void) plugin;
+    (void) np;
+    const gchar *authors[] = { "Tantin", NULL };
+    GdkPixbuf *logo = gtk_icon_theme_load_icon (
+                          gtk_icon_theme_get_default (),
+                          "network-wireless-symbolic",
+                          48, 0, NULL);
+    gtk_show_about_dialog (NULL,
+        "program-name", "xfce-net-plugin",
+        "version",      "1.0.1-dev",
+        "comments",     _("Network manager plugin for the XFCE panel"),
+        "authors",      authors,
+        "license-type", GTK_LICENSE_GPL_2_0,
+        "website",      "https://github.com/Tantin1/xfce-net-plugin",
+        "logo",         logo,
+        NULL);
+    if (logo)
+        g_object_unref (logo);
 }
 
 static void
@@ -636,6 +663,9 @@ net_plugin_construct (XfcePanelPlugin *plugin)
 
     NetPlugin *np = net_plugin_new (plugin);
     xfce_panel_plugin_menu_show_configure (plugin);
+    xfce_panel_plugin_menu_show_about (plugin);
+    g_signal_connect (plugin, "about",
+                      G_CALLBACK (net_plugin_about),     np);
     g_signal_connect (plugin, "free-data",
                       G_CALLBACK (net_plugin_free),     np);
     g_signal_connect (plugin, "configure-plugin",
