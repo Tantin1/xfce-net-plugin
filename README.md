@@ -50,12 +50,23 @@ sudo apt install git cmake pkg-config libgtk-3-dev libxfce4panel-2.0-dev gettext
 
 **Build & install (all distros)**
 
+Using CMake:
 ```bash
 git clone https://github.com/Tantin1/xfce-net-plugin.git
 cd xfce-net-plugin
 mkdir build && cmake -S src -B build
 cmake --build build
 sudo cmake --install build
+xfce4-panel -r
+```
+
+Using Meson:
+```bash
+git clone https://github.com/Tantin1/xfce-net-plugin.git
+cd xfce-net-plugin
+meson setup build src
+meson compile -C build
+sudo meson install -C build
 xfce4-panel -r
 ```
 
@@ -126,12 +137,23 @@ sudo apt install git cmake pkg-config libgtk-3-dev libxfce4panel-2.0-dev gettext
 
 **Compilación e instalación (todas las distros)**
 
+Con CMake:
 ```bash
 git clone https://github.com/Tantin1/xfce-net-plugin.git
 cd xfce-net-plugin
 mkdir build && cmake -S src -B build
 cmake --build build
 sudo cmake --install build
+xfce4-panel -r
+```
+
+Con Meson:
+```bash
+git clone https://github.com/Tantin1/xfce-net-plugin.git
+cd xfce-net-plugin
+meson setup build src
+meson compile -C build
+sudo meson install -C build
 xfce4-panel -r
 ```
 
