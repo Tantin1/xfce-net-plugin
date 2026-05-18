@@ -15,6 +15,12 @@
 /* Cooldown del botón Actualizar (ms) entre escaneos. */
 #define SCAN_COOLDOWN_MS 5000
 
+/* Edad máxima (en segundos) de un intento "pendiente" para que cuente como
+ * candidato a marcar fallo al reabrir el popup. Si pasó más tiempo que esto,
+ * descartamos el intento sin marcar — asumimos que ya pasó suficiente y
+ * cualquier marca tardía sería confusa. */
+#define PENDING_ATTEMPT_MAX_AGE_SECS 60
+
 /* ================================================================
  * Operaciones en curso
  *
@@ -35,8 +41,10 @@ typedef struct {
     gchar     *device_path;
     GtkWidget *expand_box;    /* Expand a cerrar al confirmar (puede ser NULL si la fila se destruye antes). */
     GtkWidget *action_btn;    /* Botón a restaurar si falla. */
+    gchar     *action_label;  /* Texto original del action_btn a restaurar en caso de fallo. */
     GtkWidget *pass_entry;    /* Entry de contraseña, si aplica (para mostrar error inline). */
     GtkWidget *error_label;   /* Label de error reusable, si se crea. */
+    GSList    *extra_disabled;/* Lista de GtkWidget* extra que se deshabilitaron y hay que rehabilitar al fallar. */
     guint      timeout_id;    /* Fuente de timeout de 20s. */
     NetPopup  *popup;
 } OpInProgress;
@@ -57,6 +65,7 @@ static GtkWidget *make_ap_row (NmAccessPoint *ap, NetPopup *popup,
 static void on_forget_clicked  (GtkWidget *btn, gpointer rd_ptr);
 static void on_connect_clicked (GtkWidget *btn, gpointer rd_ptr);
 static void on_nm_signal_popup (gpointer user_data);
+static void on_eye_clicked     (GtkWidget *btn, GtkEntry *entry);
 
 /* ---------- posicionamiento ---------- */
 
@@ -190,6 +199,8 @@ op_free (gpointer p)
     }
     g_free (op->ssid);
     g_free (op->device_path);
+    g_free (op->action_label);
+    g_slist_free (op->extra_disabled);
     g_free (op);
 }
 
@@ -199,11 +210,19 @@ op_show_error (OpInProgress *op)
 {
     if (op->action_btn && GTK_IS_BUTTON (op->action_btn)) {
         gtk_widget_set_sensitive (op->action_btn, TRUE);
-        gtk_button_set_label (GTK_BUTTON (op->action_btn),
-                              op->kind == OP_CONNECT ? _("Connect") : _("Disconnect"));
+        const gchar *label = op->action_label ? op->action_label
+                            : (op->kind == OP_CONNECT ? _("Connect") : _("Disconnect"));
+        gtk_button_set_label (GTK_BUTTON (op->action_btn), label);
     }
     if (op->pass_entry && GTK_IS_ENTRY (op->pass_entry))
         gtk_widget_set_sensitive (op->pass_entry, TRUE);
+    /* Rehabilitar widgets extras (botones Probar otra / Volver / Olvidar
+     * deshabilitados durante la conexión). */
+    for (GSList *l = op->extra_disabled; l; l = l->next) {
+        GtkWidget *w = l->data;
+        if (w && GTK_IS_WIDGET (w))
+            gtk_widget_set_sensitive (w, TRUE);
+    }
     if (op->kind == OP_CONNECT && op->expand_box && GTK_IS_WIDGET (op->expand_box)) {
         GtkWidget *err_label = g_object_get_data (G_OBJECT (op->expand_box), "error-label");
         if (!err_label) {
@@ -223,16 +242,63 @@ op_show_error (OpInProgress *op)
     }
 }
 
+/* Recorre las filas reconstruidas y reabre el expand de la fila cuyo SSID
+ * coincide con failed_ssid. Se llama después de update_devices_section para
+ * que, tras un fallo de conexión, el expand quede abierto en estado A sin
+ * que el usuario tenga que volver a clickear la fila. */
+static void reopen_expand_for_ssid (NetPopup *popup, const gchar *ssid, const gchar *device_path);
 static gboolean
 op_timeout_cb (gpointer user_data)
 {
     OpInProgress *op = user_data;
     op->timeout_id = 0;
+    /* Apagar spinner: operación falló. */
+    if (op->kind == OP_CONNECT && op->popup && op->popup->plugin_ref)
+        net_plugin_set_connecting (op->popup->plugin_ref, FALSE);
     op_show_error (op);
-    /* Si era CONNECT y nunca se conectó, borrar el perfil que se acaba de guardar. */
-    if (op->kind == OP_CONNECT && op->ssid)
-        nm_forget_connection (op->popup->conn, op->ssid);
+    /* Paso 1: ya NO borramos el perfil automáticamente. Si la clave estaba mal,
+     * el perfil queda guardado con clave incorrecta — el usuario decide qué hacer
+     * (reintentar con la clave guardada o clickear "Olvidar" manualmente).
+     * Esto evita perder el perfil cuando el driver miente sobre la causa real
+     * del fallo (típico en módems USB con bug de roaming entre 2.4G y 5G). */
+    /* Paso 2: registrar el SSID como "fallido" para que el próximo expand
+     * de esta red guardada muestre campo "Reescribir contraseña". */
+    NetPopup *popup_ref = op->popup;
+    gchar    *failed_ssid = NULL;
+    if (op->kind == OP_CONNECT && op->ssid) {
+        g_hash_table_replace (op->popup->failed_ssids,
+                              g_strdup (op->ssid), GINT_TO_POINTER (1));
+        /* Ya procesamos visualmente el fallo, no es "pending". */
+        {
+            gchar *attempt_key = g_strdup_printf ("%s|%s", op->ssid, op->device_path);
+            g_hash_table_remove (op->popup->pending_attempts, attempt_key);
+            g_free (attempt_key);
+        }
+        failed_ssid = g_strdup (op->ssid);
+    }
+    /* Cerrar el expand actual (si quedó abierto) antes de reconstruir, así
+     * la regla 1A no bloquea el refresh. */
+    if (failed_ssid && popup_ref->current_expand_box) {
+        gtk_widget_hide (popup_ref->current_expand_box);
+        popup_ref->current_expand_box = NULL;
+    }
+    gchar *failed_dev = (op->kind == OP_CONNECT && op->device_path)
+                        ? g_strdup (op->device_path) : NULL;
     g_hash_table_remove (op->popup->ops_in_progress, op->device_path);
+    /* Reconstruir secciones para que esta red, ahora "guardada con fallo",
+     * tenga el expand con interfaz A/B en lugar de la interfaz vieja.
+     * Después reabrir el expand de esa misma fila para que el usuario vea
+     * el estado A directamente, sin tener que reclickear la red. */
+    if (failed_ssid) {
+        if (popup_ref->current_expand_box) {
+            gtk_widget_hide (popup_ref->current_expand_box);
+            popup_ref->current_expand_box = NULL;
+        }
+        update_devices_section (popup_ref);
+        reopen_expand_for_ssid (popup_ref, failed_ssid, failed_dev);
+        g_free (failed_dev);
+        g_free (failed_ssid);
+    }
     return G_SOURCE_REMOVE;
 }
 
@@ -277,6 +343,99 @@ device_is_disconnected (GDBusConnection *conn, const gchar *device_path)
     return (state <= 30);
 }
 
+/* ---------- Intentos pendientes (popup cerrado durante conexión) ---------- */
+
+/* Devuelve TRUE si `ssid` está actualmente conectado en algún adapter Wi-Fi.
+ * Recorre todos los devices Wi-Fi y mira sus access points buscando uno
+ * marcado como activo cuya ssid coincida. */
+static gboolean
+is_ssid_connected_anywhere (GDBusConnection *conn, const gchar *ssid)
+{
+    gboolean  found = FALSE;
+    GSList   *devs  = nm_get_wifi_devices (conn);
+    for (GSList *l = devs; l && !found; l = l->next) {
+        NmDevice *dev = l->data;
+        GSList   *aps = nm_get_access_points (conn, dev->object_path);
+        for (GSList *a = aps; a; a = a->next) {
+            NmAccessPoint *ap = a->data;
+            if (ap->active && g_strcmp0 (ap->ssid, ssid) == 0) {
+                found = TRUE;
+                break;
+            }
+        }
+        nm_ap_list_free (aps);
+    }
+    nm_device_list_free (devs);
+    return found;
+}
+
+/* Procesa la tabla de intentos pendientes. Para cada SSID:
+ *   - Si está conectada en algún adapter → descartar (todo bien).
+ *   - Si no está conectada y el intento es reciente → marcar como fallida.
+ *   - Si no está conectada y el intento es viejo (>60s) → descartar igual.
+ * Vacía la tabla al final. */
+static void
+process_pending_attempts (NetPopup *popup)
+{
+    if (!popup->pending_attempts) return;
+    if (g_hash_table_size (popup->pending_attempts) == 0) return;
+
+    gint64  now = g_get_monotonic_time ();  /* microsegundos */
+    GSList *to_mark_failed = NULL;
+
+    GHashTableIter iter;
+    gpointer       key, value;
+    g_hash_table_iter_init (&iter, popup->pending_attempts);
+    while (g_hash_table_iter_next (&iter, &key, &value)) {
+        const gchar *ssid = key;
+        gint64      *ts   = value;
+        gint64       age_secs = (now - *ts) / G_USEC_PER_SEC;
+
+        if (age_secs > PENDING_ATTEMPT_MAX_AGE_SECS) {
+            to_mark_failed = g_slist_prepend (to_mark_failed, g_strdup (ssid));
+            continue;
+        }
+
+        if (age_secs * 1000 < OP_TIMEOUT_MS)
+            continue;  /* todavía dentro del tiempo de espera, no declarar fallo */
+
+        /* La clave es "ssid|device_path". Separar para verificar el adaptador correcto. */
+        gchar **parts = g_strsplit ((const gchar *) key, "|", 2);
+        const gchar *attempt_ssid = parts[0];
+        const gchar *attempt_dev  = parts[1];
+        gboolean connected = FALSE;
+        if (attempt_dev) {
+            connected = device_is_activated (popup->conn, attempt_dev);
+        } else {
+            connected = is_ssid_connected_anywhere (popup->conn, attempt_ssid);
+        }
+        if (!connected)
+            to_mark_failed = g_slist_prepend (to_mark_failed, g_strdup (attempt_ssid));
+        g_strfreev (parts);
+    }
+
+    for (GSList *l = to_mark_failed; l; l = l->next) {
+        g_hash_table_replace (popup->failed_ssids,
+                              g_strdup ((const gchar *) l->data),
+                              GINT_TO_POINTER (1));
+    }
+    g_slist_free_full (to_mark_failed, g_free);
+
+    /* Eliminar solo los SSIDs cuya ventana de 20s ya expiró. Los más recientes
+     * se conservan para que make_ap_row pueda forzar "no conectada" durante
+     * ese período (NM puede mentir sobre el estado activo hasta que el AP
+     * rechace la auth). */
+    GHashTableIter iter2;
+    gpointer       key2, value2;
+    g_hash_table_iter_init (&iter2, popup->pending_attempts);
+    while (g_hash_table_iter_next (&iter2, &key2, &value2)) {
+        gint64 *ts = value2;
+        gint64  age_ms = (now - *ts) / 1000;
+        if (age_ms >= (gint64) PENDING_ATTEMPT_MAX_AGE_SECS * G_USEC_PER_SEC / 1000)
+            g_hash_table_iter_remove (&iter2);
+    }
+}
+
 /* Revisa todas las operaciones en curso y resuelve las que ya se completaron. */
 static void
 check_ops_progress (NetPopup *popup)
@@ -310,11 +469,22 @@ check_ops_progress (NetPopup *popup)
                 if (active_ssid && g_strcmp0 (active_ssid, op->ssid) == 0) {
                     /* Confirmado: marcamos para eliminar. */
                     to_remove = g_slist_append (to_remove, g_strdup (device_path));
+                    /* Limpiar marca de fallo: la red conectó OK. */
+                    g_hash_table_remove (popup->failed_ssids, op->ssid);
+                    /* Limpiar intento pendiente: ya resuelto en este ciclo. */
+                    {
+                        gchar *attempt_key = g_strdup_printf ("%s|%s", op->ssid, op->device_path);
+                        g_hash_table_remove (popup->pending_attempts, attempt_key);
+                        g_free (attempt_key);
+                    }
                     if (op->expand_box && GTK_IS_WIDGET (op->expand_box)) {
                         gtk_widget_hide (op->expand_box);
                         if (popup->current_expand_box == op->expand_box)
                             popup->current_expand_box = NULL;
                     }
+                    /* Apagar spinner: conexión confirmada. */
+                    if (popup->plugin_ref)
+                        net_plugin_set_connecting (popup->plugin_ref, FALSE);
                 }
                 g_free (active_ssid);
             }
@@ -452,7 +622,7 @@ on_refresh_clicked (GtkWidget *btn, NetPopup *popup)
 typedef struct {
     NetPopup        *popup;
     GtkWidget       *expand_box;
-    GtkWidget       *action_btn;     /* Conectar / Desconectar */
+    GtkWidget       *action_btn;     /* Conectar / Desconectar / Reintentar con la contraseña guardada */
     gchar           *ssid;
     gchar           *ap_path;
     gboolean         secure;
@@ -461,7 +631,58 @@ typedef struct {
     gchar           *device_path;
     GtkWidget       *pass_entry;
     GtkWidget       *autoconnect_check;
+
+    /* Solo presentes en expand de red guardada con último intento fallido. */
+    GtkWidget       *state_a_box;    /* Contenedor de botones del estado A. */
+    GtkWidget       *state_b_box;    /* Contenedor del entry + botones del estado B. */
+    GtkWidget       *retry_btn;      /* Estado A: "Reintentar con la contraseña guardada" */
+    GtkWidget       *try_other_btn;  /* Estado A: "Probar otra contraseña" */
+    GtkWidget       *back_btn;       /* Estado B: "Volver" */
+    GtkWidget       *connect_btn_b;  /* Estado B: "Conectar" */
+    GtkWidget       *forget_btn;     /* Botón "Olvidar" (solo en estado A para red con fallo). */
 } RowData;
+
+static void
+reopen_expand_for_ssid (NetPopup *popup, const gchar *ssid, const gchar *device_path)
+{
+    if (!popup || !ssid) return;
+
+    GList *sections = gtk_container_get_children (GTK_CONTAINER (popup->content_box));
+    for (GList *s = sections; s; s = s->next) {
+        if (s->data == popup->vpn_section) continue;
+        if (!GTK_IS_CONTAINER (s->data))    continue;
+
+        GList *rows = gtk_container_get_children (GTK_CONTAINER (s->data));
+        for (GList *r = rows; r; r = r->next) {
+            if (!GTK_IS_EVENT_BOX (r->data)) continue;
+            const gchar *row_ssid = g_object_get_data (G_OBJECT (r->data), "ssid");
+            if (!row_ssid || g_strcmp0 (row_ssid, ssid) != 0) continue;
+            const gchar *row_dev = g_object_get_data (G_OBJECT (r->data), "device-path");
+            if (device_path && (!row_dev || g_strcmp0 (row_dev, device_path) != 0)) continue;
+
+            GList *inner = gtk_container_get_children (GTK_CONTAINER (r->data));
+            if (inner && inner->data) {
+                RowData *rd = g_object_get_data (G_OBJECT (inner->data), "row-data");
+                if (rd && rd->expand_box) {
+                    gtk_widget_set_no_show_all (rd->expand_box, FALSE);
+                    gtk_widget_show_all (rd->expand_box);
+                    gtk_widget_set_no_show_all (rd->expand_box, TRUE);
+                    if (rd->state_a_box && rd->state_b_box) {
+                        gtk_widget_show (rd->state_a_box);
+                        gtk_widget_hide (rd->state_b_box);
+                    }
+                    popup->current_expand_box = rd->expand_box;
+                }
+            }
+            g_list_free (inner);
+            g_list_free (rows);
+            goto done;
+        }
+        g_list_free (rows);
+    }
+done:
+    g_list_free (sections);
+}
 
 static void
 row_data_free (RowData *rd)
@@ -487,6 +708,15 @@ on_row_clicked (GtkWidget *event_box, GdkEventButton *event, gpointer rd_ptr)
     }
 
     if (!ya_abierto) {
+        /* Si el expand tiene estados A/B y estamos abriendo desde cero,
+         * asegurar que el estado visible es A (regla: cerrar sin accionar
+         * vuelve al primer estado). */
+        if (rd->state_a_box && rd->state_b_box) {
+            gtk_widget_show (rd->state_a_box);
+            gtk_widget_hide (rd->state_b_box);
+            if (rd->pass_entry)
+                gtk_entry_set_text (GTK_ENTRY (rd->pass_entry), "");
+        }
         gtk_widget_show (rd->expand_box);
         rd->popup->current_expand_box = rd->expand_box;
     }
@@ -524,6 +754,14 @@ on_forget_response (GtkDialog *dialog, gint response, gpointer rd_ptr)
     if (response != GTK_RESPONSE_YES)
         return;
     nm_forget_connection (rd->popup->conn, rd->ssid);
+    /* Limpiar marca de fallo: la red ya no está guardada. */
+    g_hash_table_remove (rd->popup->failed_ssids, rd->ssid);
+    /* Limpiar intento pendiente: la red fue olvidada explícitamente. */
+    {
+        gchar *attempt_key = g_strdup_printf ("%s|%s", rd->ssid, rd->device_path);
+        g_hash_table_remove (rd->popup->pending_attempts, attempt_key);
+        g_free (attempt_key);
+    }
 
     /* Cerrar el expand para que update_devices_section pueda reconstruir las
      * filas (regla 1A bloquea la reconstrucción mientras hay expand abierto).
@@ -577,11 +815,43 @@ do_connect (RowData *rd)
     if (prev_err)
         gtk_widget_hide (prev_err);
 
+    /* Decidir cuál es el botón "principal" según el estado visible del expand.
+     * Si estamos en estado A (state_a_box visible), el botón principal es
+     * "Reintentar con la contraseña guardada"; si estamos en estado B (o en
+     * el expand simple sin fallo), es el "Conectar" normal. */
+    GtkWidget   *primary_btn  = rd->action_btn;
+    const gchar *primary_text = NULL;
+    if (rd->state_a_box && gtk_widget_get_visible (rd->state_a_box)) {
+        primary_btn  = rd->retry_btn;
+        primary_text = _("Retry with saved password");
+    } else if (rd->connect_btn_b && rd->state_b_box &&
+               gtk_widget_get_visible (rd->state_b_box)) {
+        primary_btn  = rd->connect_btn_b;
+        primary_text = _("Connect");
+    } else {
+        primary_text = _("Connect");
+    }
+
     /* UI inmediata: botón a "Conectando…", deshabilitado. Entry también. */
-    gtk_widget_set_sensitive (rd->action_btn, FALSE);
-    gtk_button_set_label (GTK_BUTTON (rd->action_btn), _("Connecting…"));
+    gtk_widget_set_sensitive (primary_btn, FALSE);
+    gtk_button_set_label (GTK_BUTTON (primary_btn), _("Connecting…"));
     if (rd->pass_entry)
         gtk_widget_set_sensitive (rd->pass_entry, FALSE);
+
+    /* Deshabilitar los otros botones del expand para evitar acciones cruzadas. */
+    GSList *extras = NULL;
+    if (rd->try_other_btn && gtk_widget_get_sensitive (rd->try_other_btn)) {
+        gtk_widget_set_sensitive (rd->try_other_btn, FALSE);
+        extras = g_slist_prepend (extras, rd->try_other_btn);
+    }
+    if (rd->back_btn && gtk_widget_get_sensitive (rd->back_btn)) {
+        gtk_widget_set_sensitive (rd->back_btn, FALSE);
+        extras = g_slist_prepend (extras, rd->back_btn);
+    }
+    if (rd->forget_btn && gtk_widget_get_sensitive (rd->forget_btn)) {
+        gtk_widget_set_sensitive (rd->forget_btn, FALSE);
+        extras = g_slist_prepend (extras, rd->forget_btn);
+    }
 
     /* Registrar operación en curso. */
     OpInProgress *op = g_new0 (OpInProgress, 1);
@@ -589,19 +859,44 @@ do_connect (RowData *rd)
     op->ssid        = g_strdup (rd->ssid);
     op->device_path = g_strdup (rd->device_path);
     op->expand_box  = rd->expand_box;
-    op->action_btn  = rd->action_btn;
+    op->action_btn  = primary_btn;
+    op->action_label = g_strdup (primary_text);
     op->pass_entry  = rd->pass_entry;
+    op->extra_disabled = extras;
     op->popup       = rd->popup;
     op->timeout_id  = g_timeout_add (OP_TIMEOUT_MS, op_timeout_cb, op);
     g_hash_table_replace (rd->popup->ops_in_progress,
                           g_strdup (rd->device_path), op);
 
+    /* Registrar intento pendiente con timestamp. Si el usuario cierra el popup
+     * antes de que la op se resuelva, al reabrir lo procesamos para decidir
+     * si marcar como fallido o no según el estado real de la conexión. */
+    {
+        gint64 *ts = g_new (gint64, 1);
+        *ts = g_get_monotonic_time ();
+        gchar *attempt_key = g_strdup_printf ("%s|%s", rd->ssid, rd->device_path);
+        g_hash_table_replace (rd->popup->pending_attempts,
+                              attempt_key, ts);
+    }
+
+    /* Activar spinner en el botón del panel mientras conecta. */
+    if (rd->popup->plugin_ref)
+        net_plugin_set_connecting (rd->popup->plugin_ref, TRUE);
+
     /* Si hay perfil guardado y no se ingresó password, usar ActivateConnection.
-     * Si no, usar AddAndActivate (creará/sobrescribirá el perfil). */
+     * Si no, usar AddAndActivate. AddAndActivate crea un perfil nuevo en cada
+     * llamada — si ya había uno guardado para este SSID, lo borramos antes para
+     * evitar acumular perfiles duplicados tras varios intentos con clave mala. */
     if (saved_pw && (!password || !*password)) {
+        /* Migración automática: si el perfil viejo está bindeado a un adapter
+         * específico (campo interface-name fijado), se lo sacamos para que sirva
+         * a cualquier wlanX. También borra duplicados si quedaron de antes. */
+        nm_strip_interface_name (rd->popup->conn, rd->ssid);
         nm_activate_connection_async (rd->popup->conn, rd->device_path,
                                       rd->ap_path, rd->ssid);
     } else {
+        if (password && *password)
+            nm_forget_connection (rd->popup->conn, rd->ssid);
         nm_add_and_activate_connection_async (rd->popup->conn, rd->device_path,
                                               rd->ap_path, rd->ssid,
                                               saved_pw ? saved_pw : password,
@@ -609,6 +904,65 @@ do_connect (RowData *rd)
     }
 
     g_free (saved_pw);
+}
+
+/* Handler de "Reintentar con la contraseña guardada": vacía el entry de
+ * contraseña para forzar el uso de la guardada, después llama a do_connect. */
+static void
+on_retry_clicked (GtkWidget *btn, gpointer rd_ptr)
+{
+    (void) btn;
+    RowData *rd = rd_ptr;
+    if (rd->pass_entry)
+        gtk_entry_set_text (GTK_ENTRY (rd->pass_entry), "");
+    do_connect (rd);
+}
+
+/* Handler de "Probar otra contraseña": pasa del estado A al B (oculta los
+ * botones grandes, muestra el entry y los botones Volver/Conectar). */
+static void
+on_try_other_clicked (GtkWidget *btn, gpointer rd_ptr)
+{
+    (void) btn;
+    RowData *rd = rd_ptr;
+    if (rd->state_a_box) gtk_widget_hide (rd->state_a_box);
+    if (rd->state_b_box) {
+        /* show_all para que los hijos del state_b_box (entry, botones Volver/Conectar)
+         * salgan visibles. set_no_show_all en el contenedor padre evita que un
+         * gtk_widget_show_all externo lo reabra, pero acá lo forzamos a mano. */
+        gtk_widget_set_no_show_all (rd->state_b_box, FALSE);
+        gtk_widget_show_all (rd->state_b_box);
+        gtk_widget_set_no_show_all (rd->state_b_box, TRUE);
+    }
+    if (rd->pass_entry) {
+        gtk_entry_set_text (GTK_ENTRY (rd->pass_entry), "");
+        gtk_widget_grab_focus (rd->pass_entry);
+    }
+    /* Conectar arranca deshabilitado: se habilita cuando el entry tenga texto. */
+    if (rd->connect_btn_b)
+        gtk_widget_set_sensitive (rd->connect_btn_b, FALSE);
+}
+
+/* Handler de "Volver": pasa del estado B al A. */
+static void
+on_back_clicked (GtkWidget *btn, gpointer rd_ptr)
+{
+    (void) btn;
+    RowData *rd = rd_ptr;
+    if (rd->state_b_box) gtk_widget_hide (rd->state_b_box);
+    if (rd->state_a_box) gtk_widget_show (rd->state_a_box);
+    if (rd->pass_entry)
+        gtk_entry_set_text (GTK_ENTRY (rd->pass_entry), "");
+}
+
+/* Habilita el botón Conectar (estado B) solo si el entry tiene texto. */
+static void
+on_pass_entry_b_changed (GtkEditable *editable, gpointer rd_ptr)
+{
+    RowData     *rd   = rd_ptr;
+    const gchar *text = gtk_entry_get_text (GTK_ENTRY (editable));
+    if (rd->connect_btn_b)
+        gtk_widget_set_sensitive (rd->connect_btn_b, text && *text);
 }
 
 static void
@@ -659,6 +1013,23 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
     GtkWidget *autoconnect_check_widget = NULL;
     GDBusConnection *conn = popup->conn;
 
+    /* Si hay un intento de conexión pendiente para este SSID y aún estamos
+     * dentro de la ventana del timeout (OP_TIMEOUT_MS), NO confiar en lo que
+     * dice NM sobre ap->active: NM puede reportar "activado" varios segundos
+     * antes de que el AP rechace la auth con clave mala. Forzamos active=FALSE
+     * para que la fila no muestre "Conectado" falsamente. */
+    gboolean ap_active = ap->active;
+    if (ap_active && popup->pending_attempts && ap->ssid && device_path) {
+        gchar  *attempt_key = g_strdup_printf ("%s|%s", ap->ssid, device_path);
+        gint64 *ts = g_hash_table_lookup (popup->pending_attempts, attempt_key);
+        g_free (attempt_key);
+        if (ts) {
+            gint64 age_ms = (g_get_monotonic_time () - *ts) / 1000;
+            if (age_ms < OP_TIMEOUT_MS)
+                ap_active = FALSE;
+        }
+    }
+
     outer     = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
     event_box = gtk_event_box_new ();
     gtk_event_box_set_above_child (GTK_EVENT_BOX (event_box), FALSE);
@@ -684,7 +1055,21 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
         else if (ap->frequency >= 5000) band = "5G";
         else                            band = "2.4G";
 
-        if (ap->active) {
+        /* is_connecting: hay un intento de conexión a este SSID iniciado en otra
+     * apertura del popup, y aún estamos dentro de la ventana de 20s. */
+    gboolean is_connecting = FALSE;
+    if (!ap_active && popup->pending_attempts && ap->ssid && device_path) {
+        gchar  *attempt_key = g_strdup_printf ("%s|%s", ap->ssid, device_path);
+        gint64 *ts = g_hash_table_lookup (popup->pending_attempts, attempt_key);
+        g_free (attempt_key);
+        if (ts) {
+            gint64 age_ms = (g_get_monotonic_time () - *ts) / 1000;
+            if (age_ms < OP_TIMEOUT_MS)
+                is_connecting = TRUE;
+        }
+    }
+
+    if (ap_active) {
             gchar *markup = g_markup_printf_escaped (
                 "<b>%s</b>  <small><span alpha='60%%'>%s</span></small>",
                 ap->ssid, band);
@@ -700,6 +1085,19 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
             gtk_widget_set_hexpand (connected_right, FALSE);
             gtk_box_pack_end (GTK_BOX (row), check, FALSE, FALSE, 0);
             gtk_box_pack_end (GTK_BOX (row), connected_right, FALSE, FALSE, 4);
+        } else if (is_connecting) {
+            gchar *markup = g_markup_printf_escaped (
+                "%s  <small><span alpha='60%%'>%s</span></small>",
+                ap->ssid, band);
+            gtk_label_set_markup (GTK_LABEL (ssid_label), markup);
+            g_free (markup);
+            GtkWidget *connecting_right = gtk_label_new (_("Connecting…"));
+            gtk_style_context_add_class (gtk_widget_get_style_context (connecting_right),
+                                         "dim-label");
+            gtk_label_set_ellipsize (GTK_LABEL (connecting_right), PANGO_ELLIPSIZE_NONE);
+            gtk_widget_set_halign (connecting_right, GTK_ALIGN_END);
+            gtk_widget_set_hexpand (connecting_right, FALSE);
+            gtk_box_pack_end (GTK_BOX (row), connecting_right, FALSE, FALSE, 4);
         } else {
             gchar *markup = g_markup_printf_escaped (
                 "%s  <small><span alpha='60%%'>%s</span></small>",
@@ -720,10 +1118,55 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
     gtk_widget_set_margin_bottom (expand_box, 8);
     
 
-    if (ap->active) {
+    /* is_connecting: hay un intento de conexión a este SSID iniciado en otra
+     * apertura del popup, y aún estamos dentro de la ventana de 20s. El expand
+     * muestra solo un label "Conectando…", sin botones, para no confundir al
+     * usuario con un "Conectar" cuando ya hay un intento en curso. */
+    gboolean is_connecting = FALSE;
+    if (!ap_active && popup->pending_attempts && ap->ssid && device_path) {
+        gchar  *attempt_key = g_strdup_printf ("%s|%s", ap->ssid, device_path);
+        gint64 *ts = g_hash_table_lookup (popup->pending_attempts, attempt_key);
+        g_free (attempt_key);
+        if (ts) {
+            gint64 age_ms = (g_get_monotonic_time () - *ts) / 1000;
+            if (age_ms < OP_TIMEOUT_MS)
+                is_connecting = TRUE;
+        }
+    }
+
+    if (ap_active) {
         action_btn = gtk_button_new_with_label (_("Disconnect"));
+    } else if (is_connecting) {
+        GtkWidget *connecting_label = gtk_label_new (_("Connecting…"));
+        gtk_label_set_xalign (GTK_LABEL (connecting_label), 0.0);
+        gtk_box_pack_start (GTK_BOX (expand_box), connecting_label, FALSE, FALSE, 0);
+        gtk_widget_show (connecting_label);
+        /* Botón "Connect" creado oculto: no rompe la lógica de action_row. */
+        action_btn = gtk_button_new_with_label (_("Connect"));
+        gtk_widget_set_no_show_all (action_btn, TRUE);
+        /* Marca: este expand es pasivo (solo muestra "Conectando…"), no hay
+         * interacción del usuario que proteger. update_devices_section puede
+         * reconstruirlo libremente y reabrirlo después. */
+        g_object_set_data (G_OBJECT (expand_box), "passive-connecting",
+                           GINT_TO_POINTER (1));
+        /* Agendar refresh para cuando expire la ventana de pending_attempts.
+         * Si NM no emitió ninguna señal hasta entonces, queremos transicionar
+         * el expand a estado A sin esperar a que el usuario interactúe. */
+        {
+            gint64 *ts = g_hash_table_lookup (popup->pending_attempts, ap->ssid);
+            if (ts) {
+                gint64 age_ms = (g_get_monotonic_time () - *ts) / 1000;
+                gint64 remaining = OP_TIMEOUT_MS - age_ms;
+                if (remaining < 100) remaining = 100;
+                g_timeout_add_full (G_PRIORITY_DEFAULT, (guint) remaining,
+                                    (GSourceFunc) (void *) schedule_refresh_ui,
+                                    popup, NULL);
+            }
+        }
     } else {
         gboolean saved = nm_has_saved_connection (conn, ap->ssid);
+        gboolean had_failure = saved && ap->secure &&
+            g_hash_table_contains (popup->failed_ssids, ap->ssid);
 
         if (saved) {
             GtkWidget *saved_label = gtk_label_new (_("Saved network"));
@@ -732,6 +1175,18 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
             gtk_label_set_xalign (GTK_LABEL (saved_label), 0.0);
             gtk_box_pack_start (GTK_BOX (expand_box), saved_label, FALSE, FALSE, 0);
             gtk_widget_show (saved_label);
+
+            if (had_failure) {
+                /* Mensaje "El último intento falló al conectar", visible siempre. */
+                GtkWidget *fail_label = gtk_label_new (
+                    _("Last connection attempt failed"));
+                gtk_style_context_add_class (
+                    gtk_widget_get_style_context (fail_label), "error");
+                gtk_label_set_xalign (GTK_LABEL (fail_label), 0.0);
+                gtk_box_pack_start (GTK_BOX (expand_box), fail_label,
+                                    FALSE, FALSE, 0);
+                gtk_widget_show (fail_label);
+            }
 
             GtkWidget *autoconnect_check_saved =
                 gtk_check_button_new_with_label (_("Connect automatically"));
@@ -768,19 +1223,30 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
             autoconnect_check_widget = autoconnect_check;
         }
 
+        /* action_btn de uso general: "Connect" simple para red guardada sin
+         * fallo o para red nueva. En el caso "red guardada con fallo" no lo
+         * usamos como botón principal (creamos retry_btn / connect_btn_b
+         * abajo), pero lo dejamos creado y oculto para no romper la lógica
+         * existente de action_row / RowData. */
         action_btn = gtk_button_new_with_label (_("Connect"));
+        if (had_failure)
+            gtk_widget_set_no_show_all (action_btn, TRUE);
     }
 
     gtk_widget_set_halign (action_btn, GTK_ALIGN_END);
 
     action_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_box_pack_start (GTK_BOX (action_row), action_btn, FALSE, FALSE, 0);
-    if (!ap->active && forget_btn) {
+    if (!ap_active && forget_btn) {
         gtk_box_pack_end (GTK_BOX (action_row), forget_btn, FALSE, FALSE, 0);
         gtk_widget_show (forget_btn);
     }
     gtk_box_pack_start (GTK_BOX (expand_box), action_row, FALSE, FALSE, 0);
-    gtk_widget_show (action_btn);
+    /* Si action_btn tiene no_show_all (caso red guardada con fallo, donde el
+     * botón principal pasa a ser retry_btn / connect_btn_b), no lo mostramos.
+     * Sin esto el "Connect" residual queda visible en el estado A. */
+    if (!gtk_widget_get_no_show_all (action_btn))
+        gtk_widget_show (action_btn);
     gtk_widget_show (action_row);
 
     gtk_widget_set_no_show_all (expand_box, TRUE);
@@ -795,11 +1261,103 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
     rd->ssid        = g_strdup (ap->ssid);
     rd->ap_path     = g_strdup (ap->object_path);
     rd->secure      = ap->secure;
-    rd->active      = ap->active;
-    rd->saved       = ap->active ? FALSE : nm_has_saved_connection (conn, ap->ssid);
+    rd->active      = ap_active;
+    rd->saved       = ap_active ? FALSE : nm_has_saved_connection (conn, ap->ssid);
     rd->device_path = g_strdup (device_path);
     rd->pass_entry        = pass_entry;
     rd->autoconnect_check = autoconnect_check_widget;
+    rd->forget_btn        = forget_btn;
+
+    /* Si es red guardada con fallo previo, construir los dos sub-bloques
+     * (estado A = botones de reintentar/probar otra; estado B = entry de
+     * reescribir contraseña + Volver/Conectar). Se intercalan después del
+     * autoconnect_check y antes del action_row (que solo tiene "Olvidar"). */
+    if (!ap_active && rd->saved && ap->secure &&
+        g_hash_table_contains (popup->failed_ssids, ap->ssid)) {
+
+        /* ---- Estado A ---- */
+        rd->state_a_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
+
+        rd->retry_btn = gtk_button_new_with_label (
+            _("Retry with saved password"));
+        gtk_widget_set_hexpand (rd->retry_btn, FALSE);
+        gtk_widget_set_halign  (rd->retry_btn, GTK_ALIGN_FILL);
+        gtk_box_pack_start (GTK_BOX (rd->state_a_box), rd->retry_btn,
+                            TRUE, TRUE, 0);
+
+        rd->try_other_btn = gtk_button_new_with_label (
+            _("Try a different password"));
+        gtk_widget_set_hexpand (rd->try_other_btn, FALSE);
+        gtk_widget_set_halign  (rd->try_other_btn, GTK_ALIGN_FILL);
+        gtk_box_pack_start (GTK_BOX (rd->state_a_box), rd->try_other_btn,
+                            TRUE, TRUE, 0);
+
+        /* Insertar state_a_box justo antes del action_row. */
+        gtk_box_pack_start (GTK_BOX (expand_box), rd->state_a_box,
+                            FALSE, FALSE, 0);
+        gtk_widget_show_all (rd->state_a_box);
+
+        /* ---- Estado B (oculto inicialmente) ---- */
+        rd->state_b_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
+
+        GtkWidget *pass_row_b = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+        pass_entry = gtk_entry_new ();
+        gtk_entry_set_placeholder_text (GTK_ENTRY (pass_entry),
+                                        _("Rewrite password"));
+        gtk_entry_set_visibility       (GTK_ENTRY (pass_entry), FALSE);
+        gtk_box_pack_start (GTK_BOX (pass_row_b), pass_entry, TRUE, TRUE, 0);
+
+        GtkWidget *eye_btn_b  = gtk_button_new ();
+        GtkWidget *eye_icon_b = gtk_image_new_from_icon_name (
+                                    "view-reveal-symbolic", GTK_ICON_SIZE_MENU);
+        gtk_button_set_image  (GTK_BUTTON (eye_btn_b), eye_icon_b);
+        gtk_button_set_relief (GTK_BUTTON (eye_btn_b), GTK_RELIEF_NONE);
+        gtk_box_pack_start (GTK_BOX (pass_row_b), eye_btn_b, FALSE, FALSE, 0);
+
+        gtk_box_pack_start (GTK_BOX (rd->state_b_box), pass_row_b,
+                            FALSE, FALSE, 0);
+
+        GtkWidget *btns_row_b = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+        gtk_widget_set_halign (btns_row_b, GTK_ALIGN_END);
+
+        rd->back_btn = gtk_button_new_with_label (_("Back"));
+        gtk_box_pack_start (GTK_BOX (btns_row_b), rd->back_btn,
+                            FALSE, FALSE, 0);
+
+        rd->connect_btn_b = gtk_button_new_with_label (_("Connect"));
+        gtk_widget_set_sensitive (rd->connect_btn_b, FALSE);
+        gtk_box_pack_start (GTK_BOX (btns_row_b), rd->connect_btn_b,
+                            FALSE, FALSE, 0);
+
+        gtk_box_pack_start (GTK_BOX (rd->state_b_box), btns_row_b,
+                            FALSE, FALSE, 0);
+
+        gtk_box_pack_start (GTK_BOX (expand_box), rd->state_b_box,
+                            FALSE, FALSE, 0);
+
+        gtk_widget_set_no_show_all (rd->state_b_box, TRUE);
+        gtk_widget_hide (rd->state_b_box);
+
+        /* Reordenar para que action_row (con el botón Olvidar) quede al final. */
+        gtk_box_reorder_child (GTK_BOX (expand_box), action_row, -1);
+
+        /* Apuntamos el pass_entry de RowData al de B (necesario para do_connect). */
+        rd->pass_entry = pass_entry;
+
+        /* Conectar señales propias de A y B. */
+        g_signal_connect (rd->retry_btn, "clicked",
+                          G_CALLBACK (on_retry_clicked), rd);
+        g_signal_connect (rd->try_other_btn, "clicked",
+                          G_CALLBACK (on_try_other_clicked), rd);
+        g_signal_connect (rd->back_btn, "clicked",
+                          G_CALLBACK (on_back_clicked), rd);
+        g_signal_connect (rd->connect_btn_b, "clicked",
+                          G_CALLBACK (on_connect_clicked), rd);
+        g_signal_connect (pass_entry, "changed",
+                          G_CALLBACK (on_pass_entry_b_changed), rd);
+        g_signal_connect_swapped (eye_btn_b, "clicked",
+                                  G_CALLBACK (on_eye_clicked), pass_entry);
+    }
 
     g_object_set_data_full (G_OBJECT (outer), "row-data", rd,
                             (GDestroyNotify) row_data_free);
@@ -812,7 +1370,7 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
     g_signal_connect (event_box, "button-press-event",
                       G_CALLBACK (on_row_clicked), rd);
 
-    if (ap->active) {
+    if (ap_active) {
         g_signal_connect (action_btn, "clicked",
                           G_CALLBACK (on_disconnect_clicked), rd);
     } else {
@@ -1082,13 +1640,37 @@ update_top_status (NetPopup *popup)
 
     gchar *primary_ssid = get_primary_ssid (popup->conn);
 
-    /* Ícono superior */
-    if (primary_ssid)
-        gtk_image_set_from_icon_name (GTK_IMAGE (popup->status_icon),
-                                      "network-wireless-symbolic", GTK_ICON_SIZE_MENU);
-    else
-        gtk_image_set_from_icon_name (GTK_IMAGE (popup->status_icon),
-                                      "network-wireless-disconnected-symbolic", GTK_ICON_SIZE_MENU);
+    /* Si NM dice "conectado" pero hay un CONNECT en curso para ese mismo SSID,
+     * ignorarlo — NM miente brevemente antes de confirmar el fallo de auth. */
+    if (primary_ssid && g_hash_table_size (popup->ops_in_progress) > 0) {
+        GHashTableIter iter;
+        gpointer key, value;
+        g_hash_table_iter_init (&iter, popup->ops_in_progress);
+        while (g_hash_table_iter_next (&iter, &key, &value)) {
+            OpInProgress *op = value;
+            if (op->kind == OP_CONNECT &&
+                g_strcmp0 (op->ssid, primary_ssid) == 0) {
+                g_free (primary_ssid);
+                primary_ssid = NULL;
+                break;
+            }
+        }
+    }
+
+    /* Ícono superior: spinner si hay operación en curso en la tabla, ícono si no. */
+    if (g_hash_table_size (popup->ops_in_progress) > 0) {
+        gtk_spinner_start (GTK_SPINNER (popup->status_spinner));
+        gtk_stack_set_visible_child_name (GTK_STACK (popup->status_stack), "spinner");
+    } else {
+        gtk_spinner_stop (GTK_SPINNER (popup->status_spinner));
+        gtk_stack_set_visible_child_name (GTK_STACK (popup->status_stack), "icon");
+        if (primary_ssid)
+            gtk_image_set_from_icon_name (GTK_IMAGE (popup->status_icon),
+                                          "network-wireless-symbolic", GTK_ICON_SIZE_MENU);
+        else
+            gtk_image_set_from_icon_name (GTK_IMAGE (popup->status_icon),
+                                          "network-wireless-disconnected-symbolic", GTK_ICON_SIZE_MENU);
+    }
 
     /* Label de estado */
     if (primary_ssid) {
@@ -1099,7 +1681,26 @@ update_top_status (NetPopup *popup)
     } else if (!nm_get_wifi_enabled (popup->conn)) {
         gtk_label_set_text (GTK_LABEL (popup->status_label), _("Disabled"));
     } else {
-        gtk_label_set_text (GTK_LABEL (popup->status_label), _("Enabled – not connected"));
+        /* Buscar si hay un CONNECT en curso en la tabla */
+        const gchar *connecting_ssid = NULL;
+        GHashTableIter iter;
+        gpointer key, value;
+        g_hash_table_iter_init (&iter, popup->ops_in_progress);
+        while (g_hash_table_iter_next (&iter, &key, &value)) {
+            OpInProgress *op = value;
+            if (op->kind == OP_CONNECT && op->ssid) {
+                connecting_ssid = op->ssid;
+                break;
+            }
+        }
+        if (connecting_ssid) {
+            gchar *markup = g_markup_printf_escaped (
+                                _("Connecting to <b>%s</b>…"), connecting_ssid);
+            gtk_label_set_markup (GTK_LABEL (popup->status_label), markup);
+            g_free (markup);
+        } else {
+            gtk_label_set_text (GTK_LABEL (popup->status_label), _("Enabled – not connected"));
+        }
     }
 
     g_free (primary_ssid);
@@ -1137,10 +1738,31 @@ update_devices_section (NetPopup *popup)
 
     /* Si hay un expand abierto NO reconstruimos la lista de filas
      * (regla 1A: congelar filas mientras el usuario interactúa).
-     * Pero igual chequeamos las operaciones en curso. */
+     * EXCEPCIÓN: si el expand actual es "pasivo" (solo muestra "Conectando…"
+     * sin botones ni entry), no hay nada que el usuario esté tocando, así
+     * que sí reconstruimos y después reabrimos esa misma fila. */
+    gchar    *passive_ssid = NULL;
+    gchar    *passive_dev  = NULL;
+    gboolean  passive      = FALSE;
     if (popup->current_expand_box) {
-        check_ops_progress (popup);
-        return;
+        passive = (g_object_get_data (G_OBJECT (popup->current_expand_box),
+                                      "passive-connecting") != NULL);
+        if (!passive) {
+            check_ops_progress (popup);
+            return;
+        }
+        /* Sacar ssid + device_path del expand abierto antes de destruirlo.
+         * El expand_box está dentro de outer, que está dentro del event_box. */
+        GtkWidget *outer_w = gtk_widget_get_parent (popup->current_expand_box);
+        if (outer_w) {
+            GtkWidget *evb = gtk_widget_get_parent (outer_w);
+            if (evb) {
+                const gchar *s = g_object_get_data (G_OBJECT (evb), "ssid");
+                const gchar *d = g_object_get_data (G_OBJECT (evb), "device-path");
+                if (s) passive_ssid = g_strdup (s);
+                if (d) passive_dev  = g_strdup (d);
+            }
+        }
     }
 
     /* Limpiar y reconstruir todas las secciones de adaptadores. */
@@ -1175,6 +1797,14 @@ update_devices_section (NetPopup *popup)
 
     /* Las operaciones en curso ya no tienen sus widgets antiguos, las descartamos. */
     g_hash_table_remove_all (popup->ops_in_progress);
+
+    /* Si veníamos de un expand "Conectando…" pasivo, reabrir esa misma fila
+     * para que el usuario siga viendo el estado actualizado sin reclickear. */
+    if (passive_ssid) {
+        reopen_expand_for_ssid (popup, passive_ssid, passive_dev);
+        g_free (passive_ssid);
+        g_free (passive_dev);
+    }
 }
 
 /* ---------- refresh coalescido ---------- */
@@ -1191,6 +1821,11 @@ refresh_ui_cb (gpointer user_data)
 
     /* Primero chequear si alguna operación en curso ya se confirmó. */
     check_ops_progress (popup);
+
+    /* Promover a failed_ssids los SSIDs cuya ventana de pending_attempts
+     * ya expiró sin que NM haya confirmado conexión. Así el próximo
+     * update_devices_section construye estado A en vez de "Conectando…". */
+    process_pending_attempts (popup);
 
     /* Después refrescar las partes que no dependen del expand abierto. */
     update_top_status     (popup);
@@ -1244,7 +1879,7 @@ rebuild_ui (NetPopup *popup)
 
     /* ---- Barra superior fija ---- */
     GtkWidget *top_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
-    gtk_widget_set_margin_start  (top_row, 12);
+    gtk_widget_set_margin_start  (top_row, 6);
     gtk_widget_set_margin_end    (top_row, 12);
     gtk_widget_set_margin_top    (top_row, 8);
     gtk_widget_set_margin_bottom (top_row, 8);
@@ -1253,8 +1888,18 @@ rebuild_ui (NetPopup *popup)
                              "network-wireless-disconnected-symbolic",
                              GTK_ICON_SIZE_MENU);
     gtk_widget_set_valign (popup->status_icon, GTK_ALIGN_CENTER);
-    gtk_widget_set_margin_bottom (popup->status_icon, 22);
-    gtk_box_pack_start (GTK_BOX (top_row), popup->status_icon, FALSE, FALSE, 0);
+
+    popup->status_spinner = gtk_spinner_new ();
+    gtk_widget_set_valign (popup->status_spinner, GTK_ALIGN_CENTER);
+
+    popup->status_stack = gtk_stack_new ();
+    gtk_stack_set_transition_type (GTK_STACK (popup->status_stack),
+                                   GTK_STACK_TRANSITION_TYPE_NONE);
+    gtk_stack_add_named (GTK_STACK (popup->status_stack), popup->status_icon,    "icon");
+    gtk_stack_add_named (GTK_STACK (popup->status_stack), popup->status_spinner, "spinner");
+    gtk_stack_set_visible_child_name (GTK_STACK (popup->status_stack), "icon");
+    gtk_widget_set_margin_bottom (popup->status_stack, 22);
+    gtk_box_pack_start (GTK_BOX (top_row), popup->status_stack, FALSE, FALSE, 0);
 
     GtkWidget *center_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
     gtk_box_pack_start (GTK_BOX (top_row), center_box, TRUE, TRUE, 0);
@@ -1296,6 +1941,7 @@ rebuild_ui (NetPopup *popup)
     popup->status_label = gtk_label_new (NULL);
     gtk_label_set_xalign (GTK_LABEL (popup->status_label), 0.0);
     gtk_label_set_ellipsize (GTK_LABEL (popup->status_label), PANGO_ELLIPSIZE_END);
+    gtk_label_set_max_width_chars (GTK_LABEL (popup->status_label), 28);
     gtk_box_pack_start (GTK_BOX (center_box), popup->status_label, FALSE, FALSE, 0);
 
     gtk_box_pack_start (GTK_BOX (popup->top_box), top_row, FALSE, FALSE, 0);
@@ -1542,6 +2188,10 @@ popup_create (XfcePanelPlugin *plugin, GtkWidget *button)
     popup->window = win;
     popup->ops_in_progress = g_hash_table_new_full (g_str_hash, g_str_equal,
                                                      g_free, op_free);
+    popup->failed_ssids = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                                  g_free, NULL);
+    popup->pending_attempts = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                                      g_free, g_free);
     return popup;
 }
 
@@ -1560,6 +2210,13 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
     gtk_widget_set_size_request (popup->window, popup_width, -1);
     gtk_widget_set_size_request (popup->scroll, popup_width, popup_height);
 
+    /* Procesar intentos pendientes de la sesión anterior del popup: para cada
+     * SSID que tenía un intento de conexión sin resolver al cerrarse, mirar
+     * si terminó conectada o no, y marcarla en failed_ssids si corresponde.
+     * Esto debe ocurrir ANTES de rebuild_ui / update_devices_section, así
+     * cuando se arman las filas ya tienen la información correcta. */
+    process_pending_attempts (popup);
+
     /* Construir UI si es la primera vez. */
     if (!popup->ui_built) {
         rebuild_ui (popup);
@@ -1575,8 +2232,9 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
     if (!popup->signal_ids)
         popup->signal_ids = nm_subscribe_signals (conn, on_nm_signal_popup, popup);
 
-    gtk_widget_show_all (popup->window);
+    gtk_widget_realize (popup->window);
     position_popup (popup, button);
+    gtk_widget_show_all (popup->window);
     gtk_window_present (GTK_WINDOW (popup->window));
 
     /* Pedir escaneo al abrir. */
@@ -1668,6 +2326,10 @@ popup_destroy (NetPopup *popup)
     popup_hide (popup);
     if (popup->ops_in_progress)
         g_hash_table_destroy (popup->ops_in_progress);
+    if (popup->failed_ssids)
+        g_hash_table_destroy (popup->failed_ssids);
+    if (popup->pending_attempts)
+        g_hash_table_destroy (popup->pending_attempts);
     gtk_widget_destroy (popup->window);
     g_free (popup);
 }

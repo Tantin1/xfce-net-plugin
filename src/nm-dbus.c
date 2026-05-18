@@ -407,6 +407,193 @@ nm_forget_connection (GDBusConnection *conn, const gchar *ssid)
     return deleted_any;
 }
 
+/* ---------- Migración: quitar interface-name de perfiles viejos ---------- */
+
+/* Devuelve un GSList* (lista enlazada) con los object_paths (gchar* duplicados)
+ * de todos los perfiles guardados cuya SSID coincide con `ssid`. */
+static GSList *
+list_connection_paths_by_ssid (GDBusConnection *conn, const gchar *ssid)
+{
+    GSList       *matches = NULL;
+    GVariant     *result, *paths_v;
+    const gchar **paths;
+    gsize         n, i;
+
+    result = g_dbus_connection_call_sync (
+        conn, NM_BUS_NAME, NM_SETTINGS_PATH, NM_SETTINGS_IFACE,
+        "ListConnections", NULL, G_VARIANT_TYPE ("(ao)"),
+        G_DBUS_CALL_FLAGS_NONE, 5000, NULL, NULL);
+    if (!result) return NULL;
+
+    g_variant_get (result, "(@ao)", &paths_v);
+    paths = g_variant_get_objv (paths_v, &n);
+
+    for (i = 0; i < n; i++) {
+        GVariant *settings = g_dbus_connection_call_sync (
+            conn, NM_BUS_NAME, paths[i], NM_CONN_IFACE,
+            "GetSettings", NULL, G_VARIANT_TYPE ("(a{sa{sv}})"),
+            G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
+        if (!settings) continue;
+
+        GVariant *outer     = g_variant_get_child_value (settings, 0);
+        GVariant *wifi_dict = NULL;
+        g_variant_lookup (outer, "802-11-wireless", "@a{sv}", &wifi_dict);
+
+        if (wifi_dict) {
+            GVariant *ssid_v = NULL;
+            g_variant_lookup (wifi_dict, "ssid", "@ay", &ssid_v);
+            if (ssid_v) {
+                gsize         len;
+                const guchar *bytes = g_variant_get_fixed_array (ssid_v, &len, 1);
+                gchar        *conn_ssid = g_strndup ((const gchar *) bytes, len);
+                if (g_strcmp0 (conn_ssid, ssid) == 0)
+                    matches = g_slist_prepend (matches, g_strdup (paths[i]));
+                g_free (conn_ssid);
+                g_variant_unref (ssid_v);
+            }
+            g_variant_unref (wifi_dict);
+        }
+        g_variant_unref (outer);
+        g_variant_unref (settings);
+    }
+
+    g_free (paths);
+    g_variant_unref (paths_v);
+    g_variant_unref (result);
+    return matches;
+}
+
+/* Devuelve TRUE si el perfil en `conn_path` tiene `connection.interface-name`
+ * fijado (no vacío). */
+static gboolean
+connection_has_interface_name (GDBusConnection *conn, const gchar *conn_path)
+{
+    GVariant *settings = g_dbus_connection_call_sync (
+        conn, NM_BUS_NAME, conn_path, NM_CONN_IFACE,
+        "GetSettings", NULL, G_VARIANT_TYPE ("(a{sa{sv}})"),
+        G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
+    if (!settings) return FALSE;
+
+    gboolean  has_iface = FALSE;
+    GVariant *outer     = g_variant_get_child_value (settings, 0);
+    GVariant *conn_dict = NULL;
+    g_variant_lookup (outer, "connection", "@a{sv}", &conn_dict);
+    if (conn_dict) {
+        const gchar *iface = NULL;
+        if (g_variant_lookup (conn_dict, "interface-name", "&s", &iface)
+            && iface && *iface)
+            has_iface = TRUE;
+        g_variant_unref (conn_dict);
+    }
+    g_variant_unref (outer);
+    g_variant_unref (settings);
+    return has_iface;
+}
+
+/* Reemplaza completamente las settings del perfil, quitando interface-name. */
+static gboolean
+connection_strip_interface_name (GDBusConnection *conn, const gchar *conn_path)
+{
+    /* Obtener settings actuales con secretos para no perder la psk. */
+    GVariant *settings = g_dbus_connection_call_sync (
+        conn, NM_BUS_NAME, conn_path, NM_CONN_IFACE,
+        "GetSettings", NULL, G_VARIANT_TYPE ("(a{sa{sv}})"),
+        G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
+    if (!settings) return FALSE;
+
+    GVariant *outer = g_variant_get_child_value (settings, 0);
+
+    /* Reconstruir el dict de settings, omitiendo interface-name dentro de
+     * la sección "connection". */
+    GVariantBuilder out_builder;
+    g_variant_builder_init (&out_builder, G_VARIANT_TYPE ("a{sa{sv}}"));
+
+    GVariantIter sec_iter;
+    g_variant_iter_init (&sec_iter, outer);
+
+    const gchar *sec_name;
+    GVariant    *sec_dict;
+    while (g_variant_iter_loop (&sec_iter, "{&s@a{sv}}", &sec_name, &sec_dict)) {
+        GVariantBuilder inner_builder;
+        g_variant_builder_init (&inner_builder, G_VARIANT_TYPE ("a{sv}"));
+
+        GVariantIter prop_iter;
+        g_variant_iter_init (&prop_iter, sec_dict);
+        const gchar *prop_name;
+        GVariant    *prop_val;
+        while (g_variant_iter_loop (&prop_iter, "{&sv}", &prop_name, &prop_val)) {
+            /* Omitir interface-name dentro de la sección "connection". */
+            if (g_strcmp0 (sec_name, "connection") == 0 &&
+                g_strcmp0 (prop_name, "interface-name") == 0)
+                continue;
+            g_variant_builder_add (&inner_builder, "{sv}", prop_name, prop_val);
+        }
+        g_variant_builder_add (&out_builder, "{sa{sv}}", sec_name, &inner_builder);
+    }
+
+    g_variant_unref (outer);
+    g_variant_unref (settings);
+
+    /* Llamar Update con el dict nuevo. */
+    GError   *err = NULL;
+    GVariant *res = g_dbus_connection_call_sync (
+        conn, NM_BUS_NAME, conn_path, NM_CONN_IFACE,
+        "Update",
+        g_variant_new ("(a{sa{sv}})", &out_builder),
+        NULL,
+        G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
+    if (!res) {
+        g_warning ("nm-dbus: Update %s: %s", conn_path,
+                   err ? err->message : "?");
+        if (err) g_error_free (err);
+        return FALSE;
+    }
+    g_variant_unref (res);
+    return TRUE;
+}
+
+gboolean
+nm_strip_interface_name (GDBusConnection *conn, const gchar *ssid)
+{
+    GSList   *paths = list_connection_paths_by_ssid (conn, ssid);
+    gboolean  changed = FALSE;
+    guint     count  = g_slist_length (paths);
+
+    if (count == 0) {
+        g_slist_free_full (paths, g_free);
+        return FALSE;
+    }
+
+    /* Si hay duplicados, conservar uno (el primero) y borrar los demás. */
+    if (count > 1) {
+        for (GSList *l = paths->next; l; l = l->next) {
+            GError *err = NULL;
+            GVariant *r = g_dbus_connection_call_sync (
+                conn, NM_BUS_NAME, (const gchar *) l->data, NM_CONN_IFACE,
+                "Delete", NULL, NULL,
+                G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
+            if (r) {
+                g_variant_unref (r);
+                changed = TRUE;
+            } else if (err) {
+                g_warning ("nm-dbus: Delete %s: %s",
+                           (const gchar *) l->data, err->message);
+                g_error_free (err);
+            }
+        }
+    }
+
+    /* Al perfil que queda (el primero) le sacamos interface-name si lo tiene. */
+    const gchar *keep = (const gchar *) paths->data;
+    if (connection_has_interface_name (conn, keep)) {
+        if (connection_strip_interface_name (conn, keep))
+            changed = TRUE;
+    }
+
+    g_slist_free_full (paths, g_free);
+    return changed;
+}
+
 /* ---------- ACCIÓN ASYNC: activar conexión guardada ---------- */
 
 void
@@ -467,8 +654,12 @@ nm_add_and_activate_connection_async (GDBusConnection *conn,
                            g_variant_new_string ("auto"));
 
     g_variant_builder_init (&meta_builder, G_VARIANT_TYPE ("a{sv}"));
+    g_variant_builder_add (&meta_builder, "{sv}", "type",
+                           g_variant_new_string ("802-11-wireless"));
     g_variant_builder_add (&meta_builder, "{sv}", "autoconnect",
                            g_variant_new_boolean (autoconnect));
+    /* Importante: NO pasamos "interface-name". Así el perfil no queda atado a
+     * un adapter específico y cualquier wlanX puede usarlo. */
 
     g_variant_builder_init (&conn_builder, G_VARIANT_TYPE ("a{sa{sv}}"));
     g_variant_builder_add (&conn_builder, "{sa{sv}}", "connection",
@@ -1021,6 +1212,27 @@ nm_unsubscribe_signals (GDBusConnection *conn, guint *ids)
     g_free (key);
 
     g_free (ids);
+}
+
+gboolean
+nm_any_wifi_device_connecting (GDBusConnection *conn)
+{
+    gboolean found = FALSE;
+    GSList  *devs  = nm_get_wifi_devices (conn);
+    for (GSList *l = devs; l && !found; l = l->next) {
+        NmDevice *dev = l->data;
+        GVariant *v   = get_property (conn, dev->object_path,
+                                      NM_DEVICE_IFACE, "State");
+        if (v) {
+            guint32 state = g_variant_get_uint32 (v);
+            /* 40=PREPARE 50=CONFIG 60=NEED_AUTH 70=IP_CONFIG 80=IP_CHECK 90=SECONDARIES */
+            if (state >= 40 && state <= 90)
+                found = TRUE;
+            g_variant_unref (v);
+        }
+    }
+    nm_device_list_free (devs);
+    return found;
 }
 
 void

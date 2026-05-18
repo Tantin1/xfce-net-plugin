@@ -1,6 +1,9 @@
 #include <libxfce4panel/libxfce4panel.h>
 #include <gtk/gtk.h>
 #include <glib/gi18n.h>
+#ifdef HAVE_LIBNOTIFY
+#include <libnotify/notify.h>
+#endif
 #include "popup.h"
 #include "nm-dbus.h"
 
@@ -10,7 +13,8 @@
 #define DEFAULT_ICON_SIZE       16
 #define DEFAULT_POPUP_WIDTH     400
 #define DEFAULT_POPUP_HEIGHT    340
-#define DEFAULT_SHOW_SEPARATORS TRUE
+#define DEFAULT_SHOW_SEPARATORS    TRUE
+#define DEFAULT_SHOW_NOTIFICATIONS FALSE
 
 typedef struct {
     XfcePanelPlugin *plugin;
@@ -34,6 +38,8 @@ typedef struct {
     guint *signal_ids;
 
     gboolean        connecting;
+    gboolean        notif_ready;
+    gboolean        show_notifications;
 
     gint     last_strength;
     gboolean last_secure;
@@ -167,7 +173,8 @@ load_config (NetPlugin *np)
     np->icon_size      = DEFAULT_ICON_SIZE;
     np->popup_width    = DEFAULT_POPUP_WIDTH;
     np->popup_height   = DEFAULT_POPUP_HEIGHT;
-    np->show_separators = DEFAULT_SHOW_SEPARATORS;
+    np->show_separators    = DEFAULT_SHOW_SEPARATORS;
+    np->show_notifications = DEFAULT_SHOW_NOTIFICATIONS;
 
     if (!g_key_file_load_from_file (kf, path, G_KEY_FILE_NONE, &err)) {
         g_clear_error (&err);
@@ -183,6 +190,9 @@ load_config (NetPlugin *np)
     np->show_separators = g_key_file_get_boolean  (kf, "appearance", "show_separators", NULL);
     if (!g_key_file_has_key (kf, "appearance", "show_separators", NULL))
         np->show_separators = DEFAULT_SHOW_SEPARATORS;
+    np->show_notifications = g_key_file_get_boolean (kf, "appearance", "show_notifications", NULL);
+    if (!g_key_file_has_key (kf, "appearance", "show_notifications", NULL))
+        np->show_notifications = DEFAULT_SHOW_NOTIFICATIONS;
 
     if (np->plugin_size  == 0) np->plugin_size  = DEFAULT_PLUGIN_SIZE;
     if (np->icon_size    == 0) np->icon_size    = DEFAULT_ICON_SIZE;
@@ -210,7 +220,8 @@ save_config (NetPlugin *np)
     g_key_file_set_integer  (kf, "appearance", "icon_size",      np->icon_size);
     g_key_file_set_integer  (kf, "appearance", "popup_width",    np->popup_width);
     g_key_file_set_integer  (kf, "appearance", "popup_height",    np->popup_height);
-    g_key_file_set_boolean  (kf, "appearance", "show_separators", np->show_separators);
+    g_key_file_set_boolean  (kf, "appearance", "show_separators",    np->show_separators);
+    g_key_file_set_boolean  (kf, "appearance", "show_notifications", np->show_notifications);
 
     if (!g_key_file_save_to_file (kf, path, &err)) {
         g_warning ("xfce-net-plugin: no se pudo guardar config: %s", err->message);
@@ -233,6 +244,7 @@ typedef struct {
     GtkWidget   *popup_width_spin;
     GtkWidget   *popup_height_spin;
     GtkWidget   *separators_check;
+    GtkWidget   *notifications_check;
 } PropsDialog;
 
 static void
@@ -292,6 +304,13 @@ on_separators_toggled (GtkToggleButton *btn, PropsDialog *pd)
     save_config (pd->np);
     /* Forzar reconstrucción del popup la próxima vez que se abra */
     pd->np->popup->ui_built = FALSE;
+}
+
+static void
+on_notifications_toggled (GtkToggleButton *btn, PropsDialog *pd)
+{
+    pd->np->show_notifications = gtk_toggle_button_get_active (btn);
+    save_config (pd->np);
 }
 
 static void
@@ -401,6 +420,23 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
     gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (pd->separators_check),
                                   np->show_separators);
     gtk_grid_attach (GTK_GRID (grid), pd->separators_check, 0, row, 2, 1);
+    row++;
+
+#ifdef HAVE_LIBNOTIFY
+    pd->notifications_check = gtk_check_button_new_with_label (_("Show notifications"));
+    gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (pd->notifications_check),
+                                  np->show_notifications);
+    gtk_grid_attach (GTK_GRID (grid), pd->notifications_check, 0, row, 2, 1);
+    row++;
+
+    GtkWidget *notif_hint = gtk_label_new (_("If the popup and the notification overlap, the notification will partially cover the popup."));
+    gtk_label_set_xalign (GTK_LABEL (notif_hint), 0.0);
+    gtk_label_set_line_wrap (GTK_LABEL (notif_hint), TRUE);
+    gtk_label_set_max_width_chars (GTK_LABEL (notif_hint), 35);
+    gtk_widget_set_margin_start (notif_hint, 24);
+    gtk_style_context_add_class (gtk_widget_get_style_context (notif_hint), "dim-label");
+    gtk_grid_attach (GTK_GRID (grid), notif_hint, 0, row, 2, 1);
+#endif
 
     gtk_box_pack_start (GTK_BOX (content), frame, FALSE, FALSE, 0);
 
@@ -418,6 +454,10 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
                       G_CALLBACK (on_popup_height_changed), pd);
     g_signal_connect (pd->separators_check, "toggled",
                       G_CALLBACK (on_separators_toggled), pd);
+#ifdef HAVE_LIBNOTIFY
+    g_signal_connect (pd->notifications_check, "toggled",
+                      G_CALLBACK (on_notifications_toggled), pd);
+#endif
     g_signal_connect (dialog, "destroy",
                       G_CALLBACK (on_props_dialog_destroy), pd);
 
@@ -448,10 +488,11 @@ net_plugin_set_connecting (gpointer np_ptr, gboolean connecting)
 
 /* ---------- callback de refresco por señales DBus ---------- */
 
-static void
-on_nm_changed (gpointer user_data)
+static gboolean
+on_nm_changed_cb (gpointer user_data)
 {
     NetPlugin *np = user_data;
+    g_object_set_data (G_OBJECT (np->button), "nm-refresh-pending", NULL);
 
     gboolean connected = FALSE;
     gint     strength  = 0;
@@ -481,7 +522,110 @@ on_nm_changed (gpointer user_data)
         nm_device_list_free (eths);
     }
 
+#ifdef HAVE_LIBNOTIFY
+    gboolean prev_connected = np->last_connected;
+    gboolean prev_vpn       = np->last_vpn;
+    gboolean prev_wired     = np->last_wired;
+#endif
+
+    /* Apagar spinner solo cuando NM confirma conexión exitosa. */
+    if (np->connecting && connected)
+        net_plugin_set_connecting (np, FALSE);
+
+    /* Spinner: prender si NM reporta algún adaptador conectando, apagar si no. */
+    gboolean any_connecting = nm_any_wifi_device_connecting (np->conn);
+    if (any_connecting != np->connecting)
+        net_plugin_set_connecting (np, any_connecting);
+
     update_panel_icon (np, connected, strength, secure, vpn, wired);
+
+#ifdef HAVE_LIBNOTIFY
+    /* Notificaciones: solo si ya hubo un estado previo (evita notif al arrancar) */
+    if (np->notif_ready && np->show_notifications) {
+        NotifyNotification *notif = NULL;
+
+        if (connected && !prev_connected) {
+            /* Wi-Fi conectado */
+            GSList *devs3 = nm_get_wifi_devices (np->conn);
+            const gchar *ssid_notif = NULL;
+            gchar *ssid_copy = NULL;
+            for (GSList *l = devs3; l && !ssid_notif; l = l->next) {
+                NmDevice *dev = l->data;
+                GSList *aps3 = nm_get_access_points (np->conn, dev->object_path);
+                for (GSList *a = aps3; a; a = a->next) {
+                    NmAccessPoint *ap = a->data;
+                    if (ap->active) { ssid_copy = g_strdup (ap->ssid); ssid_notif = ssid_copy; break; }
+                }
+                nm_ap_list_free (aps3);
+            }
+            nm_device_list_free (devs3);
+            gchar *body = g_strdup_printf (_("Connected to %s"), ssid_notif ? ssid_notif : "Wi-Fi");
+            notif = notify_notification_new (_("Wi-Fi"), body, "network-wireless-symbolic");
+            g_free (body);
+            g_free (ssid_copy);
+        } else if (!connected && prev_connected) {
+            /* Wi-Fi desconectado */
+            notif = notify_notification_new (_("Wi-Fi"), _("Disconnected"), "network-wireless-disconnected-symbolic");
+        } else if (wired && !prev_wired) {
+            /* Ethernet conectado */
+            notif = notify_notification_new (_("Ethernet"), _("Cable connected"), "network-wired-symbolic");
+        } else if (!wired && prev_wired) {
+            /* Ethernet desconectado */
+            notif = notify_notification_new (_("Ethernet"), _("Cable disconnected"), "network-wired-disconnected-symbolic");
+        }
+
+        if (vpn && !prev_vpn) {
+            /* VPN conectada (puede coincidir con otro evento, se envía aparte) */
+            NotifyNotification *vnotif = notify_notification_new (_("VPN"), _("Connected"), "network-vpn-symbolic");
+            notify_notification_show (vnotif, NULL);
+            g_object_unref (vnotif);
+        } else if (!vpn && prev_vpn) {
+            /* VPN desconectada */
+            NotifyNotification *vnotif = notify_notification_new (_("VPN"), _("Disconnected"), "network-vpn-symbolic");
+            notify_notification_show (vnotif, NULL);
+            g_object_unref (vnotif);
+        }
+
+        if (notif) {
+            notify_notification_show (notif, NULL);
+            g_object_unref (notif);
+        }
+    }
+    if (!np->notif_ready && np->show_notifications) {
+        /* Notificación de estado inicial al arrancar */
+        NotifyNotification *inotif = NULL;
+        if (connected) {
+            GSList *devs4 = nm_get_wifi_devices (np->conn);
+            gchar *ssid_copy = NULL;
+            for (GSList *l = devs4; l && !ssid_copy; l = l->next) {
+                NmDevice *dev = l->data;
+                GSList *aps4 = nm_get_access_points (np->conn, dev->object_path);
+                for (GSList *a = aps4; a; a = a->next) {
+                    NmAccessPoint *ap = a->data;
+                    if (ap->active) { ssid_copy = g_strdup (ap->ssid); break; }
+                }
+                nm_ap_list_free (aps4);
+            }
+            nm_device_list_free (devs4);
+            gchar *body = g_strdup_printf (_("Connected to %s"), ssid_copy ? ssid_copy : "Wi-Fi");
+            inotif = notify_notification_new (_("Wi-Fi"), body, "network-wireless-symbolic");
+            g_free (body);
+            g_free (ssid_copy);
+        } else if (wired) {
+            inotif = notify_notification_new (_("Ethernet"), _("Cable connected"), "network-wired-symbolic");
+        }
+        if (inotif) {
+            notify_notification_show (inotif, NULL);
+            g_object_unref (inotif);
+        }
+        if (vpn) {
+            NotifyNotification *vnotif = notify_notification_new (_("VPN"), _("Connected"), "network-vpn-symbolic");
+            notify_notification_show (vnotif, NULL);
+            g_object_unref (vnotif);
+        }
+    }
+    np->notif_ready = TRUE;
+#endif
 
     /* Tooltip del botón */
     {
@@ -524,6 +668,18 @@ on_nm_changed (gpointer user_data)
     /* IMPORTANTE: ya no reconstruimos el popup desde acá. El popup tiene su
      * propia suscripción a señales DBus mientras está abierto. Esta función
      * solo se ocupa del ícono y tooltip del botón del panel. */
+    return G_SOURCE_REMOVE;
+}
+
+static void
+on_nm_changed (gpointer user_data)
+{
+    NetPlugin *np = user_data;
+    if (g_object_get_data (G_OBJECT (np->button), "nm-refresh-pending"))
+        return;
+    g_object_set_data (G_OBJECT (np->button), "nm-refresh-pending",
+                       GINT_TO_POINTER (1));
+    g_timeout_add (100, on_nm_changed_cb, np);
 }
 
 /* ---------- callbacks del panel ---------- */
@@ -573,6 +729,7 @@ net_plugin_new (XfcePanelPlugin *plugin)
     np->last_connected = FALSE;
     np->last_vpn       = FALSE;
     np->last_wired     = FALSE;
+    np->notif_ready    = FALSE;
 
     load_config (np);
 
@@ -599,6 +756,7 @@ net_plugin_new (XfcePanelPlugin *plugin)
     gtk_widget_show_all (np->button);
 
     np->popup = popup_create (plugin, np->button);
+    np->popup->plugin_ref = np;
 
     g_signal_connect (plugin, "size-changed",
                       G_CALLBACK (on_size_changed), np);
@@ -660,6 +818,9 @@ net_plugin_construct (XfcePanelPlugin *plugin)
     bindtextdomain (GETTEXT_PACKAGE, LOCALEDIR);
     bind_textdomain_codeset (GETTEXT_PACKAGE, "UTF-8");
     textdomain (GETTEXT_PACKAGE);
+#ifdef HAVE_LIBNOTIFY
+    notify_init ("xfce-net-plugin");
+#endif
 
     NetPlugin *np = net_plugin_new (plugin);
     xfce_panel_plugin_menu_show_configure (plugin);

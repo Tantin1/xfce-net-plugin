@@ -131,3 +131,49 @@ msgstr "Ошибка подключения"
 
 msgid "Show separators"
 msgstr "Показывать разделители"
+
+msgid "Connected to %s"
+msgstr "Подключено к %s"
+
+msgid "Disconnected"
+msgstr "Отключено"
+
+msgid "Ethernet"
+msgstr "Ethernet"
+
+msgid "Cable connected"
+msgstr "Кабель подключён"
+
+msgid "Cable disconnected"
+msgstr "Кабель отключён"
+
+msgid "VPN"
+msgstr "VPN"
+
+msgid "Show notifications"
+msgstr "Показывать уведомления"
+
+msgid "If the popup and the notification overlap, the notification will partially cover the popup."
+msgstr "Если popup и уведомление перекрываются, уведомление частично закроет popup."
+
+
+msgid "Connecting to <b>%s</b>…"
+msgstr "Подключение к <b>%s</b>…"
+
+msgid "Last connection attempt failed"
+msgstr "Последняя попытка подключения не удалась"
+
+msgid "Retry with saved password"
+msgstr "Повторить с сохранённым паролем"
+
+msgid "Rewrite password"
+msgstr "Ввести пароль заново"
+
+msgid "Try a different password"
+msgstr "Попробовать другой пароль"
+
+msgid "Back"
+msgstr "Назад"
+
+msgid "Network manager plugin for the XFCE panel"
+msgstr "Плагин управления сетью для панели XFCE"

@@ -131,3 +131,49 @@ msgstr "Connessione fallita"
 
 msgid "Show separators"
 msgstr "Mostra separatori"
+
+msgid "Connected to %s"
+msgstr "Connesso a %s"
+
+msgid "Disconnected"
+msgstr "Disconnesso"
+
+msgid "Ethernet"
+msgstr "Ethernet"
+
+msgid "Cable connected"
+msgstr "Cavo connesso"
+
+msgid "Cable disconnected"
+msgstr "Cavo disconnesso"
+
+msgid "VPN"
+msgstr "VPN"
+
+msgid "Show notifications"
+msgstr "Mostra notifiche"
+
+msgid "If the popup and the notification overlap, the notification will partially cover the popup."
+msgstr "Se il popup e la notifica si sovrappongono, la notifica coprirà parzialmente il popup."
+
+
+msgid "Connecting to <b>%s</b>…"
+msgstr "Connessione a <b>%s</b>…"
+
+msgid "Last connection attempt failed"
+msgstr "Ultimo tentativo di connessione fallito"
+
+msgid "Retry with saved password"
+msgstr "Riprova con la password salvata"
+
+msgid "Rewrite password"
+msgstr "Riscrivi password"
+
+msgid "Try a different password"
+msgstr "Prova un'altra password"
+
+msgid "Back"
+msgstr "Indietro"
+
+msgid "Network manager plugin for the XFCE panel"
+msgstr "Plugin di gestione rete per il pannello XFCE"

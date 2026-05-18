@@ -10,6 +10,7 @@ find_package(Intl REQUIRED)
 
 pkg_check_modules(GTK3       REQUIRED gtk+-3.0>=3.24)
 pkg_check_modules(XFCE4PANEL REQUIRED libxfce4panel-2.0>=4.18)
+pkg_check_modules(LIBNOTIFY           libnotify>=0.7)
 
 set(GETTEXT_PACKAGE "xfce-net-plugin")
 set(LOCALE_DIR "${CMAKE_INSTALL_PREFIX}/share/locale")
@@ -18,6 +19,12 @@ add_definitions(
     -DGETTEXT_PACKAGE="${GETTEXT_PACKAGE}"
     -DLOCALEDIR="${LOCALE_DIR}"
 )
+if(LIBNOTIFY_FOUND)
+    add_definitions(-DHAVE_LIBNOTIFY)
+    message(STATUS "libnotify: encontrada, notificaciones activadas")
+else()
+    message(STATUS "libnotify: NO encontrada, notificaciones desactivadas")
+endif()
 
 add_library(xfce-net-plugin MODULE
     plugin.c
@@ -28,6 +35,7 @@ add_library(xfce-net-plugin MODULE
 target_include_directories(xfce-net-plugin PRIVATE
     ${GTK3_INCLUDE_DIRS}
     ${XFCE4PANEL_INCLUDE_DIRS}
+    ${LIBNOTIFY_INCLUDE_DIRS}
 )
 
 target_compile_options(xfce-net-plugin PRIVATE
@@ -40,6 +48,7 @@ target_link_libraries(xfce-net-plugin PRIVATE
     ${GTK3_LIBRARIES}
     ${XFCE4PANEL_LIBRARIES}
     ${Intl_LIBRARIES}
+    ${LIBNOTIFY_LIBRARIES}
 )
 
 if(NOT XFCE_PLUGIN_DIR)

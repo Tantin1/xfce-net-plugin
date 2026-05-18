@@ -131,3 +131,49 @@ msgstr "接続失敗"
 
 msgid "Show separators"
 msgstr "区切り線を表示"
+
+msgid "Connected to %s"
+msgstr "%s に接続しました"
+
+msgid "Disconnected"
+msgstr "切断されました"
+
+msgid "Ethernet"
+msgstr "Ethernet"
+
+msgid "Cable connected"
+msgstr "ケーブル接続"
+
+msgid "Cable disconnected"
+msgstr "ケーブル切断"
+
+msgid "VPN"
+msgstr "VPN"
+
+msgid "Show notifications"
+msgstr "通知を表示"
+
+msgid "If the popup and the notification overlap, the notification will partially cover the popup."
+msgstr "ポップアップと通知が重なる場合、通知がポップアップを部分的に覆います。"
+
+
+msgid "Connecting to <b>%s</b>…"
+msgstr "<b>%s</b> に接続中…"
+
+msgid "Last connection attempt failed"
+msgstr "前回の接続試行が失敗しました"
+
+msgid "Retry with saved password"
+msgstr "保存済みパスワードで再試行"
+
+msgid "Rewrite password"
+msgstr "パスワードを再入力"
+
+msgid "Try a different password"
+msgstr "別のパスワードを試す"
+
+msgid "Back"
+msgstr "戻る"
+
+msgid "Network manager plugin for the XFCE panel"
+msgstr "XFCEパネル用ネットワーク管理プラグイン"

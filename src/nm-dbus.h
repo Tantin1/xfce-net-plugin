@@ -28,6 +28,14 @@ GDBusConnection *nm_dbus_connect         (void);
 gboolean         nm_has_saved_connection (GDBusConnection *conn, const gchar *ssid);
 gboolean         nm_forget_connection    (GDBusConnection *conn, const gchar *ssid);
 
+/* Migra perfiles viejos con `connection.interface-name` fijado:
+ *   - Si hay varios perfiles con la misma SSID, deja uno y borra los demás.
+ *   - Al perfil que queda, le saca el binding de interface-name (lo vacía),
+ *     así NM lo deja usar con cualquier adapter Wi-Fi.
+ * Idempotente: si ya está limpio, no hace nada.
+ * Devuelve TRUE si modificó algo. */
+gboolean nm_strip_interface_name (GDBusConnection *conn, const gchar *ssid);
+
 gboolean nm_get_wifi_enabled    (GDBusConnection *conn);
 void     nm_set_wifi_enabled    (GDBusConnection *conn, gboolean enabled);
 
@@ -97,5 +105,8 @@ void   nm_unsubscribe_signals (GDBusConnection *conn, guint *ids);
 
 /* Solicita un escaneo Wi-Fi activo al adaptador. */
 void nm_request_scan (GDBusConnection *conn, const gchar *device_path);
+
+/* Devuelve TRUE si algún adaptador Wi-Fi está en proceso de conectar (estados 40-90). */
+gboolean nm_any_wifi_device_connecting (GDBusConnection *conn);
 
 #endif /* NM_DBUS_H */

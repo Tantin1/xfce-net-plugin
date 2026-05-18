@@ -131,3 +131,49 @@ msgstr "连接失败"
 
 msgid "Show separators"
 msgstr "显示分隔线"
+
+msgid "Connected to %s"
+msgstr "已连接到 %s"
+
+msgid "Disconnected"
+msgstr "已断开"
+
+msgid "Ethernet"
+msgstr "以太网"
+
+msgid "Cable connected"
+msgstr "网线已连接"
+
+msgid "Cable disconnected"
+msgstr "网线已断开"
+
+msgid "VPN"
+msgstr "VPN"
+
+msgid "Show notifications"
+msgstr "显示通知"
+
+msgid "If the popup and the notification overlap, the notification will partially cover the popup."
+msgstr "如果弹出窗口与通知重叠，通知将部分遮挡弹出窗口。"
+
+
+msgid "Connecting to <b>%s</b>…"
+msgstr "正在连接到 <b>%s</b>…"
+
+msgid "Last connection attempt failed"
+msgstr "上次连接尝试失败"
+
+msgid "Retry with saved password"
+msgstr "使用已保存的密码重试"
+
+msgid "Rewrite password"
+msgstr "重新输入密码"
+
+msgid "Try a different password"
+msgstr "尝试其他密码"
+
+msgid "Back"
+msgstr "返回"
+
+msgid "Network manager plugin for the XFCE panel"
+msgstr "XFCE 面板网络管理插件"

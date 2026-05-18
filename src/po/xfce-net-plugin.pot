@@ -163,3 +163,51 @@ msgstr ""
 
 msgid "Show separators"
 msgstr ""
+
+#: plugin.c
+#, c-format
+msgid "Connected to %s"
+msgstr ""
+
+msgid "Disconnected"
+msgstr ""
+
+msgid "Ethernet"
+msgstr ""
+
+msgid "Cable connected"
+msgstr ""
+
+msgid "Cable disconnected"
+msgstr ""
+
+msgid "VPN"
+msgstr ""
+
+msgid "Show notifications"
+msgstr ""
+
+msgid "If the popup and the notification overlap, the notification will partially cover the popup."
+msgstr ""
+
+
+msgid "Connecting to <b>%s</b>…"
+msgstr ""
+
+msgid "Last connection attempt failed"
+msgstr ""
+
+msgid "Retry with saved password"
+msgstr ""
+
+msgid "Rewrite password"
+msgstr ""
+
+msgid "Try a different password"
+msgstr ""
+
+msgid "Back"
+msgstr ""
+
+msgid "Network manager plugin for the XFCE panel"
+msgstr ""
