@@ -1,0 +1,34 @@
+--- src/popup.c	2026-05-18 23:08:27.010249905 +0000
++++ src/popup.c	2026-05-18 23:08:27.095853741 +0000
+@@ -2105,6 +2105,31 @@
+ on_focus_out (GtkWidget *widget, GdkEventFocus *ev, NetPopup *popup)
+ {
+     (void) widget; (void) ev;
++
++    /* No cerrar si el foco fue a una ventana hija (diálogos propios del popup,
++     * como "Olvidar red" o "Conectar a red oculta"). */
++    GdkDisplay *display = gtk_widget_get_display (popup->window);
++    GdkSeat    *seat    = gdk_display_get_default_seat (display);
++    GdkWindow  *focused = gdk_device_get_window_at_position (
++                              gdk_seat_get_keyboard (seat), NULL, NULL);
++    if (focused) {
++        GtkWidget *owner = gtk_get_event_widget ((GdkEvent *) ev);
++        (void) owner;
++        /* Subir por la jerarquía de GdkWindow hasta encontrar si pertenece
++         * a una ventana GTK transient-for el popup. */
++        GdkWindow *top = gdk_window_get_toplevel (focused);
++        if (top && top != gtk_widget_get_window (popup->window)) {
++            gpointer user_data = NULL;
++            gdk_window_get_user_data (top, &user_data);
++            if (user_data && GTK_IS_WINDOW (user_data)) {
++                GtkWindow *focus_win = GTK_WINDOW (user_data);
++                if (gtk_window_get_transient_for (focus_win) ==
++                    GTK_WINDOW (popup->window))
++                    return FALSE; /* diálogo propio — no cerrar */
++            }
++        }
++    }
++
+     popup_hide (popup);
+     return FALSE;
+ }

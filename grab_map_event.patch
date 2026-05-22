@@ -1,0 +1,80 @@
+--- src/popup.c	2026-05-19 01:14:49.625248278 +0000
++++ src/popup.c	2026-05-19 01:15:00.666676247 +0000
+@@ -53,6 +53,11 @@
+ static gboolean op_timeout_cb (gpointer user_data);
+ static void schedule_refresh_ui (NetPopup *popup);
+ 
++typedef struct {
++    NetPopup  *popup;
++    GtkWidget *button;
++} GrabData;
++
+ /* ---------- prototipos anticipados ---------- */
+ 
+ static void rebuild_ui (NetPopup *popup);
+@@ -67,6 +72,38 @@
+ static void on_nm_signal_popup (gpointer user_data);
+ static void on_eye_clicked     (GtkWidget *btn, GtkEntry *entry);
+ 
++/* ---------- grab diferido al mapear la ventana ---------- */
++
++static gboolean
++on_window_mapped (GtkWidget *widget, GdkEvent *event, gpointer user_data)
++{
++    (void) event;
++    GrabData  *gd   = user_data;
++    NetPopup  *popup = gd->popup;
++    GdkDisplay *display = gtk_widget_get_display (widget);
++    GdkSeat    *seat    = gdk_display_get_default_seat (display);
++
++    GdkGrabStatus grab_status = gdk_seat_grab (
++            seat,
++            gtk_widget_get_window (widget),
++            GDK_SEAT_CAPABILITY_ALL,
++            TRUE, NULL, NULL, NULL, NULL);
++
++    if (grab_status == GDK_GRAB_SUCCESS) {
++        popup->press_handler =
++            g_signal_connect (popup->window, "button-press-event",
++                              G_CALLBACK (on_button_press), popup);
++    } else {
++        g_warning ("xfce-net-plugin: grab falló en map-event, código: %d", (int) grab_status);
++        popup->press_handler =
++            g_signal_connect (popup->window, "focus-out-event",
++                              G_CALLBACK (on_focus_out), popup);
++    }
++
++    g_free (gd);
++    return FALSE; /* no consumir el evento */
++}
++
+ /* ---------- posicionamiento ---------- */
+ 
+ static void
+@@ -2268,20 +2305,12 @@
+     seat    = gdk_display_get_default_seat (display);
+     popup->button = button;
+     {
+-        GdkGrabStatus grab_status;
+-        grab_status = gdk_seat_grab (seat,
+-                                     gtk_widget_get_window (popup->window),
+-                                     GDK_SEAT_CAPABILITY_ALL,
+-                                     TRUE, NULL, NULL, NULL, NULL);
+-        if (grab_status == GDK_GRAB_SUCCESS) {
+-            popup->press_handler =
+-                g_signal_connect (popup->window, "button-press-event",
+-                                  G_CALLBACK (on_button_press), popup);
+-        } else {
+-            popup->press_handler =
+-                g_signal_connect (popup->window, "focus-out-event",
+-                                  G_CALLBACK (on_focus_out), popup);
+-        }
++        /* Diferir el grab a cuando la ventana esté realmente visible. */
++        GrabData *gd = g_new0 (GrabData, 1);
++        gd->popup  = popup;
++        gd->button = button;
++        g_signal_connect (popup->window, "map-event",
++                          G_CALLBACK (on_window_mapped), gd);
+     }
+ 
+     /* Pedir escaneo al abrir. */

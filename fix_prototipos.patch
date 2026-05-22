@@ -1,0 +1,11 @@
+--- src/popup.c	2026-05-19 01:20:02.611769265 +0000
++++ src/popup.c	2026-05-19 01:20:02.767119419 +0000
+@@ -71,6 +71,8 @@
+ static void on_connect_clicked (GtkWidget *btn, gpointer rd_ptr);
+ static void on_nm_signal_popup (gpointer user_data);
+ static void on_eye_clicked     (GtkWidget *btn, GtkEntry *entry);
++static gboolean on_button_press (GtkWidget *widget, GdkEventButton *event, NetPopup *popup);
++static gboolean on_focus_out    (GtkWidget *widget, GdkEventFocus *ev, NetPopup *popup);
+ 
+ /* ---------- grab diferido al mapear la ventana ---------- */
+ 

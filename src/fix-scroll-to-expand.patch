@@ -1,0 +1,47 @@
+--- popup.c	2026-05-22 02:51:35.746188145 +0000
++++ popup.c	2026-05-22 02:51:35.748170874 +0000
+@@ -742,6 +742,35 @@
+ }
+ 
+ static void
++scroll_to_expand_on_alloc (GtkWidget *expand, GdkRectangle *alloc, gpointer user_data)
++{
++    NetPopup      *popup   = user_data;
++    GtkWidget     *scroll  = popup->scroll;
++    GtkWidget     *content = gtk_bin_get_child (GTK_BIN (scroll));
++    GtkAdjustment *adj     = gtk_scrolled_window_get_vadjustment (
++                                 GTK_SCROLLED_WINDOW (scroll));
++
++    /* Desconectarse inmediatamente: solo ejecutar una vez por apertura. */
++    g_signal_handlers_disconnect_by_func (expand, scroll_to_expand_on_alloc, user_data);
++
++    gint expand_y = 0;
++    if (!gtk_widget_translate_coordinates (expand, content, 0, 0, NULL, &expand_y))
++        return;
++
++    gdouble cur    = gtk_adjustment_get_value (adj);
++    gdouble page   = gtk_adjustment_get_page_size (adj);
++    gdouble top    = (gdouble) expand_y;
++    gdouble bottom = top + (gdouble) alloc->height;
++
++    /* Mover lo mínimo necesario para que el expand sea completamente visible. */
++    if (bottom > cur + page)
++        gtk_adjustment_set_value (adj, MIN (bottom - page,
++                                            gtk_adjustment_get_upper (adj) - page));
++    else if (top < cur)
++        gtk_adjustment_set_value (adj, top);
++}
++
++static void
+ on_row_clicked (GtkWidget *event_box, GdkEventButton *event, gpointer rd_ptr)
+ {
+     (void) event;
+@@ -767,6 +796,8 @@
+         }
+         gtk_widget_show (rd->expand_box);
+         rd->popup->current_expand_box = rd->expand_box;
++        g_signal_connect (rd->expand_box, "size-allocate",
++                          G_CALLBACK (scroll_to_expand_on_alloc), rd->popup);
+     }
+ }
+ 

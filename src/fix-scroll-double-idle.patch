@@ -1,0 +1,70 @@
+--- popup.c	2026-05-22 03:27:55.281091497 +0000
++++ popup.c	2026-05-22 03:27:55.285301205 +0000
+@@ -741,31 +741,30 @@
+     g_free (rd);
+ }
+ 
+-static void
+-scroll_to_expand_on_alloc (GtkWidget *expand, GdkRectangle *alloc, gpointer user_data)
++static gboolean
++scroll_to_expand_idle2 (gpointer user_data)
+ {
+     NetPopup      *popup   = user_data;
++    GtkWidget     *expand  = popup->current_expand_box;
+     GtkWidget     *scroll  = popup->scroll;
+     GtkWidget     *content = gtk_bin_get_child (GTK_BIN (scroll));
+     GtkAdjustment *adj     = gtk_scrolled_window_get_vadjustment (
+                                  GTK_SCROLLED_WINDOW (scroll));
+ 
+-    /* Desconectarse inmediatamente: solo ejecutar una vez por apertura. */
+-    g_signal_handlers_disconnect_by_func (expand, scroll_to_expand_on_alloc, user_data);
++    if (!expand || !gtk_widget_get_visible (expand))
++        return G_SOURCE_REMOVE;
+ 
+     gint expand_y = 0;
+     if (!gtk_widget_translate_coordinates (expand, content, 0, 0, NULL, &expand_y))
+-        return;
++        return G_SOURCE_REMOVE;
+ 
+-    gdouble cur     = gtk_adjustment_get_value (adj);
+-    gdouble page    = gtk_adjustment_get_page_size (adj);
+-    gdouble upper   = gtk_adjustment_get_upper (adj);
+-    gdouble visible = (gdouble) gtk_widget_get_allocated_height (scroll);
+-    gdouble top     = (gdouble) expand_y;
+-    gdouble bottom  = top + (gdouble) alloc->height;
++    GtkAllocation alloc;
++    gtk_widget_get_allocation (expand, &alloc);
+ 
+-    g_print ("scroll: expand_y=%d h=%d top=%.0f bottom=%.0f cur=%.0f page=%.0f upper=%.0f visible=%.0f\n",
+-             expand_y, alloc->height, top, bottom, cur, page, upper, visible);
++    gdouble cur    = gtk_adjustment_get_value (adj);
++    gdouble page   = gtk_adjustment_get_page_size (adj);
++    gdouble top    = (gdouble) expand_y;
++    gdouble bottom = top + (gdouble) alloc.height;
+ 
+     /* Mover lo mínimo necesario para que el expand sea completamente visible. */
+     if (bottom > cur + page)
+@@ -773,6 +772,23 @@
+                                             gtk_adjustment_get_upper (adj) - page));
+     else if (top < cur)
+         gtk_adjustment_set_value (adj, top);
++
++    return G_SOURCE_REMOVE;
++}
++
++static gboolean
++scroll_to_expand_idle1 (gpointer user_data)
++{
++    g_idle_add (scroll_to_expand_idle2, user_data);
++    return G_SOURCE_REMOVE;
++}
++
++static void
++scroll_to_expand_on_alloc (GtkWidget *expand, GdkRectangle *alloc, gpointer user_data)
++{
++    (void) alloc;
++    g_signal_handlers_disconnect_by_func (expand, scroll_to_expand_on_alloc, user_data);
++    g_idle_add (scroll_to_expand_idle1, user_data);
+ }
+ 
+ static void

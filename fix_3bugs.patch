@@ -1,0 +1,73 @@
+--- src/popup.c	2026-05-19 05:53:33.637372150 +0000
++++ src/popup.c	2026-05-19 05:53:33.763585876 +0000
+@@ -450,8 +450,13 @@
+         } else {
+             connected = is_ssid_connected_anywhere (popup->conn, attempt_ssid);
+         }
+-        if (!connected)
++        if (connected) {
++            /* Conexión confirmada — limpiar la entrada para que no genere
++             * spinner ni etiqueta "conectando" en futuras reaperturas. */
++            g_hash_table_iter_remove (&iter);
++        } else {
+             to_mark_failed = g_slist_prepend (to_mark_failed, g_strdup (attempt_ssid));
++        }
+         g_strfreev (parts);
+     }
+ 
+@@ -784,6 +789,13 @@
+     g_hash_table_replace (rd->popup->ops_in_progress,
+                           g_strdup (rd->device_path), op);
+ 
++    /* Limpiar intento pendiente: la desconexión es voluntaria, no un fallo. */
++    if (rd->popup->pending_attempts && rd->ssid && rd->device_path) {
++        gchar *attempt_key = g_strdup_printf ("%s|%s", rd->ssid, rd->device_path);
++        g_hash_table_remove (rd->popup->pending_attempts, attempt_key);
++        g_free (attempt_key);
++    }
++
+     nm_disconnect_device_async (rd->popup->conn, rd->device_path);
+ }
+ 
+@@ -1682,7 +1694,9 @@
+     gchar *primary_ssid = get_primary_ssid (popup->conn);
+ 
+     /* Si NM dice "conectado" pero hay un CONNECT en curso para ese mismo SSID,
+-     * ignorarlo — NM miente brevemente antes de confirmar el fallo de auth. */
++     * ignorarlo — NM miente brevemente antes de confirmar el fallo de auth.
++     * Verificar tanto ops_in_progress (popup abierto) como pending_attempts
++     * (popup reabierto con op en curso). */
+     if (primary_ssid && g_hash_table_size (popup->ops_in_progress) > 0) {
+         GHashTableIter iter;
+         gpointer key, value;
+@@ -1697,6 +1711,30 @@
+             }
+         }
+     }
++    if (primary_ssid && popup->pending_attempts &&
++        g_hash_table_size (popup->pending_attempts) > 0) {
++        GHashTableIter iter;
++        gpointer key, value;
++        g_hash_table_iter_init (&iter, popup->pending_attempts);
++        while (g_hash_table_iter_next (&iter, &key, &value)) {
++            gint64 *ts  = value;
++            gint64  age = (g_get_monotonic_time () - *ts) / 1000;
++            if (age < OP_TIMEOUT_MS) {
++                const gchar *k   = key;
++                const gchar *sep = g_strstr_len (k, -1, "|");
++                if (sep) {
++                    gchar *pending_ssid = g_strndup (k, sep - k);
++                    if (g_strcmp0 (pending_ssid, primary_ssid) == 0) {
++                        g_free (primary_ssid);
++                        primary_ssid = NULL;
++                        g_free (pending_ssid);
++                        break;
++                    }
++                    g_free (pending_ssid);
++                }
++            }
++        }
++    }
+ 
+     /* Buscar SSID conectando: primero en ops_in_progress (popup abierto),
+      * luego en pending_attempts (popup reabierto con op en curso). */

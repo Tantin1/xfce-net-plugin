@@ -1,0 +1,16 @@
+--- popup.c	2026-05-22 01:01:57.306343402 +0000
++++ popup.c	2026-05-22 01:01:57.307776656 +0000
+@@ -711,6 +711,13 @@
+                     if (rd->state_a_box && rd->state_b_box) {
+                         gtk_widget_show (rd->state_a_box);
+                         gtk_widget_hide (rd->state_b_box);
++                        if (g_object_get_data (G_OBJECT (rd->expand_box),
++                                               "passive-connecting")) {
++                            if (rd->retry_btn)
++                                gtk_widget_set_sensitive (rd->retry_btn, FALSE);
++                            if (rd->try_other_btn)
++                                gtk_widget_set_sensitive (rd->try_other_btn, FALSE);
++                        }
+                     }
+                     popup->current_expand_box = rd->expand_box;
+                 }

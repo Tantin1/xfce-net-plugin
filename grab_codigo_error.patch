@@ -1,0 +1,10 @@
+--- src/popup.c	2026-05-19 01:11:11.415824106 +0000
++++ src/popup.c	2026-05-19 01:11:11.436000089 +0000
+@@ -2278,6 +2278,7 @@
+                 g_signal_connect (popup->window, "button-press-event",
+                                   G_CALLBACK (on_button_press), popup);
+         } else {
++            g_warning ("xfce-net-plugin: grab falló, código: %d", (int) grab_status);
+             popup->press_handler =
+                 g_signal_connect (popup->window, "focus-out-event",
+                                   G_CALLBACK (on_focus_out), popup);

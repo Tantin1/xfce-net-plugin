@@ -1,0 +1,57 @@
+--- popup.c	2026-05-22 02:28:46.234240515 +0000
++++ popup.c	2026-05-22 02:28:46.236989691 +0000
+@@ -741,42 +741,6 @@
+     g_free (rd);
+ }
+ 
+-static gboolean
+-scroll_to_expand (gpointer user_data)
+-{
+-    NetPopup  *popup = user_data;
+-    GtkWidget *expand = popup->current_expand_box;
+-    if (!expand || !gtk_widget_get_visible (expand))
+-        return G_SOURCE_REMOVE;
+-
+-    GtkWidget     *scroll  = popup->scroll;
+-    GtkWidget     *content = gtk_bin_get_child (GTK_BIN (scroll));
+-    GtkAdjustment *adj     = gtk_scrolled_window_get_vadjustment (
+-                                 GTK_SCROLLED_WINDOW (scroll));
+-
+-    /* Posición del expand relativa al contenido desplazable. */
+-    gint expand_y = 0;
+-    if (!gtk_widget_translate_coordinates (expand, content, 0, 0, NULL, &expand_y))
+-        return G_SOURCE_REMOVE;
+-
+-    GtkAllocation expand_alloc;
+-    gtk_widget_get_allocation (expand, &expand_alloc);
+-
+-    gdouble cur    = gtk_adjustment_get_value (adj);
+-    gdouble page   = gtk_adjustment_get_page_size (adj);
+-    gdouble top    = (gdouble) expand_y;
+-    gdouble bottom = top + (gdouble) expand_alloc.height;
+-
+-    /* Solo mover si el expand está parcial o totalmente fuera del área visible. */
+-    if (bottom > cur + page)
+-        gtk_adjustment_set_value (adj, MIN (bottom - page,
+-                                            gtk_adjustment_get_upper (adj) - page));
+-    else if (top < cur)
+-        gtk_adjustment_set_value (adj, top);
+-
+-    return G_SOURCE_REMOVE;
+-}
+-
+ static void
+ on_row_clicked (GtkWidget *event_box, GdkEventButton *event, gpointer rd_ptr)
+ {
+@@ -803,11 +767,6 @@
+         }
+         gtk_widget_show (rd->expand_box);
+         rd->popup->current_expand_box = rd->expand_box;
+-
+-        /* Desplazar el scroll para que el expand quede visible. Se difiere
+-         * al siguiente ciclo inactivo porque GTK necesita recalcular el
+-         * tamaño del expand antes de que podamos leer su posición. */
+-        g_idle_add ((GSourceFunc) scroll_to_expand, rd->popup);
+     }
+ }
+ 

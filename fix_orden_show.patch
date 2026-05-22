@@ -1,0 +1,12 @@
+--- src/popup.c	2026-05-19 01:46:28.935416396 +0000
++++ src/popup.c	2026-05-19 01:46:29.030773550 +0000
+@@ -2273,8 +2273,8 @@
+         popup->signal_ids = nm_subscribe_signals (conn, on_nm_signal_popup, popup);
+ 
+     gtk_widget_realize (popup->window);
+-    gtk_widget_show_all (popup->window);
+     position_popup (popup, button);
++    gtk_widget_show_all (popup->window);
+ 
+     popup->button = button;
+     {

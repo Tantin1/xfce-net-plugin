@@ -681,8 +681,6 @@ typedef struct {
     GtkWidget       *back_btn;       /* Estado B: "Volver" */
     GtkWidget       *connect_btn_b;  /* Estado B: "Conectar" */
     GtkWidget       *forget_btn;     /* Botón "Olvidar" (solo en estado A para red con fallo). */
-    GtkWidget       *confirm_box;    /* Contenedor de confirmación "¿Eliminar red guardada?" */
-    GtkWidget       *action_row;     /* Fila con botones Conectar/Olvidar — se oculta al confirmar. */
 } RowData;
 
 static void
@@ -743,37 +741,29 @@ row_data_free (RowData *rd)
     g_free (rd);
 }
 
-static gboolean
-scroll_to_expand_idle (gpointer user_data)
+static void
+scroll_to_expand_on_alloc (GtkWidget *expand, GdkRectangle *alloc, gpointer user_data)
 {
     NetPopup      *popup   = user_data;
-    GtkWidget     *expand  = popup->current_expand_box;
     GtkWidget     *scroll  = popup->scroll;
     GtkWidget     *content = gtk_bin_get_child (GTK_BIN (scroll));
     GtkAdjustment *adj     = gtk_scrolled_window_get_vadjustment (
                                  GTK_SCROLLED_WINDOW (scroll));
 
-    if (!expand || !gtk_widget_get_visible (expand))
-        return G_SOURCE_REMOVE;
-
-    /* El contenedor desplazable envuelve el contenido en un GtkViewport.
-     * El ajustador trabaja con coordenadas relativas al hijo del GtkViewport. */
-    if (GTK_IS_VIEWPORT (content))
-        content = gtk_bin_get_child (GTK_BIN (content));
-    if (!content)
-        return G_SOURCE_REMOVE;
+    /* Desconectarse inmediatamente: solo ejecutar una vez por apertura. */
+    g_signal_handlers_disconnect_by_func (expand, scroll_to_expand_on_alloc, user_data);
 
     gint expand_y = 0;
     if (!gtk_widget_translate_coordinates (expand, content, 0, 0, NULL, &expand_y))
-        return G_SOURCE_REMOVE;
-
-    GtkAllocation alloc;
-    gtk_widget_get_allocation (expand, &alloc);
+        return;
 
     gdouble cur    = gtk_adjustment_get_value (adj);
     gdouble page   = gtk_adjustment_get_page_size (adj);
     gdouble top    = (gdouble) expand_y;
-    gdouble bottom = top + (gdouble) alloc.height;
+    gdouble bottom = top + (gdouble) alloc->height;
+
+    g_print ("scroll_to_expand: expand_y=%d height=%d top=%.0f bottom=%.0f cur=%.0f page=%.0f\n",
+             expand_y, alloc->height, top, bottom, cur, page);
 
     /* Mover lo mínimo necesario para que el expand sea completamente visible. */
     if (bottom > cur + page)
@@ -781,16 +771,6 @@ scroll_to_expand_idle (gpointer user_data)
                                             gtk_adjustment_get_upper (adj) - page));
     else if (top < cur)
         gtk_adjustment_set_value (adj, top);
-
-    return G_SOURCE_REMOVE;
-}
-
-static void
-scroll_to_expand_on_alloc (GtkWidget *expand, GdkRectangle *alloc, gpointer user_data)
-{
-    (void) alloc;
-    g_signal_handlers_disconnect_by_func (expand, scroll_to_expand_on_alloc, user_data);
-    g_idle_add (scroll_to_expand_idle, user_data);
 }
 
 static void
@@ -819,11 +799,6 @@ on_row_clicked (GtkWidget *event_box, GdkEventButton *event, gpointer rd_ptr)
         }
         gtk_widget_show (rd->expand_box);
         rd->popup->current_expand_box = rd->expand_box;
-        /* Desconectar cualquier conexión previa antes de reconectar,
-         * para que al reabrir el mismo expand también se dispare. */
-        g_signal_handlers_disconnect_by_func (rd->expand_box,
-                                              scroll_to_expand_on_alloc,
-                                              rd->popup);
         g_signal_connect (rd->expand_box, "size-allocate",
                           G_CALLBACK (scroll_to_expand_on_alloc), rd->popup);
     }
@@ -894,40 +869,18 @@ on_forget_clicked (GtkWidget *btn, gpointer rd_ptr)
 {
     (void) btn;
     RowData *rd = rd_ptr;
-    if (!rd->confirm_box) return;
-    if (rd->action_row)        gtk_widget_hide (rd->action_row);
-    if (rd->autoconnect_check) gtk_widget_hide (rd->autoconnect_check);
-    gtk_widget_show (rd->confirm_box);
-}
 
-static void
-on_forget_cancel_clicked (GtkWidget *btn, gpointer rd_ptr)
-{
-    (void) btn;
-    RowData *rd = rd_ptr;
-    if (rd->confirm_box)       gtk_widget_hide (rd->confirm_box);
-    if (rd->action_row)        gtk_widget_show (rd->action_row);
-    if (rd->autoconnect_check) gtk_widget_show (rd->autoconnect_check);
-}
-
-static void
-on_forget_confirm_clicked (GtkWidget *btn, gpointer rd_ptr)
-{
-    (void) btn;
-    RowData *rd = rd_ptr;
-    nm_forget_connection (rd->popup->conn, rd->ssid);
-    g_hash_table_remove (rd->popup->failed_ssids, rd->ssid);
-    {
-        gchar *attempt_key = g_strdup_printf ("%s|%s", rd->ssid, rd->device_path);
-        g_hash_table_remove (rd->popup->pending_attempts, attempt_key);
-        g_free (attempt_key);
-    }
-    if (rd->expand_box) {
-        gtk_widget_hide (rd->expand_box);
-        if (rd->popup->current_expand_box == rd->expand_box)
-            rd->popup->current_expand_box = NULL;
-    }
-    schedule_refresh_ui (rd->popup);
+    GtkWidget *dialog = gtk_message_dialog_new (
+        NULL,
+        0,
+        GTK_MESSAGE_QUESTION,
+        GTK_BUTTONS_YES_NO,
+        _("Forget network \"%s\"?"), rd->ssid);
+    gtk_window_set_title (GTK_WINDOW (dialog), _("Confirm"));
+    gtk_window_set_deletable (GTK_WINDOW (dialog), FALSE);
+    gtk_window_set_position (GTK_WINDOW (dialog), GTK_WIN_POS_CENTER);
+    g_signal_connect (dialog, "response", G_CALLBACK (on_forget_response), rd);
+    gtk_widget_show_all (dialog);
 }
 
 static void
@@ -1378,36 +1331,6 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
         gtk_widget_show (forget_btn);
     }
     gtk_box_pack_start (GTK_BOX (expand_box), action_row, FALSE, FALSE, 0);
-
-    /* Contenedor de confirmación "¿Eliminar red guardada?" — oculto por defecto.
-     * Las señales se conectan más abajo, cuando rd ya existe. */
-    GtkWidget *confirm_box    = NULL;
-    GtkWidget *confirm_cancel = NULL;
-    GtkWidget *confirm_ok     = NULL;
-    if (forget_btn) {
-        confirm_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
-
-        gchar     *confirm_text  = g_strdup_printf (_("Forget network \"%s\"?"), ap->ssid);
-        GtkWidget *confirm_label = gtk_label_new (confirm_text);
-        g_free (confirm_text);
-        gtk_label_set_xalign (GTK_LABEL (confirm_label), 0.0);
-        gtk_box_pack_start (GTK_BOX (confirm_box), confirm_label, FALSE, FALSE, 0);
-
-        GtkWidget *confirm_btns_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
-        gtk_widget_set_halign (confirm_btns_row, GTK_ALIGN_END);
-
-        confirm_cancel = gtk_button_new_with_label (_("Cancel"));
-        confirm_ok     = gtk_button_new_with_label (_("Confirm"));
-        gtk_box_pack_start (GTK_BOX (confirm_btns_row), confirm_cancel, FALSE, FALSE, 0);
-        gtk_box_pack_start (GTK_BOX (confirm_btns_row), confirm_ok,     FALSE, FALSE, 0);
-        gtk_box_pack_start (GTK_BOX (confirm_box), confirm_btns_row,    FALSE, FALSE, 0);
-
-        gtk_box_pack_start (GTK_BOX (expand_box), confirm_box, FALSE, FALSE, 0);
-        gtk_widget_show_all (confirm_box);
-        gtk_widget_hide (confirm_box);
-        gtk_widget_set_no_show_all (confirm_box, TRUE);
-    }
-
     /* Si action_btn tiene no_show_all (caso red guardada con fallo, donde el
      * botón principal pasa a ser retry_btn / connect_btn_b), no lo mostramos.
      * Sin esto el "Connect" residual queda visible en el estado A. */
@@ -1433,14 +1356,6 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
     rd->pass_entry        = pass_entry;
     rd->autoconnect_check = autoconnect_check_widget;
     rd->forget_btn        = forget_btn;
-    rd->confirm_box       = confirm_box;
-    rd->action_row        = action_row;
-    if (confirm_cancel)
-        g_signal_connect (confirm_cancel, "clicked",
-                          G_CALLBACK (on_forget_cancel_clicked),  rd);
-    if (confirm_ok)
-        g_signal_connect (confirm_ok, "clicked",
-                          G_CALLBACK (on_forget_confirm_clicked), rd);
 
     /* Si es red guardada con fallo previo, construir los dos sub-bloques
      * (estado A = botones de reintentar/probar otra; estado B = entry de

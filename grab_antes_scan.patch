@@ -1,0 +1,45 @@
+--- src/popup.c	2026-05-19 00:40:10.265945736 +0000
++++ src/popup.c	2026-05-19 00:40:10.287686766 +0000
+@@ -2265,24 +2265,10 @@
+     gtk_widget_show_all (popup->window);
+     gtk_window_present (GTK_WINDOW (popup->window));
+ 
+-    /* Pedir escaneo al abrir. */
+-    {
+-        GSList *devs = nm_get_wifi_devices (conn);
+-        for (GSList *l = devs; l; l = l->next) {
+-            NmDevice *dev = l->data;
+-            nm_request_scan (conn, dev->object_path);
+-        }
+-        nm_device_list_free (devs);
+-    }
+-
++    /* Grab inmediatamente después de mostrar, antes de cualquier llamada DBus. */
+     display = gtk_widget_get_display (popup->window);
+     seat    = gdk_display_get_default_seat (display);
+     popup->button = button;
+-
+-    /* Forzar foco antes del grab para aumentar chances de éxito. */
+-    gtk_widget_grab_focus (popup->window);
+-    gdk_display_flush (display);
+-
+     {
+         GdkGrabStatus grab_status;
+         grab_status = gdk_seat_grab (seat,
+@@ -2304,6 +2290,16 @@
+             gdk_window_add_filter (NULL, on_gdk_event_filter, popup);
+         }
+     }
++
++    /* Pedir escaneo al abrir (después del grab). */
++    {
++        GSList *devs = nm_get_wifi_devices (conn);
++        for (GSList *l = devs; l; l = l->next) {
++            NmDevice *dev = l->data;
++            nm_request_scan (conn, dev->object_path);
++        }
++        nm_device_list_free (devs);
++    }
+ }
+ 
+ void

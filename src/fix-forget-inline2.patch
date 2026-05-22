@@ -1,0 +1,52 @@
+--- popup.c	2026-05-22 04:19:39.363161067 +0000
++++ popup.c	2026-05-22 04:19:39.364315331 +0000
+@@ -682,6 +682,7 @@
+     GtkWidget       *connect_btn_b;  /* Estado B: "Conectar" */
+     GtkWidget       *forget_btn;     /* Botón "Olvidar" (solo en estado A para red con fallo). */
+     GtkWidget       *confirm_box;    /* Contenedor de confirmación "¿Eliminar red guardada?" */
++    GtkWidget       *action_row;     /* Fila con botones Conectar/Olvidar — se oculta al confirmar. */
+ } RowData;
+ 
+ static void
+@@ -894,9 +895,7 @@
+     (void) btn;
+     RowData *rd = rd_ptr;
+     if (!rd->confirm_box) return;
+-    if (rd->state_a_box)       gtk_widget_hide (rd->state_a_box);
+-    if (rd->state_b_box)       gtk_widget_hide (rd->state_b_box);
+-    if (rd->autoconnect_check) gtk_widget_hide (rd->autoconnect_check);
++    if (rd->action_row) gtk_widget_hide (rd->action_row);
+     gtk_widget_show (rd->confirm_box);
+ }
+ 
+@@ -905,9 +904,8 @@
+ {
+     (void) btn;
+     RowData *rd = rd_ptr;
+-    if (rd->confirm_box)       gtk_widget_hide (rd->confirm_box);
+-    if (rd->state_a_box)       gtk_widget_show (rd->state_a_box);
+-    if (rd->autoconnect_check) gtk_widget_show (rd->autoconnect_check);
++    if (rd->confirm_box) gtk_widget_hide (rd->confirm_box);
++    if (rd->action_row)  gtk_widget_show (rd->action_row);
+ }
+ 
+ static void
+@@ -1387,7 +1385,9 @@
+     if (forget_btn) {
+         confirm_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
+ 
+-        GtkWidget *confirm_label = gtk_label_new (_("Delete saved network?"));
++        gchar     *confirm_text  = g_strdup_printf (_("Forget network \"%s\"?"), ap->ssid);
++        GtkWidget *confirm_label = gtk_label_new (confirm_text);
++        g_free (confirm_text);
+         gtk_label_set_xalign (GTK_LABEL (confirm_label), 0.0);
+         gtk_box_pack_start (GTK_BOX (confirm_box), confirm_label, FALSE, FALSE, 0);
+ 
+@@ -1432,6 +1432,7 @@
+     rd->autoconnect_check = autoconnect_check_widget;
+     rd->forget_btn        = forget_btn;
+     rd->confirm_box       = confirm_box;
++    rd->action_row        = action_row;
+     if (confirm_cancel)
+         g_signal_connect (confirm_cancel, "clicked",
+                           G_CALLBACK (on_forget_cancel_clicked),  rd);

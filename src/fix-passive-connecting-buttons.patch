@@ -1,0 +1,15 @@
+--- popup.c	2026-05-22 01:44:39.310701088 +0000
++++ popup.c	2026-05-22 01:44:39.311897362 +0000
+@@ -1350,6 +1350,12 @@
+         /* Insertar state_a_box justo antes del action_row. */
+         gtk_box_pack_start (GTK_BOX (expand_box), rd->state_a_box,
+                             FALSE, FALSE, 0);
++        /* Si hay un intento de conexión en curso (conectando B), deshabilitar
++         * los botones antes de mostrarlos para evitar el destello habilitado. */
++        if (is_connecting) {
++            gtk_widget_set_sensitive (rd->retry_btn,     FALSE);
++            gtk_widget_set_sensitive (rd->try_other_btn, FALSE);
++        }
+         gtk_widget_show_all (rd->state_a_box);
+ 
+         /* ---- Estado B (oculto inicialmente) ---- */

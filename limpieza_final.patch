@@ -1,0 +1,74 @@
+--- src/popup.c	2026-05-19 01:30:29.895980025 +0000
++++ src/popup.c	2026-05-19 01:30:30.001049389 +0000
+@@ -99,7 +99,6 @@
+             g_signal_connect (popup->window, "button-press-event",
+                               G_CALLBACK (on_button_press), popup);
+     } else {
+-        g_warning ("xfce-net-plugin: grab falló en map-event, código: %d", (int) grab_status);
+         popup->press_handler =
+             g_signal_connect (popup->window, "focus-out-event",
+                               G_CALLBACK (on_focus_out), popup);
+@@ -2143,34 +2142,6 @@
+     return GDK_EVENT_PROPAGATE;
+ }
+ 
+-static GdkFilterReturn
+-on_gdk_event_filter (GdkXEvent *xevent, GdkEvent *event, gpointer data)
+-{
+-    NetPopup *popup = data;
+-
+-    if (!popup->event_filter_active)
+-        return GDK_FILTER_CONTINUE;
+-
+-    /* Solo nos interesan clicks de mouse. */
+-    if (event->type != GDK_BUTTON_PRESS)
+-        return GDK_FILTER_CONTINUE;
+-
+-    /* Si el click fue dentro del popup, no cerrar. */
+-    gint px, py, pw, ph;
+-    gtk_window_get_position (GTK_WINDOW (popup->window), &px, &py);
+-    gtk_window_get_size     (GTK_WINDOW (popup->window), &pw, &ph);
+-
+-    gdouble ex = event->button.x_root;
+-    gdouble ey = event->button.y_root;
+-
+-    if (ex >= px && ex <= px + pw && ey >= py && ey <= py + ph)
+-        return GDK_FILTER_CONTINUE;
+-
+-    /* Click fuera del popup — cerrar. */
+-    popup_hide (popup);
+-    return GDK_FILTER_CONTINUE;
+-}
+-
+ static gboolean
+ on_focus_out (GtkWidget *widget, GdkEventFocus *ev, NetPopup *popup)
+ {
+@@ -2272,7 +2243,6 @@
+             gint popup_width, gint popup_height)
+ {
+     GdkDisplay *display;
+-    GdkSeat    *seat;
+     (void) plugin;
+ 
+     popup->conn         = conn;
+@@ -2303,6 +2273,7 @@
+     if (!popup->signal_ids)
+         popup->signal_ids = nm_subscribe_signals (conn, on_nm_signal_popup, popup);
+ 
++    gtk_widget_realize (popup->window);
+     gtk_widget_show_all (popup->window);
+     position_popup (popup, button);
+ 
+@@ -2347,12 +2318,6 @@
+         popup->press_handler = 0;
+     }
+ 
+-    /* Desregistrar filtro GDK si estaba activo. */
+-    if (popup->event_filter_active) {
+-        gdk_window_remove_filter (NULL, on_gdk_event_filter, popup);
+-        popup->event_filter_active = FALSE;
+-    }
+-
+     /* Desuscribirse de las señales DBus mientras está cerrado: el plugin
+      * sigue suscripto por su cuenta para mantener el ícono del panel al día. */
+     if (popup->signal_ids) {

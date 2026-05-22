@@ -1,0 +1,12 @@
+--- popup.c	2026-05-22 03:05:59.188838824 +0000
++++ popup.c	2026-05-22 03:05:59.190266304 +0000
+@@ -762,6 +762,9 @@
+     gdouble top    = (gdouble) expand_y;
+     gdouble bottom = top + (gdouble) alloc->height;
+ 
++    g_print ("scroll_to_expand: expand_y=%d height=%d top=%.0f bottom=%.0f cur=%.0f page=%.0f\n",
++             expand_y, alloc->height, top, bottom, cur, page);
++
+     /* Mover lo mínimo necesario para que el expand sea completamente visible. */
+     if (bottom > cur + page)
+         gtk_adjustment_set_value (adj, MIN (bottom - page,

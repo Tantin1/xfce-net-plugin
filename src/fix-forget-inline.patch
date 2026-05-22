@@ -1,0 +1,112 @@
+--- popup.c	2026-05-22 04:05:32.136557263 +0000
++++ popup.c	2026-05-22 04:05:32.136892362 +0000
+@@ -681,6 +681,7 @@
+     GtkWidget       *back_btn;       /* Estado B: "Volver" */
+     GtkWidget       *connect_btn_b;  /* Estado B: "Conectar" */
+     GtkWidget       *forget_btn;     /* Botón "Olvidar" (solo en estado A para red con fallo). */
++    GtkWidget       *confirm_box;    /* Contenedor de confirmación "¿Eliminar red guardada?" */
+ } RowData;
+ 
+ static void
+@@ -892,18 +893,41 @@
+ {
+     (void) btn;
+     RowData *rd = rd_ptr;
++    if (!rd->confirm_box) return;
++    if (rd->state_a_box)       gtk_widget_hide (rd->state_a_box);
++    if (rd->state_b_box)       gtk_widget_hide (rd->state_b_box);
++    if (rd->autoconnect_check) gtk_widget_hide (rd->autoconnect_check);
++    gtk_widget_show (rd->confirm_box);
++}
+ 
+-    GtkWidget *dialog = gtk_message_dialog_new (
+-        NULL,
+-        0,
+-        GTK_MESSAGE_QUESTION,
+-        GTK_BUTTONS_YES_NO,
+-        _("Forget network \"%s\"?"), rd->ssid);
+-    gtk_window_set_title (GTK_WINDOW (dialog), _("Confirm"));
+-    gtk_window_set_deletable (GTK_WINDOW (dialog), FALSE);
+-    gtk_window_set_position (GTK_WINDOW (dialog), GTK_WIN_POS_CENTER);
+-    g_signal_connect (dialog, "response", G_CALLBACK (on_forget_response), rd);
+-    gtk_widget_show_all (dialog);
++static void
++on_forget_cancel_clicked (GtkWidget *btn, gpointer rd_ptr)
++{
++    (void) btn;
++    RowData *rd = rd_ptr;
++    if (rd->confirm_box)       gtk_widget_hide (rd->confirm_box);
++    if (rd->state_a_box)       gtk_widget_show (rd->state_a_box);
++    if (rd->autoconnect_check) gtk_widget_show (rd->autoconnect_check);
++}
++
++static void
++on_forget_confirm_clicked (GtkWidget *btn, gpointer rd_ptr)
++{
++    (void) btn;
++    RowData *rd = rd_ptr;
++    nm_forget_connection (rd->popup->conn, rd->ssid);
++    g_hash_table_remove (rd->popup->failed_ssids, rd->ssid);
++    {
++        gchar *attempt_key = g_strdup_printf ("%s|%s", rd->ssid, rd->device_path);
++        g_hash_table_remove (rd->popup->pending_attempts, attempt_key);
++        g_free (attempt_key);
++    }
++    if (rd->expand_box) {
++        gtk_widget_hide (rd->expand_box);
++        if (rd->popup->current_expand_box == rd->expand_box)
++            rd->popup->current_expand_box = NULL;
++    }
++    schedule_refresh_ui (rd->popup);
+ }
+ 
+ static void
+@@ -1354,6 +1378,34 @@
+         gtk_widget_show (forget_btn);
+     }
+     gtk_box_pack_start (GTK_BOX (expand_box), action_row, FALSE, FALSE, 0);
++
++    /* Contenedor de confirmación "¿Eliminar red guardada?" — oculto por defecto.
++     * Las señales se conectan más abajo, cuando rd ya existe. */
++    GtkWidget *confirm_box    = NULL;
++    GtkWidget *confirm_cancel = NULL;
++    GtkWidget *confirm_ok     = NULL;
++    if (forget_btn) {
++        confirm_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
++
++        GtkWidget *confirm_label = gtk_label_new (_("Delete saved network?"));
++        gtk_label_set_xalign (GTK_LABEL (confirm_label), 0.0);
++        gtk_box_pack_start (GTK_BOX (confirm_box), confirm_label, FALSE, FALSE, 0);
++
++        GtkWidget *confirm_btns_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
++        gtk_widget_set_halign (confirm_btns_row, GTK_ALIGN_END);
++
++        confirm_cancel = gtk_button_new_with_label (_("Cancel"));
++        confirm_ok     = gtk_button_new_with_label (_("Confirm"));
++        gtk_box_pack_start (GTK_BOX (confirm_btns_row), confirm_cancel, FALSE, FALSE, 0);
++        gtk_box_pack_start (GTK_BOX (confirm_btns_row), confirm_ok,     FALSE, FALSE, 0);
++        gtk_box_pack_start (GTK_BOX (confirm_box), confirm_btns_row,    FALSE, FALSE, 0);
++
++        gtk_box_pack_start (GTK_BOX (expand_box), confirm_box, FALSE, FALSE, 0);
++        gtk_widget_show_all (confirm_box);
++        gtk_widget_hide (confirm_box);
++        gtk_widget_set_no_show_all (confirm_box, TRUE);
++    }
++
+     /* Si action_btn tiene no_show_all (caso red guardada con fallo, donde el
+      * botón principal pasa a ser retry_btn / connect_btn_b), no lo mostramos.
+      * Sin esto el "Connect" residual queda visible en el estado A. */
+@@ -1379,6 +1431,13 @@
+     rd->pass_entry        = pass_entry;
+     rd->autoconnect_check = autoconnect_check_widget;
+     rd->forget_btn        = forget_btn;
++    rd->confirm_box       = confirm_box;
++    if (confirm_cancel)
++        g_signal_connect (confirm_cancel, "clicked",
++                          G_CALLBACK (on_forget_cancel_clicked),  rd);
++    if (confirm_ok)
++        g_signal_connect (confirm_ok, "clicked",
++                          G_CALLBACK (on_forget_confirm_clicked), rd);
+ 
+     /* Si es red guardada con fallo previo, construir los dos sub-bloques
+      * (estado A = botones de reintentar/probar otra; estado B = entry de

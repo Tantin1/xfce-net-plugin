@@ -1,0 +1,15 @@
+--- src/popup.c	2026-05-18 23:07:57.675236000 +0000
++++ src/popup.c	2026-05-18 23:35:16.356714471 +0000
+@@ -2257,10 +2257,12 @@
+                                      GDK_SEAT_CAPABILITY_ALL_POINTING,
+                                      TRUE, NULL, NULL, NULL, NULL);
+         if (grab_status == GDK_GRAB_SUCCESS) {
++            g_warning ("xfce-net-plugin: grab OK, usando button-press");
+             popup->press_handler =
+                 g_signal_connect (popup->window, "button-press-event",
+                                   G_CALLBACK (on_button_press), popup);
+         } else {
++            g_warning ("xfce-net-plugin: grab FALLÓ, usando focus-out");
+             popup->press_handler =
+                 g_signal_connect (popup->window, "focus-out-event",
+                                   G_CALLBACK (on_focus_out), popup);

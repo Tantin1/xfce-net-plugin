@@ -1,0 +1,62 @@
+--- src/popup.c	2026-05-19 06:21:20.246089639 +0000
++++ src/popup.c	2026-05-19 06:21:20.268783531 +0000
+@@ -2226,6 +2226,22 @@
+ 
+ /* ---------- API publica ---------- */
+ 
++static gboolean
++pending_timeout_cb (gpointer user_data)
++{
++    NetPopup *popup = user_data;
++    popup->pending_timeout_id = 0;
++
++    if (!popup->ui_built) return G_SOURCE_REMOVE;
++    if (!gtk_widget_get_visible (popup->window)) return G_SOURCE_REMOVE;
++
++    process_pending_attempts (popup);
++    update_top_status      (popup);
++    update_devices_section (popup);
++
++    return G_SOURCE_REMOVE;
++}
++
+ NetPopup *
+ popup_create (XfcePanelPlugin *plugin, GtkWidget *button)
+ {
+@@ -2315,6 +2331,15 @@
+      * cuando se arman las filas ya tienen la información correcta. */
+     process_pending_attempts (popup);
+ 
++    /* Si quedan intentos pendientes vigentes, agendar temporizador para
++     * evaluarlos cuando expire el período de espera. */
++    if (popup->pending_attempts && g_hash_table_size (popup->pending_attempts) > 0) {
++        if (popup->pending_timeout_id)
++            g_source_remove (popup->pending_timeout_id);
++        popup->pending_timeout_id = g_timeout_add (OP_TIMEOUT_MS,
++                                                   pending_timeout_cb, popup);
++    }
++
+     /* Limpiar pending_attempts de conexiones que ya se confirmaron exitosas
+      * mientras el popup estaba cerrado. */
+     if (popup->pending_attempts && g_hash_table_size (popup->pending_attempts) > 0) {
+@@ -2422,6 +2447,10 @@
+         g_source_remove (popup->scan_timeout_id);
+         popup->scan_timeout_id = 0;
+     }
++    if (popup->pending_timeout_id) {
++        g_source_remove (popup->pending_timeout_id);
++        popup->pending_timeout_id = 0;
++    }
+     popup->scanning = FALSE;
+ 
+     /* Cerrar expand abierto para que al reabrir el popup esté limpio. */
+--- src/popup.h	2026-05-19 06:21:20.252206643 +0000
++++ src/popup.h	2026-05-19 06:21:20.266136719 +0000
+@@ -51,6 +51,7 @@
+ 
+     /* Fuente de timeout para reactivar el botón Actualizar. */
+     guint      scan_timeout_id;
++    guint      pending_timeout_id;
+     gboolean   show_separators;
+ 
+     /* SSIDs cuya última operación CONNECT falló. Se setea en op_timeout_cb

@@ -1,0 +1,19 @@
+--- src/popup.c	2026-05-19 01:41:18.338850885 +0000
++++ src/popup.c	2026-05-19 01:41:23.317122600 +0000
+@@ -2242,7 +2242,6 @@
+             GDBusConnection *conn,
+             gint popup_width, gint popup_height)
+ {
+-    GdkDisplay *display;
+     (void) plugin;
+ 
+     popup->conn         = conn;
+@@ -2277,8 +2276,6 @@
+     gtk_widget_show_all (popup->window);
+     position_popup (popup, button);
+ 
+-    display = gtk_widget_get_display (popup->window);
+-    seat    = gdk_display_get_default_seat (display);
+     popup->button = button;
+     {
+         /* Diferir el grab a cuando la ventana esté realmente visible. */

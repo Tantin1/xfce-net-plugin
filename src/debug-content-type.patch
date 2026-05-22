@@ -1,0 +1,11 @@
+--- popup.c	2026-05-22 03:41:37.831641635 +0000
++++ popup.c	2026-05-22 03:41:37.833333153 +0000
+@@ -754,6 +754,8 @@
+     if (!expand || !gtk_widget_get_visible (expand))
+         return G_SOURCE_REMOVE;
+ 
++    g_print ("content type: %s\n", G_OBJECT_TYPE_NAME (content));
++
+     gint expand_y = 0;
+     if (!gtk_widget_translate_coordinates (expand, content, 0, 0, NULL, &expand_y))
+         return G_SOURCE_REMOVE;

@@ -51,6 +51,7 @@ typedef struct {
 
     /* Fuente de timeout para reactivar el botón Actualizar. */
     guint      scan_timeout_id;
+    guint      pending_timeout_id;
     gboolean   show_separators;
 
     /* SSIDs cuya última operación CONNECT falló. Se setea en op_timeout_cb
@@ -69,6 +70,9 @@ typedef struct {
 
     /* Puntero opaco al NetPlugin del panel. Usado para controlar el spinner. */
     gpointer plugin_ref;
+
+    /* Filtro GDK para detectar clicks en el área vacía del panel (cuando grab falla). */
+    gboolean event_filter_active;
 } NetPopup;
 
 /* Crea un widget con ícono de señal Wi-Fi. Si secure=TRUE superpone un candado. */
