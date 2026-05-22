@@ -3,3 +3,8 @@ src/build/
 *.so
 *.o
 *.mo
+
+# Archivos de parche y residuos de compilación
+*.patch
+*.rej
+*.orig
