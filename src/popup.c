@@ -553,23 +553,37 @@ check_ops_progress (NetPopup *popup)
 GtkWidget *
 make_signal_icon (gint strength, gboolean secure, gint icon_size)
 {
-    const gchar *level;
-    gchar        icon_name[64];
+    const gchar *nm_level;
+    const gchar *fd_level;
 
-    if      (strength >= 80) level = "excellent";
-    else if (strength >= 55) level = "good";
-    else if (strength >= 30) level = "ok";
-    else                     level = "weak";
+    if      (strength >= 80) { nm_level = "100"; fd_level = "excellent"; }
+    else if (strength >= 55) { nm_level = "75";  fd_level = "good";      }
+    else if (strength >= 30) { nm_level = "50";  fd_level = "ok";        }
+    else                     { nm_level = "25";  fd_level = "weak";      }
 
-    g_snprintf (icon_name, sizeof icon_name,
-                "network-wireless-signal-%s-symbolic", level);
+    gchar nm_name[64], nm_name_secure[64], fd_name[64];
+    g_snprintf (nm_name,        sizeof nm_name,
+                "nm-signal-%s", nm_level);
+    g_snprintf (nm_name_secure, sizeof nm_name_secure,
+                "nm-signal-%s-secure", nm_level);
+    g_snprintf (fd_name,        sizeof fd_name,
+                "network-wireless-signal-%s-symbolic", fd_level);
 
-    GtkWidget *signal_img = gtk_image_new_from_icon_name (
-                                icon_name, GTK_ICON_SIZE_MENU);
+    /* Ícono de señal: nm-signal-* con fallback freedesktop. */
+    const gchar *signal_names[] = { nm_name, fd_name, NULL };
+    GIcon     *signal_gicon = g_themed_icon_new_from_names ((gchar **) signal_names, -1);
+    GtkWidget *signal_img   = gtk_image_new_from_gicon (signal_gicon, GTK_ICON_SIZE_MENU);
+    g_object_unref (signal_gicon);
     gtk_image_set_pixel_size (GTK_IMAGE (signal_img), icon_size);
 
     if (!secure)
         return signal_img;
+
+    /* Para redes seguras: nm-signal-*-secure como primer candidato. */
+    const gchar *signal_sec_names[] = { nm_name_secure, nm_name, fd_name, NULL };
+    GIcon     *signal_sec_gicon = g_themed_icon_new_from_names ((gchar **) signal_sec_names, -1);
+    gtk_image_set_from_gicon (GTK_IMAGE (signal_img), signal_sec_gicon, GTK_ICON_SIZE_MENU);
+    g_object_unref (signal_sec_gicon);
 
     GtkWidget *overlay  = gtk_overlay_new ();
     GtkWidget *lock_img = gtk_image_new_from_icon_name (
@@ -1788,8 +1802,10 @@ fill_eth_section (NetPopup *popup)
         gtk_widget_set_margin_top    (eth_row, 8);
         gtk_widget_set_margin_bottom (eth_row, 8);
 
-        GtkWidget *eth_icon = gtk_image_new_from_icon_name (
-                                  "network-wired-symbolic", GTK_ICON_SIZE_MENU);
+        const gchar *eth_icon_names[] = { "nm-device-wired", "network-wired-symbolic", NULL };
+        GIcon     *eth_gicon = g_themed_icon_new_from_names ((gchar **) eth_icon_names, -1);
+        GtkWidget *eth_icon  = gtk_image_new_from_gicon (eth_gicon, GTK_ICON_SIZE_MENU);
+        g_object_unref (eth_gicon);
         gtk_box_pack_start (GTK_BOX (eth_row), eth_icon, FALSE, FALSE, 4);
 
         GtkWidget *eth_label = gtk_label_new (NULL);
@@ -1907,12 +1923,17 @@ update_top_status (NetPopup *popup)
     } else {
         gtk_spinner_stop (GTK_SPINNER (popup->status_spinner));
         gtk_stack_set_visible_child_name (GTK_STACK (popup->status_stack), "icon");
-        if (primary_ssid)
-            gtk_image_set_from_icon_name (GTK_IMAGE (popup->status_icon),
-                                          "network-wireless-symbolic", GTK_ICON_SIZE_MENU);
-        else
-            gtk_image_set_from_icon_name (GTK_IMAGE (popup->status_icon),
-                                          "network-wireless-disconnected-symbolic", GTK_ICON_SIZE_MENU);
+        if (primary_ssid) {
+            const gchar *conn_names[] = { "nm-device-wireless", "network-wireless-symbolic", NULL };
+            GIcon *conn_gicon = g_themed_icon_new_from_names ((gchar **) conn_names, -1);
+            gtk_image_set_from_gicon (GTK_IMAGE (popup->status_icon), conn_gicon, GTK_ICON_SIZE_MENU);
+            g_object_unref (conn_gicon);
+        } else {
+            const gchar *disc_names[] = { "nm-no-connection", "network-wireless-disconnected-symbolic", NULL };
+            GIcon *disc_gicon = g_themed_icon_new_from_names ((gchar **) disc_names, -1);
+            gtk_image_set_from_gicon (GTK_IMAGE (popup->status_icon), disc_gicon, GTK_ICON_SIZE_MENU);
+            g_object_unref (disc_gicon);
+        }
     }
 
     /* Etiqueta de estado */
@@ -1999,8 +2020,9 @@ update_devices_section (NetPopup *popup)
     /* Limpiar y reconstruir todas las secciones de adaptadores. */
     GList *kids = gtk_container_get_children (GTK_CONTAINER (popup->content_box));
     for (GList *k = kids; k; k = k->next) {
-        /* Saltar la sección VPN, que tiene tag */
+        /* Saltar secciones fijas (VPN y Ethernet) que se reordenan aparte. */
         if (k->data == popup->vpn_section) continue;
+        if (k->data == popup->eth_section) continue;
         gtk_widget_destroy (GTK_WIDGET (k->data));
     }
     g_list_free (kids);
@@ -2017,8 +2039,32 @@ update_devices_section (NetPopup *popup)
     }
     nm_device_list_free (devices);
 
-    /* La sección VPN debe quedar al final. */
-    gtk_box_reorder_child (GTK_BOX (popup->content_box), popup->vpn_section, -1);
+    /* Reordenar secciones fijas:
+     * Ethernet activo → posición 0; VPN activa → posición 1 (o 0 si Ethernet no activo).
+     * Si no están activos van al fondo (-1). */
+    {
+        gboolean eth_active = gtk_widget_get_visible (popup->eth_section);
+        gboolean vpn_active = FALSE;
+        GSList *vpns = nm_get_vpn_connections (popup->conn);
+        for (GSList *v = vpns; v && !vpn_active; v = v->next)
+            vpn_active = ((NmVpnConnection *) v->data)->active;
+        nm_vpn_list_free (vpns);
+
+        if (eth_active)
+            gtk_box_reorder_child (GTK_BOX (popup->content_box),
+                                   popup->eth_section, 0);
+        else
+            gtk_box_reorder_child (GTK_BOX (popup->content_box),
+                                   popup->eth_section, -1);
+
+        if (vpn_active)
+            gtk_box_reorder_child (GTK_BOX (popup->content_box),
+                                   popup->vpn_section,
+                                   eth_active ? 1 : 0);
+        else
+            gtk_box_reorder_child (GTK_BOX (popup->content_box),
+                                   popup->vpn_section, -1);
+    }
 
     gtk_widget_show_all (popup->content_box);
 
@@ -2115,9 +2161,12 @@ rebuild_ui (NetPopup *popup)
     gtk_widget_set_margin_top    (top_row, 8);
     gtk_widget_set_margin_bottom (top_row, 8);
 
-    popup->status_icon = gtk_image_new_from_icon_name (
-                             "network-wireless-disconnected-symbolic",
-                             GTK_ICON_SIZE_MENU);
+    {
+        const gchar *disc_names[] = { "nm-no-connection", "network-wireless-disconnected-symbolic", NULL };
+        GIcon *disc_gicon = g_themed_icon_new_from_names ((gchar **) disc_names, -1);
+        popup->status_icon = gtk_image_new_from_gicon (disc_gicon, GTK_ICON_SIZE_MENU);
+        g_object_unref (disc_gicon);
+    }
     gtk_widget_set_valign (popup->status_icon, GTK_ALIGN_CENTER);
 
     popup->status_spinner = gtk_spinner_new ();
@@ -2178,13 +2227,13 @@ rebuild_ui (NetPopup *popup)
     gtk_box_pack_start (GTK_BOX (popup->top_box), top_row, FALSE, FALSE, 0);
 
 
-    /* Contenedor sección Ethernet (vacío por defecto, se llena en update_eth_section). */
+    /* Contenedor sección Ethernet (en content_box, se llena en update_eth_section). */
     popup->eth_section = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-    gtk_box_pack_start (GTK_BOX (popup->top_box), popup->eth_section, FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (popup->content_box), popup->eth_section, FALSE, FALSE, 0);
 
     /* Contenedor sección VPN (al fondo del content_box, se llena en update_vpn_section). */
     popup->vpn_section = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
-    gtk_box_pack_end (GTK_BOX (popup->content_box), popup->vpn_section, FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (popup->content_box), popup->vpn_section, FALSE, FALSE, 0);
 
     popup->ui_built = TRUE;
 

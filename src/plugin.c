@@ -75,8 +75,10 @@ update_panel_icon (NetPlugin *np,
         if (wired) {
             if (vpn) {
                 GtkWidget *overlay  = gtk_overlay_new ();
-                GtkWidget *base_img = gtk_image_new_from_icon_name (
-                                          "network-wired-symbolic", GTK_ICON_SIZE_BUTTON);
+                const gchar *wired_icon_names[] = { "nm-device-wired", "network-wired-symbolic", NULL };
+                GIcon     *wired_gicon = g_themed_icon_new_from_names ((gchar **) wired_icon_names, -1);
+                GtkWidget *base_img    = gtk_image_new_from_gicon (wired_gicon, GTK_ICON_SIZE_BUTTON);
+                g_object_unref (wired_gicon);
                 GtkWidget *lock_img = gtk_image_new_from_icon_name (
                                           "nm-secure-lock", GTK_ICON_SIZE_BUTTON);
                 gtk_image_set_pixel_size (GTK_IMAGE (base_img), icon_px);
@@ -89,14 +91,21 @@ update_panel_icon (NetPlugin *np,
                 gtk_widget_show_all (overlay);
                 new_icon = overlay;
             } else {
-                new_icon = gtk_image_new_from_icon_name (
-                               "network-wired-symbolic", GTK_ICON_SIZE_BUTTON);
+                {
+                    const gchar *wired_icon_names[] = { "nm-device-wired", "network-wired-symbolic", NULL };
+                    GIcon *wired_gicon = g_themed_icon_new_from_names ((gchar **) wired_icon_names, -1);
+                    new_icon = gtk_image_new_from_gicon (wired_gicon, GTK_ICON_SIZE_BUTTON);
+                    g_object_unref (wired_gicon);
+                }
                 gtk_image_set_pixel_size (GTK_IMAGE (new_icon), icon_px);
             }
         } else {
-            new_icon = gtk_image_new_from_icon_name (
-                           "network-wireless-disconnected-symbolic",
-                           GTK_ICON_SIZE_BUTTON);
+            {
+                const gchar *disc_names[] = { "nm-no-connection", "network-wireless-disconnected-symbolic", NULL };
+                GIcon *disc_gicon = g_themed_icon_new_from_names ((gchar **) disc_names, -1);
+                new_icon = gtk_image_new_from_gicon (disc_gicon, GTK_ICON_SIZE_BUTTON);
+                g_object_unref (disc_gicon);
+            }
             gtk_image_set_pixel_size (GTK_IMAGE (new_icon), icon_px);
         }
     } else {
@@ -741,9 +750,10 @@ net_plugin_new (XfcePanelPlugin *plugin)
 
     np->icon_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 
-    GtkWidget *init_icon = gtk_image_new_from_icon_name (
-                               "network-wireless-disconnected-symbolic",
-                               GTK_ICON_SIZE_BUTTON);
+    const gchar *init_disc_names[] = { "nm-no-connection", "network-wireless-disconnected-symbolic", NULL };
+    GIcon     *init_disc_gicon = g_themed_icon_new_from_names ((gchar **) init_disc_names, -1);
+    GtkWidget *init_icon       = gtk_image_new_from_gicon (init_disc_gicon, GTK_ICON_SIZE_BUTTON);
+    g_object_unref (init_disc_gicon);
     gtk_image_set_pixel_size (GTK_IMAGE (init_icon), np->icon_size);
     gtk_box_pack_start (GTK_BOX (np->icon_box), init_icon, TRUE, TRUE, 0);
 
