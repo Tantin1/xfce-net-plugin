@@ -177,3 +177,54 @@ msgstr "Indietro"
 
 msgid "Network manager plugin for the XFCE panel"
 msgstr "Plugin di gestione rete per il pannello XFCE"
+
+msgid "Details"
+msgstr "Dettagli"
+
+msgid "Show QR"
+msgstr "Mostra QR"
+
+msgid "Hide QR"
+msgstr "Nascondi QR"
+
+msgid "BSSID:"
+msgstr "BSSID:"
+
+msgid "Channel:"
+msgstr "Canale:"
+
+msgid "DNS:"
+msgstr "DNS:"
+
+msgid "Frequency:"
+msgstr "Frequenza:"
+
+msgid "Gateway:"
+msgstr "Gateway:"
+
+msgid "IP:"
+msgstr "IP:"
+
+msgid "IPv6:"
+msgstr "IPv6:"
+
+msgid "Encrypted"
+msgstr "Cifrata"
+
+msgid "Open"
+msgstr "Aperta"
+
+msgid "QR error"
+msgstr "Errore QR"
+
+msgid "No saved password"
+msgstr "Nessuna password salvata"
+
+msgid "Show Forget button on active networks"
+msgstr "Mostra il pulsante Dimentica sulle reti attive"
+
+msgid "Signal %d%%"
+msgstr "Segnale %d%%"
+
+msgid "Saved network · Signal %d%%"
+msgstr "Rete salvata · Segnale %d%%"

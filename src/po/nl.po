@@ -177,3 +177,54 @@ msgstr "Terug"
 
 msgid "Network manager plugin for the XFCE panel"
 msgstr "Netwerkbeheer-plugin voor het XFCE-paneel"
+
+msgid "Details"
+msgstr "Details"
+
+msgid "Show QR"
+msgstr "QR tonen"
+
+msgid "Hide QR"
+msgstr "QR verbergen"
+
+msgid "BSSID:"
+msgstr "BSSID:"
+
+msgid "Channel:"
+msgstr "Kanaal:"
+
+msgid "DNS:"
+msgstr "DNS:"
+
+msgid "Frequency:"
+msgstr "Frequentie:"
+
+msgid "Gateway:"
+msgstr "Gateway:"
+
+msgid "IP:"
+msgstr "IP:"
+
+msgid "IPv6:"
+msgstr "IPv6:"
+
+msgid "Encrypted"
+msgstr "Versleuteld"
+
+msgid "Open"
+msgstr "Open"
+
+msgid "QR error"
+msgstr "QR-fout"
+
+msgid "No saved password"
+msgstr "Geen opgeslagen wachtwoord"
+
+msgid "Show Forget button on active networks"
+msgstr "Knop Vergeten tonen bij actieve netwerken"
+
+msgid "Signal %d%%"
+msgstr "Signaal %d%%"
+
+msgid "Saved network · Signal %d%%"
+msgstr "Opgeslagen netwerk · Signaal %d%%"

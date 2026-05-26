@@ -1,14 +1,14 @@
 # SOME DESCRIPTIVE TITLE.
 # Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
-# This file is distributed under the same license as the xfce-net-plugin package.
+# This file is distributed under the same license as the PACKAGE package.
 # FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
 #
 #, fuzzy
 msgid ""
 msgstr ""
-"Project-Id-Version: xfce-net-plugin\n"
+"Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-05-06 21:00+0000\n"
+"POT-Creation-Date: 2026-05-26 20:33-0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -17,197 +17,300 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: /home/claude/plugin.c:212
+#: src/plugin.c:369
 msgid "Properties — Network"
 msgstr ""
 
-#: /home/claude/plugin.c:215
+#: src/plugin.c:372
 msgid "Close"
 msgstr ""
 
-#: /home/claude/plugin.c:223
+#: src/plugin.c:379
 msgid "Appearance"
 msgstr ""
 
-#: /home/claude/plugin.c:233
+#: src/plugin.c:388
 msgid "Square button"
 msgstr ""
 
-#: /home/claude/plugin.c:240
+#: src/plugin.c:394
 msgid "Plugin size:"
 msgstr ""
 
-#: /home/claude/plugin.c:258
+#: src/plugin.c:410
 msgid "Use panel size"
 msgstr ""
 
-#: /home/claude/plugin.c:265
+#: src/plugin.c:416
 msgid "Icon size:"
 msgstr ""
 
-#: /home/claude/plugin.c:422 /home/claude/popup.c:1042
-msgid "Not connected"
+#: src/plugin.c:432
+msgid "Popup width:"
 msgstr ""
 
-#: /home/claude/plugin.c:435
-#, c-format
-msgid "Connected to %s (%s)"
+#: src/plugin.c:441
+msgid "Popup height:"
 msgstr ""
 
-#: /home/claude/plugin.c:446
-msgid " · VPN active"
-msgstr ""
-
-#: /home/claude/plugin.c:448
-msgid "VPN active"
-msgstr ""
-
-#: /home/claude/plugin.c:511
-msgid "Networks"
-msgstr ""
-
-#: /home/claude/popup.c:306
-#, c-format
-msgid "Forget network \"%s\"?"
-msgstr ""
-
-#: /home/claude/popup.c:307
-msgid "Confirm"
-msgstr ""
-
-#: /home/claude/popup.c:348 /home/claude/popup.c:597
-msgid "Connect"
-msgstr ""
-
-#: /home/claude/popup.c:386
-msgid "Incorrect password"
-msgstr ""
-
-#: /home/claude/popup.c:532 /home/claude/popup.c:1087
-msgid "Connected"
-msgstr ""
-
-#: /home/claude/popup.c:550
-msgid "Disconnect"
-msgstr ""
-
-#: /home/claude/popup.c:555
-msgid "Saved network"
-msgstr ""
-
-#: /home/claude/popup.c:563 /home/claude/popup.c:590
-msgid "Connect automatically"
-msgstr ""
-
-#: /home/claude/popup.c:569
-msgid "Forget"
-msgstr ""
-
-#: /home/claude/popup.c:575
-msgid "Password"
-msgstr ""
-
-#: /home/claude/popup.c:930
-msgid "Advanced settings…"
-msgstr ""
-
-#: /home/claude/popup.c:941
-msgid "Connect to hidden network…"
-msgstr ""
-
-#: /home/claude/popup.c:1006
-msgid "Refresh"
-msgstr ""
-
-#: /home/claude/popup.c:1021
-msgid "Wi-Fi"
-msgstr ""
-
-#: /home/claude/popup.c:1038
-#, c-format
-msgid "Connected to <b>%s</b>"
-msgstr ""
-
-msgid "Connect to hidden network"
-msgstr ""
-
-msgid "Cancel"
-msgstr ""
-
-msgid "Network name:"
-msgstr ""
-
-msgid "Security:"
-msgstr ""
-
-msgid "None"
-msgstr ""
-
-msgid "Password:"
-msgstr ""
-
-msgid "Disabled"
-msgstr ""
-
-msgid "Enabled – not connected"
-msgstr ""
-
-msgid "Disconnecting…"
-msgstr ""
-
-msgid "Connecting…"
-msgstr ""
-
-msgid "Connection failed"
-msgstr ""
-
+#: src/plugin.c:456
 msgid "Show separators"
 msgstr ""
 
-#: plugin.c
+#: src/plugin.c:462
+msgid "Show Forget button on active networks"
+msgstr ""
+
+#: src/plugin.c:469
+msgid "Show notifications"
+msgstr ""
+
+#: src/plugin.c:475
+msgid ""
+"If the popup and the notification overlap, the notification will partially "
+"cover the popup."
+msgstr ""
+
+#: src/plugin.c:609 src/plugin.c:657
 #, c-format
 msgid "Connected to %s"
 msgstr ""
 
+#: src/plugin.c:610 src/plugin.c:615 src/plugin.c:658 src/popup.c:2659
+msgid "Wi-Fi"
+msgstr ""
+
+#: src/plugin.c:615 src/plugin.c:631
 msgid "Disconnected"
 msgstr ""
 
+#: src/plugin.c:618 src/plugin.c:621 src/plugin.c:662
 msgid "Ethernet"
 msgstr ""
 
+#: src/plugin.c:618 src/plugin.c:662
 msgid "Cable connected"
 msgstr ""
 
+#: src/plugin.c:621
 msgid "Cable disconnected"
 msgstr ""
 
+#: src/plugin.c:626 src/plugin.c:631 src/plugin.c:669
 msgid "VPN"
 msgstr ""
 
-msgid "Show notifications"
+#: src/plugin.c:626 src/plugin.c:669 src/popup.c:1504 src/popup.c:2254
+msgid "Connected"
 msgstr ""
 
-msgid "If the popup and the notification overlap, the notification will partially cover the popup."
+#: src/plugin.c:682
+msgid "Not connected"
 msgstr ""
 
-
-msgid "Connecting to <b>%s</b>…"
+#: src/plugin.c:695
+#, c-format
+msgid "Connected to %s (%s)"
 msgstr ""
 
-msgid "Last connection attempt failed"
+#: src/plugin.c:706
+msgid " · VPN active"
 msgstr ""
 
+#: src/plugin.c:708
+msgid "VPN active"
+msgstr ""
+
+#: src/plugin.c:787
+msgid "Networks"
+msgstr ""
+
+#: src/plugin.c:841
+msgid "Network manager plugin for the XFCE panel"
+msgstr ""
+
+#: src/popup.c:258 src/popup.c:1202 src/popup.c:1204 src/popup.c:1579
+#: src/popup.c:1674 src/popup.c:1944 src/popup.c:2746
+msgid "Connect"
+msgstr ""
+
+#: src/popup.c:258 src/popup.c:1562
+msgid "Disconnect"
+msgstr ""
+
+#: src/popup.c:273
+msgid "Incorrect password"
+msgstr ""
+
+#: src/popup.c:711 src/popup.c:2642
+msgid "Refresh"
+msgstr ""
+
+#: src/popup.c:724 src/popup.c:2642
+msgid "Updating…"
+msgstr ""
+
+#: src/popup.c:868 src/popup.c:1414 src/popup.c:1720
+msgid "Show QR"
+msgstr ""
+
+#: src/popup.c:883
+msgid "No saved password"
+msgstr ""
+
+#: src/popup.c:895
+msgid "QR error"
+msgstr ""
+
+#: src/popup.c:911
+msgid "Hide QR"
+msgstr ""
+
+#: src/popup.c:1068
+msgid "Disconnecting…"
+msgstr ""
+
+#: src/popup.c:1198 src/popup.c:1893
 msgid "Retry with saved password"
 msgstr ""
 
-msgid "Rewrite password"
+#: src/popup.c:1209 src/popup.c:1518 src/popup.c:1574
+msgid "Connecting…"
 msgstr ""
 
+#: src/popup.c:1565 src/popup.c:1611
+#, c-format
+msgid "Signal %d%%"
+msgstr ""
+
+#: src/popup.c:1609
+#, c-format
+msgid "Saved network · Signal %d%%"
+msgstr ""
+
+#: src/popup.c:1624
+msgid "Last connection attempt failed"
+msgstr ""
+
+#: src/popup.c:1634 src/popup.c:1662
+msgid "Connect automatically"
+msgstr ""
+
+#: src/popup.c:1640 src/popup.c:1684
+msgid "Forget"
+msgstr ""
+
+#: src/popup.c:1647
+msgid "Password"
+msgstr ""
+
+#: src/popup.c:1735
+msgid "Details"
+msgstr ""
+
+#: src/popup.c:1772
+msgid "IP:"
+msgstr ""
+
+#: src/popup.c:1773
+msgid "Gateway:"
+msgstr ""
+
+#: src/popup.c:1774
+msgid "DNS:"
+msgstr ""
+
+#: src/popup.c:1775
+msgid "IPv6:"
+msgstr ""
+
+#: src/popup.c:1783
+msgid "Open"
+msgstr ""
+
+#: src/popup.c:1786
+msgid "Encrypted"
+msgstr ""
+
+#: src/popup.c:1787 src/popup.c:2766
+msgid "Security:"
+msgstr ""
+
+#: src/popup.c:1791
+msgid "Frequency:"
+msgstr ""
+
+#: src/popup.c:1800
+msgid "Channel:"
+msgstr ""
+
+#: src/popup.c:1805
+msgid "BSSID:"
+msgstr ""
+
+#: src/popup.c:1821
+#, c-format
+msgid "Forget network \"%s\"?"
+msgstr ""
+
+#: src/popup.c:1830 src/popup.c:2745
+msgid "Cancel"
+msgstr ""
+
+#: src/popup.c:1831
+msgid "Confirm"
+msgstr ""
+
+#: src/popup.c:1900
 msgid "Try a different password"
 msgstr ""
 
+#: src/popup.c:1923
+msgid "Rewrite password"
+msgstr ""
+
+#: src/popup.c:1940
 msgid "Back"
 msgstr ""
 
-msgid "Network manager plugin for the XFCE panel"
+#: src/popup.c:2378
+#, c-format
+msgid "Connected to <b>%s</b>"
+msgstr ""
+
+#: src/popup.c:2382
+msgid "Disabled"
+msgstr ""
+
+#: src/popup.c:2385
+#, c-format
+msgid "Connecting to <b>%s</b>…"
+msgstr ""
+
+#: src/popup.c:2389
+msgid "Enabled – not connected"
+msgstr ""
+
+#: src/popup.c:2742
+msgid "Connect to hidden network"
+msgstr ""
+
+#: src/popup.c:2759
+msgid "Network name:"
+msgstr ""
+
+#: src/popup.c:2769
+msgid "None"
+msgstr ""
+
+#: src/popup.c:2775
+msgid "Password:"
+msgstr ""
+
+#: src/popup.c:2915
+msgid "Advanced settings…"
+msgstr ""
+
+#: src/popup.c:2925
+msgid "Connect to hidden network…"
 msgstr ""

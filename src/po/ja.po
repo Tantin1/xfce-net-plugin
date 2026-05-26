@@ -177,3 +177,54 @@ msgstr "戻る"
 
 msgid "Network manager plugin for the XFCE panel"
 msgstr "XFCEパネル用ネットワーク管理プラグイン"
+
+msgid "Details"
+msgstr "詳細"
+
+msgid "Show QR"
+msgstr "QRを表示"
+
+msgid "Hide QR"
+msgstr "QRを隠す"
+
+msgid "BSSID:"
+msgstr "BSSID:"
+
+msgid "Channel:"
+msgstr "チャンネル:"
+
+msgid "DNS:"
+msgstr "DNS:"
+
+msgid "Frequency:"
+msgstr "周波数:"
+
+msgid "Gateway:"
+msgstr "ゲートウェイ:"
+
+msgid "IP:"
+msgstr "IP:"
+
+msgid "IPv6:"
+msgstr "IPv6:"
+
+msgid "Encrypted"
+msgstr "暗号化済み"
+
+msgid "Open"
+msgstr "オープン"
+
+msgid "QR error"
+msgstr "QRエラー"
+
+msgid "No saved password"
+msgstr "保存されたパスワードなし"
+
+msgid "Show Forget button on active networks"
+msgstr "アクティブなネットワークに「忘れる」ボタンを表示"
+
+msgid "Signal %d%%"
+msgstr "信号 %d%%"
+
+msgid "Saved network · Signal %d%%"
+msgstr "保存済みネットワーク · 信号 %d%%"

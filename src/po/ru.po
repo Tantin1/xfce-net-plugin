@@ -177,3 +177,54 @@ msgstr "Назад"
 
 msgid "Network manager plugin for the XFCE panel"
 msgstr "Плагин управления сетью для панели XFCE"
+
+msgid "Details"
+msgstr "Подробности"
+
+msgid "Show QR"
+msgstr "Показать QR"
+
+msgid "Hide QR"
+msgstr "Скрыть QR"
+
+msgid "BSSID:"
+msgstr "BSSID:"
+
+msgid "Channel:"
+msgstr "Канал:"
+
+msgid "DNS:"
+msgstr "DNS:"
+
+msgid "Frequency:"
+msgstr "Частота:"
+
+msgid "Gateway:"
+msgstr "Шлюз:"
+
+msgid "IP:"
+msgstr "IP:"
+
+msgid "IPv6:"
+msgstr "IPv6:"
+
+msgid "Encrypted"
+msgstr "Зашифровано"
+
+msgid "Open"
+msgstr "Открытая"
+
+msgid "QR error"
+msgstr "Ошибка QR"
+
+msgid "No saved password"
+msgstr "Нет сохранённого пароля"
+
+msgid "Show Forget button on active networks"
+msgstr "Показывать кнопку «Забыть» для активных сетей"
+
+msgid "Signal %d%%"
+msgstr "Сигнал %d%%"
+
+msgid "Saved network · Signal %d%%"
+msgstr "Сохранённая сеть · Сигнал %d%%"

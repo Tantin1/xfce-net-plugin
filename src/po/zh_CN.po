@@ -177,3 +177,54 @@ msgstr "返回"
 
 msgid "Network manager plugin for the XFCE panel"
 msgstr "XFCE 面板网络管理插件"
+
+msgid "Details"
+msgstr "详情"
+
+msgid "Show QR"
+msgstr "显示二维码"
+
+msgid "Hide QR"
+msgstr "隐藏二维码"
+
+msgid "BSSID:"
+msgstr "BSSID:"
+
+msgid "Channel:"
+msgstr "信道:"
+
+msgid "DNS:"
+msgstr "DNS:"
+
+msgid "Frequency:"
+msgstr "频率:"
+
+msgid "Gateway:"
+msgstr "网关:"
+
+msgid "IP:"
+msgstr "IP:"
+
+msgid "IPv6:"
+msgstr "IPv6:"
+
+msgid "Encrypted"
+msgstr "已加密"
+
+msgid "Open"
+msgstr "开放"
+
+msgid "QR error"
+msgstr "二维码错误"
+
+msgid "No saved password"
+msgstr "无保存的密码"
+
+msgid "Show Forget button on active networks"
+msgstr "在活动网络上显示忘记按钮"
+
+msgid "Signal %d%%"
+msgstr "信号 %d%%"
+
+msgid "Saved network · Signal %d%%"
+msgstr "已保存网络 · 信号 %d%%"

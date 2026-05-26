@@ -177,3 +177,54 @@ msgstr "Back"
 
 msgid "Network manager plugin for the XFCE panel"
 msgstr "Network manager plugin for the XFCE panel"
+
+msgid "Details"
+msgstr "Details"
+
+msgid "Show QR"
+msgstr "Show QR"
+
+msgid "Hide QR"
+msgstr "Hide QR"
+
+msgid "BSSID:"
+msgstr "BSSID:"
+
+msgid "Channel:"
+msgstr "Channel:"
+
+msgid "DNS:"
+msgstr "DNS:"
+
+msgid "Frequency:"
+msgstr "Frequency:"
+
+msgid "Gateway:"
+msgstr "Gateway:"
+
+msgid "IP:"
+msgstr "IP:"
+
+msgid "IPv6:"
+msgstr "IPv6:"
+
+msgid "Encrypted"
+msgstr "Encrypted"
+
+msgid "Open"
+msgstr "Open"
+
+msgid "QR error"
+msgstr "QR error"
+
+msgid "No saved password"
+msgstr "No saved password"
+
+msgid "Show Forget button on active networks"
+msgstr "Show Forget button on active networks"
+
+msgid "Signal %d%%"
+msgstr "Signal %d%%"
+
+msgid "Saved network · Signal %d%%"
+msgstr "Saved network · Signal %d%%"
