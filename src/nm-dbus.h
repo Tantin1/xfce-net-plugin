@@ -126,47 +126,5 @@ void nm_request_scan (GDBusConnection *conn, const gchar *device_path);
 /* Devuelve TRUE si algún adaptador Wi-Fi está en proceso de conectar (estados 40-90). */
 gboolean nm_any_wifi_device_connecting (GDBusConnection *conn);
 
-/* Devuelve el device_path del primer adaptador Wi-Fi con capacidad AP, o NULL. */
-gchar *nm_find_ap_capable_device (GDBusConnection *conn);
-
-/* Estado del hotspot: devuelve TRUE si hay un perfil AP activo.
- * Si activo, rellena *ssid_out y *pass_out (liberar con g_free). */
-gboolean nm_get_hotspot_state (GDBusConnection *conn,
-                               gchar          **ssid_out,
-                               gchar          **pass_out);
-
-/* Crea y activa un hotspot WPA2 en el dispositivo indicado. Async.
- * config_path: ruta al .ini del plugin para persistir el UUID del perfil
- * y evitar duplicados en activaciones sucesivas. Puede ser NULL. */
-void nm_create_hotspot_async (GDBusConnection *conn,
-                              const gchar     *device_path,
-                              const gchar     *ssid,
-                              const gchar     *password,
-                              const gchar     *config_path);
-
-/* Devuelve TRUE si tiene sentido mostrar el boton hotspot:
- * 2+ adaptadores Wi-Fi, o 1 Wi-Fi con cap AP + Ethernet activo. */
-gboolean nm_hotspot_should_show (GDBusConnection *conn);
-
-/* Devuelve TRUE si NM está configurado con dns=dnsmasq (necesario para
- * que los clientes del hotspot reciban IP). */
-gboolean nm_check_hotspot_prerequisites (void);
-
-/* Detiene el hotspot activo. Async. */
-void nm_stop_hotspot_async (GDBusConnection *conn);
-
-typedef struct {
-    gchar    *conn_path;
-    gboolean  orig_autoconnect;
-} NmAutoconnectState;
-
-/* Lee autoconnect de todos los perfiles Wi-Fi que NO pertenecen a
- * ap_device_path, lo pone en FALSE y devuelve una GSList de
- * NmAutoconnectState con los valores originales. */
-GSList *nm_disable_wifi_autoconnect (GDBusConnection *conn,
-                                     const gchar     *ap_device_path);
-
-/* Restaura cada perfil al valor original y libera la lista. */
-void nm_restore_wifi_autoconnect (GDBusConnection *conn, GSList *states);
 
 #endif /* NM_DBUS_H */

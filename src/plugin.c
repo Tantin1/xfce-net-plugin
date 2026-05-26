@@ -182,12 +182,6 @@ get_config_path (void)
     return g_build_filename (g_get_user_config_dir (), CONFIG_PATH, NULL);
 }
 
-gchar *
-net_plugin_get_config_path (gpointer np_ptr)
-{
-    (void) np_ptr;
-    return get_config_path ();
-}
 
 static void
 load_config (NetPlugin *np)
@@ -539,53 +533,7 @@ net_plugin_set_connecting (gpointer np_ptr, gboolean connecting)
 
 /* ---------- callback de refresco por señales DBus ---------- */
 
-void
-net_plugin_save_autoconnect_restore (gpointer np_ptr, GSList *states)
-{
-    NetPlugin *np = np_ptr;
-    if (!np) return;
 
-    GKeyFile *kf   = g_key_file_new ();
-    gchar    *path = get_config_path ();
-    g_key_file_load_from_file (kf, path, G_KEY_FILE_NONE, NULL);
-
-    GString *buf = g_string_new (NULL);
-    for (GSList *l = states; l; l = l->next) {
-        NmAutoconnectState *st = l->data;
-        if (buf->len) g_string_append_c (buf, '\n');
-        g_string_append (buf, st->conn_path);
-    }
-    g_key_file_set_string (kf, "hotspot", "autoconnect_restore", buf->str);
-    g_string_free (buf, TRUE);
-
-    GError *err = NULL;
-    if (!g_key_file_save_to_file (kf, path, &err)) {
-        g_warning ("xfce-net-plugin: save_autoconnect_restore: %s", err->message);
-        g_error_free (err);
-    }
-    g_key_file_free (kf);
-    g_free (path);
-}
-
-void
-net_plugin_clear_autoconnect_restore (gpointer np_ptr)
-{
-    NetPlugin *np = np_ptr;
-    if (!np) return;
-
-    GKeyFile *kf   = g_key_file_new ();
-    gchar    *path = get_config_path ();
-    g_key_file_load_from_file (kf, path, G_KEY_FILE_NONE, NULL);
-    g_key_file_remove_key (kf, "hotspot", "autoconnect_restore", NULL);
-
-    GError *err = NULL;
-    if (!g_key_file_save_to_file (kf, path, &err)) {
-        g_warning ("xfce-net-plugin: clear_autoconnect_restore: %s", err->message);
-        g_error_free (err);
-    }
-    g_key_file_free (kf);
-    g_free (path);
-}
 
 static gboolean
 on_nm_changed_cb (gpointer user_data)
@@ -833,37 +781,6 @@ net_plugin_new (XfcePanelPlugin *plugin)
 
     load_config (np);
 
-    /* Recuperacion tras caida con hotspot activo: restaurar autoconnect
-     * en los perfiles que quedaron pendientes en el .ini. */
-    {
-        GKeyFile *kf   = g_key_file_new ();
-        gchar    *path = get_config_path ();
-        if (g_key_file_load_from_file (kf, path, G_KEY_FILE_NONE, NULL)) {
-            gchar *raw = g_key_file_get_string (kf, "hotspot",
-                                                "autoconnect_restore", NULL);
-            if (raw && *raw) {
-                gchar **rutas = g_strsplit (raw, "\n", -1);
-                GSList *lista = NULL;
-                for (gint ri = 0; rutas[ri]; ri++) {
-                    if (*rutas[ri]) {
-                        NmAutoconnectState *st = g_new0 (NmAutoconnectState, 1);
-                        st->conn_path        = g_strdup (rutas[ri]);
-                        st->orig_autoconnect = TRUE;
-                        lista = g_slist_append (lista, st);
-                    }
-                }
-                g_strfreev (rutas);
-                nm_restore_wifi_autoconnect (np->conn, lista);
-                g_key_file_remove_key (kf, "hotspot", "autoconnect_restore", NULL);
-                GError *kerr = NULL;
-                g_key_file_save_to_file (kf, path, &kerr);
-                if (kerr) g_error_free (kerr);
-            }
-            g_free (raw);
-        }
-        g_key_file_free (kf);
-        g_free (path);
-    }
 
     np->button = gtk_toggle_button_new ();
     gtk_button_set_relief (GTK_BUTTON (np->button), GTK_RELIEF_NONE);
