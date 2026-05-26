@@ -11,6 +11,7 @@ find_package(Intl REQUIRED)
 pkg_check_modules(GTK3       REQUIRED gtk+-3.0>=3.24)
 pkg_check_modules(XFCE4PANEL REQUIRED libxfce4panel-2.0>=4.18)
 pkg_check_modules(LIBNOTIFY           libnotify>=0.7)
+pkg_check_modules(LIBQRENCODE         libqrencode)
 
 set(GETTEXT_PACKAGE "xfce-net-plugin")
 set(LOCALE_DIR "${CMAKE_INSTALL_PREFIX}/share/locale")
@@ -25,17 +26,39 @@ if(LIBNOTIFY_FOUND)
 else()
     message(STATUS "libnotify: NO encontrada, notificaciones desactivadas")
 endif()
+if(LIBQRENCODE_FOUND)
+    add_definitions(-DHAVE_LIBQRENCODE)
+    message(STATUS "libqrencode: encontrada, códigos QR activados")
+else()
+    message(STATUS "libqrencode: NO encontrada, códigos QR desactivados")
+endif()
 
 add_library(xfce-net-plugin MODULE
     plugin.c
     popup.c
     nm-dbus.c
+    ${CMAKE_BINARY_DIR}/lock-icons-resource.c
+)
+
+# Compilar recurso embebido con los íconos propios del plugin (candado fallback)
+add_custom_command(
+    OUTPUT  "${CMAKE_BINARY_DIR}/lock-icons-resource.c"
+    COMMAND glib-compile-resources
+            --target=${CMAKE_BINARY_DIR}/lock-icons-resource.c
+            --generate-source
+            --c-name=lock_icons
+            --sourcedir=${CMAKE_SOURCE_DIR}/icons
+            ${CMAKE_SOURCE_DIR}/icons/lock-icons.gresource.xml
+    DEPENDS ${CMAKE_SOURCE_DIR}/icons/lock-icons.gresource.xml
+            ${CMAKE_SOURCE_DIR}/icons/nm-secure-lock.svg
+    COMMENT "Compilando recurso embebido de íconos de candado"
 )
 
 target_include_directories(xfce-net-plugin PRIVATE
     ${GTK3_INCLUDE_DIRS}
     ${XFCE4PANEL_INCLUDE_DIRS}
     ${LIBNOTIFY_INCLUDE_DIRS}
+    ${LIBQRENCODE_INCLUDE_DIRS}
 )
 
 target_compile_options(xfce-net-plugin PRIVATE
@@ -49,6 +72,7 @@ target_link_libraries(xfce-net-plugin PRIVATE
     ${XFCE4PANEL_LIBRARIES}
     ${Intl_LIBRARIES}
     ${LIBNOTIFY_LIBRARIES}
+    ${LIBQRENCODE_LIBRARIES}
 )
 
 if(NOT XFCE_PLUGIN_DIR)
@@ -64,10 +88,6 @@ install(FILES "${CMAKE_BINARY_DIR}/libxfce-net-plugin.so"
     DESTINATION "${XFCE_PLUGIN_DIR}"
 )
 
-# Ícono de candado fallback en hicolor
-install(FILES "${CMAKE_SOURCE_DIR}/icons/nm-secure-lock.svg"
-    DESTINATION "${CMAKE_INSTALL_PREFIX}/share/icons/hicolor/scalable/apps"
-)
 
 # Compilar e instalar traducciones
 set(LANGS es en de fr pt_BR it nl pl ru zh_CN ja)

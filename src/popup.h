@@ -73,6 +73,18 @@ typedef struct {
 
     /* Filtro GDK para detectar clicks en el área vacía del panel (cuando grab falla). */
     gboolean event_filter_active;
+    gboolean show_forget_active;   /* Mostrar botón Olvidar en redes activas. */
+    GtkWidget *hotspot_btn;        /* Botón Hotspot (NULL si hw no lo soporta). */
+    GtkWidget *hotspot_arrow;      /* Flecha arriba/abajo del botón Hotspot. */
+    gchar     *ap_capable_device;  /* device_path del adaptador AP-capable, o NULL. */
+    GtkWidget *hotspot_section;    /* Sección scrolleable del hotspot. */
+    GtkWidget *hotspot_ssid_entry; /* Entry SSID dentro de la sección. */
+    GtkWidget *hotspot_pass_entry; /* Entry contraseña dentro de la sección. */
+    GtkWidget *hotspot_switch;     /* Switch ON/OFF del hotspot. */
+
+    /* Lista de NmAutoconnectState con los perfiles cuya autoconexion fue
+     * deshabilitada al activar el hotspot. NULL cuando el hotspot esta apagado. */
+    GSList    *autoconnect_states;
 } NetPopup;
 
 /* Crea un widget con ícono de señal Wi-Fi. Si secure=TRUE superpone un candado. */
@@ -80,6 +92,10 @@ GtkWidget *make_signal_icon (gint strength, gboolean secure, gint icon_size);
 
 /* Controlado desde popup.c para mostrar/ocultar el spinner del panel. */
 void net_plugin_set_connecting (gpointer np_ptr, gboolean connecting);
+
+gchar *net_plugin_get_config_path         (gpointer np_ptr);
+void net_plugin_save_autoconnect_restore  (gpointer np_ptr, GSList *states);
+void net_plugin_clear_autoconnect_restore (gpointer np_ptr);
 
 NetPopup *popup_create  (XfcePanelPlugin *plugin, GtkWidget *button);
 void      popup_show    (NetPopup *popup, XfcePanelPlugin *plugin,

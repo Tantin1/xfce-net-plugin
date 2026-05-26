@@ -1,6 +1,9 @@
 #include "popup.h"
 #include <gdk/gdkkeysyms.h>
 #include <glib/gi18n.h>
+#ifdef HAVE_LIBQRENCODE
+#include <qrencode.h>
+#endif
 
 #define NM_BUS_NAME    "org.freedesktop.NetworkManager"
 #define NM_OBJECT_PATH "/org/freedesktop/NetworkManager"
@@ -60,7 +63,10 @@ typedef struct {
 
 /* ---------- prototipos anticipados ---------- */
 
-static void rebuild_ui (NetPopup *popup);
+static void rebuild_ui         (NetPopup *popup);
+static void on_hotspot_clicked  (GtkWidget *btn, NetPopup *popup);
+static void fill_hotspot_section   (NetPopup *popup);
+static void update_hotspot_section (NetPopup *popup);
 static void update_top_status (NetPopup *popup);
 static void update_eth_section (NetPopup *popup);
 static void update_vpn_section (NetPopup *popup);
@@ -548,7 +554,76 @@ check_ops_progress (NetPopup *popup)
     g_slist_free (to_remove);
 }
 
-/* ---------- ícono de señal Wi-Fi (usado también por plugin.c) ---------- */
+/* ---------- verificación robusta de existencia de íconos del tema ----------
+ *
+ * gtk_icon_theme_has_icon devuelve TRUE en cuanto el nombre está declarado
+ * en el index.theme del tema, sin comprobar que el archivo realmente exista.
+ * Hay temas (notablemente RedmondX y RedmondX-Light) que declaran nombres
+ * como nm-secure-lock pero el archivo en disco es un enlace simbólico roto.
+ *
+ * Esta función pide a GTK que resuelva el ícono al tamaño deseado, obtiene
+ * la ruta del archivo final, y verifica con g_file_test que ese archivo
+ * exista de verdad. Solo si las tres cosas (lookup OK + filename OK +
+ * archivo presente) se cumplen, devuelve TRUE. */
+static gboolean
+theme_icon_exists_real (const gchar *name, gint size)
+{
+    GtkIconTheme *theme = gtk_icon_theme_get_default ();
+    GtkIconInfo  *info  = gtk_icon_theme_lookup_icon (theme, name, size, 0);
+    if (!info)
+        return FALSE;
+
+    const gchar *filename = gtk_icon_info_get_filename (info);
+    gboolean ok = (filename != NULL) && g_file_test (filename, G_FILE_TEST_EXISTS);
+    g_object_unref (info);
+    return ok;
+}
+
+/* ---------- ícono de candado superpuesto (helper reutilizable) ----------
+ *
+ * Devuelve un GtkImage listo para superponer como overlay encima de otro
+ * widget. Prueba en orden:
+ *   1) nm-vpn-active-lock (existe en muchos temas que soportan nm-applet).
+ *   2) nm-secure-lock     (el nombre histórico de nm-applet).
+ *   3) /org/xfce/net-plugin/icons/nm-secure-lock.svg (recurso embebido en
+ *      el propio .so del plugin, garantiza que siempre se vea algo).
+ *
+ * Usa theme_icon_exists_real para evitar caer en enlaces rotos. */
+GtkWidget *
+make_lock_overlay_image (gint icon_size)
+{
+    GtkWidget *lock_img = NULL;
+
+    if (theme_icon_exists_real ("nm-vpn-active-lock", icon_size)) {
+        lock_img = gtk_image_new_from_icon_name ("nm-vpn-active-lock",
+                                                 GTK_ICON_SIZE_MENU);
+    } else if (theme_icon_exists_real ("nm-secure-lock", icon_size)) {
+        lock_img = gtk_image_new_from_icon_name ("nm-secure-lock",
+                                                 GTK_ICON_SIZE_MENU);
+    } else {
+        /* Último recurso: SVG embebido en el binario del plugin. */
+        lock_img = gtk_image_new_from_resource (
+            "/org/xfce/net-plugin/icons/nm-secure-lock.svg");
+    }
+
+    gtk_image_set_pixel_size (GTK_IMAGE (lock_img), icon_size);
+    gtk_widget_set_halign (lock_img, GTK_ALIGN_FILL);
+    gtk_widget_set_valign (lock_img, GTK_ALIGN_FILL);
+    return lock_img;
+}
+
+/* ---------- ícono de señal Wi-Fi (usado también por plugin.c) ----------
+ *
+ * Comportamiento:
+ *   - Red abierta:  ícono de señal normal (nm-signal-* con fallback freedesktop).
+ *   - Red segura:   ícono de señal normal + candado superpuesto via
+ *                   make_lock_overlay_image (que tiene su propio fallback).
+ *
+ * Las variantes integradas nm-signal-{nivel}-secure se descartan porque,
+ * cuando el tema activo no las provee, GTK cae a hicolor — y la versión de
+ * hicolor (instalada con network-manager-applet) es genérica y en algunos
+ * temas (notablemente Papirus en 16px) se ve mal. Usar siempre el candado
+ * superpuesto garantiza un resultado predecible en todos los temas. */
 
 GtkWidget *
 make_signal_icon (gint strength, gboolean secure, gint icon_size)
@@ -561,16 +636,14 @@ make_signal_icon (gint strength, gboolean secure, gint icon_size)
     else if (strength >= 30) { nm_level = "50";  fd_level = "ok";        }
     else                     { nm_level = "25";  fd_level = "weak";      }
 
-    gchar nm_name[64], nm_name_secure[64], fd_name[64];
-    g_snprintf (nm_name,        sizeof nm_name,
+    gchar nm_name[64], fd_name[64];
+    g_snprintf (nm_name, sizeof nm_name,
                 "nm-signal-%s", nm_level);
-    g_snprintf (nm_name_secure, sizeof nm_name_secure,
-                "nm-signal-%s-secure", nm_level);
-    g_snprintf (fd_name,        sizeof fd_name,
+    g_snprintf (fd_name, sizeof fd_name,
                 "network-wireless-signal-%s-symbolic", fd_level);
 
     /* Ícono de señal: nm-signal-* con fallback freedesktop. */
-    const gchar *signal_names[] = { nm_name, fd_name, NULL };
+    const gchar *signal_names[] = { fd_name, nm_name, NULL };
     GIcon     *signal_gicon = g_themed_icon_new_from_names ((gchar **) signal_names, -1);
     GtkWidget *signal_img   = gtk_image_new_from_gicon (signal_gicon, GTK_ICON_SIZE_MENU);
     g_object_unref (signal_gicon);
@@ -579,20 +652,11 @@ make_signal_icon (gint strength, gboolean secure, gint icon_size)
     if (!secure)
         return signal_img;
 
-    /* Para redes seguras: nm-signal-*-secure como primer candidato. */
-    const gchar *signal_sec_names[] = { nm_name_secure, nm_name, fd_name, NULL };
-    GIcon     *signal_sec_gicon = g_themed_icon_new_from_names ((gchar **) signal_sec_names, -1);
-    gtk_image_set_from_gicon (GTK_IMAGE (signal_img), signal_sec_gicon, GTK_ICON_SIZE_MENU);
-    g_object_unref (signal_sec_gicon);
-
+    /* Red segura: superponemos el candado encima del ícono de señal. */
     GtkWidget *overlay  = gtk_overlay_new ();
-    GtkWidget *lock_img = gtk_image_new_from_icon_name (
-                              "nm-secure-lock", GTK_ICON_SIZE_MENU);
-    gtk_image_set_pixel_size (GTK_IMAGE (lock_img), icon_size);
-    gtk_widget_set_halign (lock_img, GTK_ALIGN_FILL);
-    gtk_widget_set_valign (lock_img, GTK_ALIGN_FILL);
+    GtkWidget *lock_img = make_lock_overlay_image (icon_size);
 
-    gtk_container_add    (GTK_CONTAINER (overlay), signal_img);
+    gtk_container_add       (GTK_CONTAINER (overlay), signal_img);
     gtk_overlay_add_overlay (GTK_OVERLAY (overlay), lock_img);
     gtk_widget_set_size_request (overlay, icon_size, icon_size);
     gtk_widget_show_all (overlay);
@@ -697,7 +761,160 @@ typedef struct {
     GtkWidget       *forget_btn;     /* Botón "Olvidar" (solo en estado A para red con fallo). */
     GtkWidget       *confirm_box;    /* Contenedor de confirmación "¿Eliminar red guardada?" */
     GtkWidget       *action_row;     /* Fila con botones Conectar/Olvidar — se oculta al confirmar. */
+    GtkWidget       *qr_drawing_area;  /* GtkDrawingArea con el QR (solo en red activa+segura). */
+    GtkWidget       *qr_btn;           /* Botón "Mostrar QR" — se oculta al confirmar Olvidar. */
+    GtkWidget       *active_forget_btn; /* Botón "Olvidar" en red activa. */
+    GtkWidget       *details_btn;       /* Botón "Detalles" con flecha. */
+    GtkWidget       *details_box;       /* Panel de detalles expandible. */
+    GtkWidget       *details_arrow;     /* Ícono flecha arriba/abajo. */
 } RowData;
+
+/* ---------- ícono decorativo QR para botón (Cairo) ---------- */
+
+static gboolean
+draw_qr_button_icon (GtkWidget *widget, cairo_t *cr, gpointer user_data)
+{
+    (void) user_data;
+    gint w = gtk_widget_get_allocated_width  (widget);
+    gint h = gtk_widget_get_allocated_height (widget);
+    gint s = MIN (w, h);
+    gint x0 = (w - s) / 2;
+    gint y0 = (h - s) / 2;
+
+    /* Color del texto del tema */
+    GtkStyleContext *ctx = gtk_widget_get_style_context (widget);
+    GdkRGBA color;
+    gtk_style_context_get_color (ctx, gtk_style_context_get_state (ctx), &color);
+
+    gdouble u = s / 7.0;  /* unidad base */
+
+    /* Dibuja un cuadro de posición QR en (cx, cy): borde exterior + hueco + punto central */
+#define DRAW_FINDER(cx, cy)     cairo_set_source_rgba (cr, color.red, color.green, color.blue, color.alpha);     cairo_rectangle (cr, (cx), (cy), u*3, u*3); cairo_fill (cr);     cairo_set_operator (cr, CAIRO_OPERATOR_CLEAR);     cairo_rectangle (cr, (cx)+u*0.5, (cy)+u*0.5, u*2, u*2); cairo_fill (cr);     cairo_set_operator (cr, CAIRO_OPERATOR_OVER);     cairo_set_source_rgba (cr, color.red, color.green, color.blue, color.alpha);     cairo_rectangle (cr, (cx)+u, (cy)+u, u, u); cairo_fill (cr);
+
+    /* Necesario para que CAIRO_OPERATOR_CLEAR funcione */
+    cairo_save (cr);
+    cairo_set_operator (cr, CAIRO_OPERATOR_CLEAR);
+    cairo_paint (cr);
+    cairo_restore (cr);
+
+    DRAW_FINDER (x0,         y0)          /* esquina superior izquierda */
+    DRAW_FINDER (x0+s-u*3,   y0)          /* esquina superior derecha   */
+    DRAW_FINDER (x0,         y0+s-u*3)    /* esquina inferior izquierda */
+
+#undef DRAW_FINDER
+
+    /* Algunos módulos de datos en la zona central */
+    cairo_set_source_rgba (cr, color.red, color.green, color.blue, color.alpha);
+    gdouble pts[][2] = {
+        {3.5, 1.5}, {4.5, 2.5}, {3.5, 3.5}, {5.0, 3.5},
+        {3.5, 4.5}, {4.5, 5.0}, {5.5, 4.0}, {4.0, 4.0}
+    };
+    for (gsize i = 0; i < G_N_ELEMENTS (pts); i++)
+        cairo_rectangle (cr, x0 + pts[i][0]*u, y0 + pts[i][1]*u, u*0.8, u*0.8);
+    cairo_fill (cr);
+
+    return FALSE;
+}
+
+/* ---------- dibujar matriz QR real con Cairo ---------- */
+
+#ifdef HAVE_LIBQRENCODE
+static gboolean
+draw_qr_matrix (GtkWidget *widget, cairo_t *cr, gpointer user_data)
+{
+    QRcode *qr = user_data;
+    if (!qr) return FALSE;
+
+    gint w = gtk_widget_get_allocated_width  (widget);
+    gint h = gtk_widget_get_allocated_height (widget);
+    gint n = qr->width;
+    gdouble cell = MIN (w, h) / (gdouble)(n + 4); /* margen de 2 celdas */
+    gdouble ox   = (w - cell * n) / 2.0;
+    gdouble oy   = (h - cell * n) / 2.0;
+
+    /* Fondo blanco */
+    cairo_set_source_rgb (cr, 1, 1, 1);
+    cairo_paint (cr);
+
+    /* Módulos */
+    cairo_set_source_rgb (cr, 0, 0, 0);
+    for (gint row = 0; row < n; row++) {
+        for (gint col = 0; col < n; col++) {
+            if (qr->data[row * n + col] & 1) {
+                cairo_rectangle (cr,
+                    ox + col * cell,
+                    oy + row * cell,
+                    cell, cell);
+                cairo_fill (cr);
+            }
+        }
+    }
+    return FALSE;
+}
+#endif /* HAVE_LIBQRENCODE */
+
+/* ---------- callback botón "Mostrar QR" ---------- */
+
+static void
+on_qr_clicked (GtkWidget *btn, gpointer rd_ptr)
+{
+#ifndef HAVE_LIBQRENCODE
+    (void) btn; (void) rd_ptr;
+    return;
+#else
+    RowData   *rd  = rd_ptr;
+    GtkWidget *da  = rd->qr_drawing_area;
+    if (!da) return;
+
+    if (gtk_widget_get_visible (da)) {
+        gtk_widget_hide (da);
+        gtk_button_set_label (GTK_BUTTON (btn), _("Show QR"));
+        return;
+    }
+
+    /* Cerrar panel de detalles si estaba abierto */
+    if (rd->details_box && gtk_widget_get_visible (rd->details_box)) {
+        gtk_widget_hide (rd->details_box);
+        if (rd->details_arrow)
+            gtk_image_set_from_icon_name (GTK_IMAGE (rd->details_arrow),
+                                          "pan-down-symbolic", GTK_ICON_SIZE_MENU);
+    }
+
+    /* Obtener contraseña guardada */
+    gchar *password = nm_get_saved_password (rd->popup->conn, rd->ssid);
+    if (!password) {
+        gtk_button_set_label (GTK_BUTTON (btn), _("No saved password"));
+        return;
+    }
+
+    /* Construir cadena WIFI: */
+    gchar *wifi_str = g_strdup_printf ("WIFI:T:WPA;S:%s;P:%s;;", rd->ssid, password);
+    g_free (password);
+
+    QRcode *qr = QRcode_encodeString (wifi_str, 0, QR_ECLEVEL_M, QR_MODE_8, 1);
+    g_free (wifi_str);
+
+    if (!qr) {
+        gtk_button_set_label (GTK_BUTTON (btn), _("QR error"));
+        return;
+    }
+
+    /* Desconectar handler anterior por nombre de señal + callback,
+     * ignorando user_data (el QRcode* anterior puede diferir). */
+    g_signal_handlers_disconnect_matched (da,
+        G_SIGNAL_MATCH_FUNC,
+        0, 0, NULL, draw_qr_matrix, NULL);
+    QRcode *old_qr = g_object_get_data (G_OBJECT (da), "qrcode");
+    if (old_qr) QRcode_free (old_qr);
+    g_object_set_data (G_OBJECT (da), "qrcode", qr);
+
+    g_signal_connect (da, "draw", G_CALLBACK (draw_qr_matrix), qr);
+    gtk_widget_show (da);
+    gtk_widget_queue_draw (da);
+    gtk_button_set_label (GTK_BUTTON (btn), _("Hide QR"));
+#endif /* HAVE_LIBQRENCODE */
+}
+
 
 static void
 reopen_expand_for_ssid (NetPopup *popup, const gchar *ssid, const gchar *device_path)
@@ -911,6 +1128,10 @@ on_forget_clicked (GtkWidget *btn, gpointer rd_ptr)
     if (!rd->confirm_box) return;
     if (rd->action_row)        gtk_widget_hide (rd->action_row);
     if (rd->autoconnect_check) gtk_widget_hide (rd->autoconnect_check);
+    if (rd->qr_btn)            gtk_widget_hide (rd->qr_btn);
+    if (rd->qr_drawing_area)   gtk_widget_hide (rd->qr_drawing_area);
+    if (rd->details_btn)       gtk_widget_hide (rd->details_btn);
+    if (rd->details_box)       gtk_widget_hide (rd->details_box);
     gtk_widget_show (rd->confirm_box);
 }
 
@@ -922,6 +1143,8 @@ on_forget_cancel_clicked (GtkWidget *btn, gpointer rd_ptr)
     if (rd->confirm_box)       gtk_widget_hide (rd->confirm_box);
     if (rd->action_row)        gtk_widget_show (rd->action_row);
     if (rd->autoconnect_check) gtk_widget_show (rd->autoconnect_check);
+    if (rd->qr_btn)            gtk_widget_show (rd->qr_btn);
+    if (rd->details_btn)       gtk_widget_show (rd->details_btn);
 }
 
 static void
@@ -929,6 +1152,8 @@ on_forget_confirm_clicked (GtkWidget *btn, gpointer rd_ptr)
 {
     (void) btn;
     RowData *rd = rd_ptr;
+    if (rd->active)
+        nm_disconnect_device_async (rd->popup->conn, rd->device_path);
     nm_forget_connection (rd->popup->conn, rd->ssid);
     g_hash_table_remove (rd->popup->failed_ssids, rd->ssid);
     {
@@ -1151,6 +1376,58 @@ on_eye_released (GtkWidget *btn, gpointer rd_ptr)
         gtk_entry_set_visibility (GTK_ENTRY (rd->pass_entry), FALSE);
 }
 
+/* Agrega fila "Label: valor" al panel de detalles. Omite si valor es NULL o vacío. */
+static void
+details_add_row (GtkWidget *box, const gchar *label, const gchar *value)
+{
+    if (!value || !*value) return;
+    GtkWidget *row  = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget *lbl  = gtk_label_new (NULL);
+    gchar *markup   = g_markup_printf_escaped ("<b>%s</b>", label);
+    gtk_label_set_markup (GTK_LABEL (lbl), markup);
+    g_free (markup);
+    gtk_label_set_xalign (GTK_LABEL (lbl), 0.0);
+    gtk_widget_set_size_request (lbl, 80, -1);
+    GtkWidget *val  = gtk_label_new (value);
+    gtk_label_set_xalign (GTK_LABEL (val), 0.0);
+    gtk_label_set_selectable (GTK_LABEL (val), TRUE);
+    gtk_label_set_line_wrap (GTK_LABEL (val), TRUE);
+    gtk_label_set_max_width_chars (GTK_LABEL (val), 24);
+    gtk_box_pack_start (GTK_BOX (row), lbl, FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (row), val, TRUE,  TRUE,  0);
+    gtk_widget_show_all (row);
+    gtk_box_pack_start (GTK_BOX (box), row, FALSE, FALSE, 0);
+}
+
+/* ---------- callback botón "Detalles" ---------- */
+
+static void
+on_details_clicked (GtkWidget *btn, gpointer rd_ptr)
+{
+    (void) btn;
+    RowData   *rd = rd_ptr;
+    GtkWidget *db = rd->details_box;
+    if (!db) return;
+
+    if (!gtk_widget_get_visible (db)) {
+        /* Cerrar QR si estaba abierto */
+        if (rd->qr_drawing_area && gtk_widget_get_visible (rd->qr_drawing_area)) {
+            gtk_widget_hide (rd->qr_drawing_area);
+            if (rd->qr_btn)
+                gtk_button_set_label (GTK_BUTTON (rd->qr_btn), _("Show QR"));
+        }
+        if (rd->details_arrow)
+            gtk_image_set_from_icon_name (GTK_IMAGE (rd->details_arrow),
+                                          "pan-up-symbolic", GTK_ICON_SIZE_MENU);
+        gtk_widget_show (db);
+    } else {
+        if (rd->details_arrow)
+            gtk_image_set_from_icon_name (GTK_IMAGE (rd->details_arrow),
+                                          "pan-down-symbolic", GTK_ICON_SIZE_MENU);
+        gtk_widget_hide (db);
+    }
+}
+
 /* ---------- construcción de una fila de red ---------- */
 
 static GtkWidget *
@@ -1191,7 +1468,7 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
     gtk_widget_set_margin_top    (row, 8);
     gtk_widget_set_margin_bottom (row, 8);
 
-    signal_icon = make_signal_icon (ap->strength, ap->secure, 16);
+    signal_icon = make_signal_icon (ap->strength, ap->secure, 22);
     gtk_box_pack_start (GTK_BOX (row), signal_icon, FALSE, FALSE, 0);
 
     ssid_label = gtk_label_new (NULL);
@@ -1286,6 +1563,16 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
 
     if (ap_active) {
         action_btn = gtk_button_new_with_label (_("Disconnect"));
+        /* Label de señal para red activa */
+        {
+            gchar *sig_text = g_strdup_printf (_("Signal %d%%"), ap->strength);
+            GtkWidget *sig_label = gtk_label_new (sig_text);
+            g_free (sig_text);
+            gtk_style_context_add_class (gtk_widget_get_style_context (sig_label), "dim-label");
+            gtk_label_set_xalign (GTK_LABEL (sig_label), 0.0);
+            gtk_box_pack_start (GTK_BOX (expand_box), sig_label, FALSE, FALSE, 0);
+            gtk_widget_show (sig_label);
+        }
     } else if (is_connecting) {
         GtkWidget *connecting_label = gtk_label_new (_("Connecting…"));
         gtk_label_set_xalign (GTK_LABEL (connecting_label), 0.0);
@@ -1318,14 +1605,22 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
         gboolean had_failure = saved && ap->secure &&
             g_hash_table_contains (popup->failed_ssids, ap->ssid);
 
-        if (saved) {
-            GtkWidget *saved_label = gtk_label_new (_("Saved network"));
-            gtk_style_context_add_class (gtk_widget_get_style_context (saved_label),
-                                         "dim-label");
-            gtk_label_set_xalign (GTK_LABEL (saved_label), 0.0);
-            gtk_box_pack_start (GTK_BOX (expand_box), saved_label, FALSE, FALSE, 0);
-            gtk_widget_show (saved_label);
+        /* Label de información: señal siempre, + "Red guardada" si aplica. */
+        {
+            gchar *info_text;
+            if (saved)
+                info_text = g_strdup_printf (_("Saved network · Signal %d%%"), ap->strength);
+            else
+                info_text = g_strdup_printf (_("Signal %d%%"), ap->strength);
+            GtkWidget *info_label = gtk_label_new (info_text);
+            g_free (info_text);
+            gtk_style_context_add_class (gtk_widget_get_style_context (info_label), "dim-label");
+            gtk_label_set_xalign (GTK_LABEL (info_label), 0.0);
+            gtk_box_pack_start (GTK_BOX (expand_box), info_label, FALSE, FALSE, 0);
+            gtk_widget_show (info_label);
+        }
 
+        if (saved) {
             if (had_failure) {
                 /* Mensaje "El último intento falló al conectar", visible siempre. */
                 GtkWidget *fail_label = gtk_label_new (
@@ -1346,8 +1641,9 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
             autoconnect_check_widget = autoconnect_check_saved;
 
             forget_btn = gtk_button_new_with_label (_("Forget"));
-            gtk_widget_set_halign (forget_btn, GTK_ALIGN_END);
-        } else if (ap->secure) {
+            gtk_widget_set_halign (forget_btn, GTK_ALIGN_START);
+        }
+        if (ap->secure && !saved) {
             GtkWidget *pass_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
 
             pass_entry = gtk_entry_new ();
@@ -1385,20 +1681,144 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
 
     gtk_widget_set_halign (action_btn, GTK_ALIGN_END);
 
+    /* Botón Olvidar para red activa (controlado por opción show_forget_active). */
+    GtkWidget *active_forget_btn = NULL;
+    if (ap_active && popup->show_forget_active) {
+        active_forget_btn = gtk_button_new_with_label (_("Forget"));
+        gtk_widget_set_halign (active_forget_btn, GTK_ALIGN_START);
+    }
+
     action_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_box_pack_start (GTK_BOX (action_row), action_btn, FALSE, FALSE, 0);
+    /* Olvidar a la izquierda, acción principal a la derecha */
     if (!ap_active && forget_btn) {
-        gtk_box_pack_end (GTK_BOX (action_row), forget_btn, FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (action_row), forget_btn, FALSE, FALSE, 0);
         gtk_widget_show (forget_btn);
     }
+    if (ap_active && active_forget_btn) {
+        gtk_box_pack_start (GTK_BOX (action_row), active_forget_btn, FALSE, FALSE, 0);
+        gtk_widget_show (active_forget_btn);
+    }
+    gtk_box_pack_end (GTK_BOX (action_row), action_btn, FALSE, FALSE, 0);
     gtk_box_pack_start (GTK_BOX (expand_box), action_row, FALSE, FALSE, 0);
+
+    /* Botón "Mostrar QR" y área de dibujo — solo para redes activas y seguras. */
+    GtkWidget *qr_btn          = NULL;
+    GtkWidget *qr_drawing_area = NULL;
+    GtkWidget *details_btn     = NULL;
+    GtkWidget *details_box     = NULL;
+    GtkWidget *details_arrow   = NULL;
+
+    /* Fila secundaria: [QR] [Detalles ▼] */
+    {
+        GtkWidget *sec_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+        gtk_widget_set_halign (sec_row, GTK_ALIGN_START);
+
+        /* Botón QR — solo redes activas y seguras */
+        if (ap_active && ap->secure) {
+            qr_btn = gtk_button_new ();
+            GtkWidget *qr_box  = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+            GtkWidget *qr_da   = gtk_drawing_area_new ();
+            gtk_widget_set_size_request (qr_da, 16, 16);
+            g_signal_connect (qr_da, "draw", G_CALLBACK (draw_qr_button_icon), NULL);
+            GtkWidget *qr_lbl  = gtk_label_new (_("Show QR"));
+            gtk_box_pack_start (GTK_BOX (qr_box), qr_da,  FALSE, FALSE, 0);
+            gtk_box_pack_start (GTK_BOX (qr_box), qr_lbl, FALSE, FALSE, 0);
+            gtk_widget_show_all (qr_box);
+            gtk_container_add (GTK_CONTAINER (qr_btn), qr_box);
+            gtk_button_set_relief (GTK_BUTTON (qr_btn), GTK_RELIEF_NONE);
+            gtk_box_pack_start (GTK_BOX (sec_row), qr_btn, FALSE, FALSE, 0);
+            gtk_widget_show (qr_btn);
+        }
+
+        /* Botón Detalles — todas las redes */
+        details_btn   = gtk_button_new ();
+        details_arrow = gtk_image_new_from_icon_name ("pan-down-symbolic",
+                                                       GTK_ICON_SIZE_MENU);
+        GtkWidget *det_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+        GtkWidget *det_lbl = gtk_label_new (_("Details"));
+        gtk_box_pack_start (GTK_BOX (det_box), det_lbl,       FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (det_box), details_arrow, FALSE, FALSE, 0);
+        gtk_widget_show_all (det_box);
+        gtk_container_add (GTK_CONTAINER (details_btn), det_box);
+        gtk_button_set_relief (GTK_BUTTON (details_btn), GTK_RELIEF_NONE);
+        gtk_box_pack_start (GTK_BOX (sec_row), details_btn, FALSE, FALSE, 0);
+        gtk_widget_show (details_btn);
+
+        gtk_box_pack_start (GTK_BOX (expand_box), sec_row, FALSE, FALSE, 0);
+        gtk_widget_show (sec_row);
+    }
+
+    /* Área de dibujo del QR */
+    if (ap_active && ap->secure) {
+        qr_drawing_area = gtk_drawing_area_new ();
+        gtk_widget_set_size_request (qr_drawing_area, 180, 180);
+        gtk_widget_set_halign (qr_drawing_area, GTK_ALIGN_CENTER);
+        gtk_box_pack_start (GTK_BOX (expand_box), qr_drawing_area, FALSE, FALSE, 4);
+        gtk_widget_hide (qr_drawing_area);
+        gtk_widget_set_no_show_all (qr_drawing_area, TRUE);
+    }
+
+    /* Panel de detalles */
+    {
+        details_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
+        gtk_widget_set_margin_start  (details_box, 4);
+        gtk_widget_set_margin_bottom (details_box, 4);
+
+        if (ap_active) {
+            NmConnectionDetails *det = nm_get_connection_details (conn, device_path);
+            if (det) {
+                gchar *ip_str = NULL;
+                if (det->ip4_address && det->ip4_prefix)
+                    ip_str = g_strdup_printf ("%s/%s", det->ip4_address, det->ip4_prefix);
+                else if (det->ip4_address)
+                    ip_str = g_strdup (det->ip4_address);
+                details_add_row (details_box, _("IP:"),      ip_str);
+                details_add_row (details_box, _("Gateway:"), det->ip4_gateway);
+                details_add_row (details_box, _("DNS:"),     det->ip4_dns);
+                details_add_row (details_box, _("IPv6:"),    det->ip6_address);
+                g_free (ip_str);
+                nm_connection_details_free (det);
+            }
+        }
+
+        /* Datos del AP: seguridad, frecuencia, canal, BSSID */
+        {
+            const gchar *sec_str = _("Open");
+            if      (ap->rsn_flags)  sec_str = "WPA2/WPA3";
+            else if (ap->wpa_flags)  sec_str = "WPA";
+            else if (ap->secure)     sec_str = _("Encrypted");
+            details_add_row (details_box, _("Security:"), sec_str);
+
+            if (ap->frequency > 0) {
+                gchar *freq_str = g_strdup_printf ("%u MHz", ap->frequency);
+                details_add_row (details_box, _("Frequency:"), freq_str);
+                g_free (freq_str);
+
+                guint ch = 0;
+                if      (ap->frequency >= 5925) ch = (ap->frequency - 5950) / 5;
+                else if (ap->frequency >= 5000) ch = (ap->frequency - 5000) / 5;
+                else if (ap->frequency >= 2412) ch = (ap->frequency - 2407) / 5;
+                if (ch > 0) {
+                    gchar *ch_str = g_strdup_printf ("%u", ch);
+                    details_add_row (details_box, _("Channel:"), ch_str);
+                    g_free (ch_str);
+                }
+            }
+
+            details_add_row (details_box, _("BSSID:"), ap->bssid);
+        }
+
+        gtk_box_pack_start (GTK_BOX (expand_box), details_box, FALSE, FALSE, 0);
+        gtk_widget_hide (details_box);
+        gtk_widget_set_no_show_all (details_box, TRUE);
+    }
 
     /* Contenedor de confirmación "¿Eliminar red guardada?" — oculto por defecto.
      * Las señales se conectan más abajo, cuando rd ya existe. */
     GtkWidget *confirm_box    = NULL;
     GtkWidget *confirm_cancel = NULL;
     GtkWidget *confirm_ok     = NULL;
-    if (forget_btn) {
+    if (forget_btn || active_forget_btn) {
         confirm_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
 
         gchar     *confirm_text  = g_strdup_printf (_("Forget network \"%s\"?"), ap->ssid);
@@ -1449,6 +1869,12 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
     rd->forget_btn        = forget_btn;
     rd->confirm_box       = confirm_box;
     rd->action_row        = action_row;
+    rd->qr_drawing_area   = qr_drawing_area;
+    rd->qr_btn            = qr_btn;
+    rd->active_forget_btn = active_forget_btn;
+    rd->details_btn       = details_btn;
+    rd->details_box       = details_box;
+    rd->details_arrow     = details_arrow;
     if (confirm_cancel)
         g_signal_connect (confirm_cancel, "clicked",
                           G_CALLBACK (on_forget_cancel_clicked),  rd);
@@ -1567,6 +1993,12 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
     if (ap_active) {
         g_signal_connect (action_btn, "clicked",
                           G_CALLBACK (on_disconnect_clicked), rd);
+        if (qr_btn)
+            g_signal_connect (qr_btn, "clicked",
+                              G_CALLBACK (on_qr_clicked), rd);
+        if (active_forget_btn)
+            g_signal_connect (active_forget_btn, "clicked",
+                              G_CALLBACK (on_forget_clicked), rd);
     } else {
         g_signal_connect (action_btn, "clicked",
                           G_CALLBACK (on_connect_clicked), rd);
@@ -1593,6 +2025,10 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
             g_list_free (kids);
         }
     }
+
+    if (details_btn)
+        g_signal_connect (details_btn, "clicked",
+                          G_CALLBACK (on_details_clicked), rd);
 
     return event_box;
 }
@@ -1739,6 +2175,9 @@ fill_vpn_section (NetPopup *popup)
         gtk_widget_set_margin_end    (row, 12);
         gtk_widget_set_margin_top    (row, 4);
         gtk_widget_set_margin_bottom (row, 4);
+
+        GtkWidget *vpn_icon = gtk_image_new_from_icon_name ("network-vpn", GTK_ICON_SIZE_MENU);
+        gtk_box_pack_start (GTK_BOX (row), vpn_icon, FALSE, FALSE, 4);
 
         GtkWidget *name_label = gtk_label_new (vpn->name);
         gtk_label_set_xalign   (GTK_LABEL (name_label), 0.0);
@@ -2021,8 +2460,9 @@ update_devices_section (NetPopup *popup)
     GList *kids = gtk_container_get_children (GTK_CONTAINER (popup->content_box));
     for (GList *k = kids; k; k = k->next) {
         /* Saltar secciones fijas (VPN y Ethernet) que se reordenan aparte. */
-        if (k->data == popup->vpn_section) continue;
-        if (k->data == popup->eth_section) continue;
+        if (k->data == popup->vpn_section)     continue;
+        if (k->data == popup->eth_section)     continue;
+        if (k->data == popup->hotspot_section) continue;
         gtk_widget_destroy (GTK_WIDGET (k->data));
     }
     g_list_free (kids);
@@ -2032,8 +2472,13 @@ update_devices_section (NetPopup *popup)
 
     GSList *devices = nm_get_wifi_devices (popup->conn);
     gint    n_devices = g_slist_length (devices);
+    gboolean hotspot_active = nm_get_hotspot_state (popup->conn, NULL, NULL);
     for (GSList *d = devices; d; d = d->next) {
-        GtkWidget *section = make_device_section (popup, d->data, n_devices > 1);
+        NmDevice *dev = d->data;
+        if (hotspot_active && popup->ap_capable_device &&
+            g_strcmp0 (dev->object_path, popup->ap_capable_device) == 0)
+            continue;
+        GtkWidget *section = make_device_section (popup, dev, n_devices > 1);
         gtk_box_pack_start (GTK_BOX (popup->content_box), section, FALSE, FALSE, 0);
         gtk_box_reorder_child (GTK_BOX (popup->content_box), section, -1);
     }
@@ -2043,24 +2488,34 @@ update_devices_section (NetPopup *popup)
      * Ethernet activo → posición 0; VPN activa → posición 1 (o 0 si Ethernet no activo).
      * Si no están activos van al fondo (-1). */
     {
-        gboolean eth_active = gtk_widget_get_visible (popup->eth_section);
+        gboolean eth_active     = gtk_widget_get_visible (popup->eth_section);
+        gboolean hotspot_visible = popup->hotspot_section &&
+                                   gtk_widget_get_visible (popup->hotspot_section);
         gboolean vpn_active = FALSE;
         GSList *vpns = nm_get_vpn_connections (popup->conn);
         for (GSList *v = vpns; v && !vpn_active; v = v->next)
             vpn_active = ((NmVpnConnection *) v->data)->active;
         nm_vpn_list_free (vpns);
 
+        /* Orden: Ethernet(0) → Hotspot(1) → VPN(2) → Wi-Fi */
+        gint pos = 0;
         if (eth_active)
             gtk_box_reorder_child (GTK_BOX (popup->content_box),
-                                   popup->eth_section, 0);
+                                   popup->eth_section, pos++);
         else
             gtk_box_reorder_child (GTK_BOX (popup->content_box),
                                    popup->eth_section, -1);
 
+        if (hotspot_visible)
+            gtk_box_reorder_child (GTK_BOX (popup->content_box),
+                                   popup->hotspot_section, pos++);
+        else
+            gtk_box_reorder_child (GTK_BOX (popup->content_box),
+                                   popup->hotspot_section, -1);
+
         if (vpn_active)
             gtk_box_reorder_child (GTK_BOX (popup->content_box),
-                                   popup->vpn_section,
-                                   eth_active ? 1 : 0);
+                                   popup->vpn_section, pos);
         else
             gtk_box_reorder_child (GTK_BOX (popup->content_box),
                                    popup->vpn_section, -1);
@@ -2136,6 +2591,342 @@ on_nm_signal_popup (gpointer user_data)
 
 /* ---------- construcción inicial de la UI ---------- */
 
+/* ---------- callback botón Hotspot ---------- */
+
+/* ---------- sección Hotspot ---------- */
+
+static gboolean
+on_hotspot_switch_toggled (GtkSwitch *sw, gboolean state, gpointer popup_ptr)
+{
+    NetPopup *popup = popup_ptr;
+    (void) sw;
+    if (state) {
+        /* Si el hotspot ya está activo (modo activo, ssid_entry == NULL),
+         * mantener el switch en TRUE sin hacer nada. */
+        if (!popup->hotspot_ssid_entry) {
+            gtk_switch_set_state (GTK_SWITCH (sw), TRUE);
+            return TRUE; /* cancelar acción GTK */
+        }
+        const gchar *ssid = gtk_entry_get_text (GTK_ENTRY (popup->hotspot_ssid_entry));
+        const gchar *pass = popup->hotspot_pass_entry
+                            ? gtk_entry_get_text (GTK_ENTRY (popup->hotspot_pass_entry))
+                            : "";
+        if (!ssid || !*ssid) return TRUE;
+        popup->autoconnect_states =
+            nm_disable_wifi_autoconnect (popup->conn, popup->ap_capable_device);
+        net_plugin_save_autoconnect_restore (popup->plugin_ref,
+                                             popup->autoconnect_states);
+        {
+            gchar *cfg = net_plugin_get_config_path (popup->plugin_ref);
+            nm_create_hotspot_async (popup->conn, popup->ap_capable_device,
+                                     ssid, pass, cfg);
+            g_free (cfg);
+        }
+    } else {
+        nm_restore_wifi_autoconnect (popup->conn, popup->autoconnect_states);
+        popup->autoconnect_states = NULL;
+        net_plugin_clear_autoconnect_restore (popup->plugin_ref);
+        nm_stop_hotspot_async (popup->conn);
+        /* Refrescar la sección para volver al modo editable */
+        fill_hotspot_section (popup);
+    }
+    return FALSE;
+}
+
+static void
+on_hotspot_show_pass_clicked (GtkWidget *btn, gpointer box_ptr)
+{
+    GtkWidget  *box  = box_ptr;
+    const gchar *pass = g_object_get_data (G_OBJECT (btn), "hotspot-pass");
+
+    /* Buscar si ya existe un label de contraseña en la caja */
+    GtkWidget *existing = g_object_get_data (G_OBJECT (box), "pass-label-row");
+    if (existing) {
+        gtk_widget_destroy (existing);
+        g_object_set_data (G_OBJECT (box), "pass-label-row", NULL);
+        return;
+    }
+
+    GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_widget_set_margin_start  (row, 12);
+    gtk_widget_set_margin_end    (row, 12);
+    gtk_widget_set_margin_top    (row, 0);
+    gtk_widget_set_margin_bottom (row, 8);
+    GtkWidget *lbl_title = gtk_label_new (NULL);
+    gtk_label_set_markup (GTK_LABEL (lbl_title), "<small>Clave:</small>");
+    gtk_label_set_xalign (GTK_LABEL (lbl_title), 0.0);
+    gtk_widget_set_size_request (lbl_title, 70, -1);
+    GtkWidget *lbl_pass = gtk_label_new (pass ? pass : "");
+    gtk_label_set_xalign  (GTK_LABEL (lbl_pass), 0.0);
+    gtk_label_set_selectable (GTK_LABEL (lbl_pass), TRUE);
+    gtk_box_pack_start (GTK_BOX (row), lbl_title, FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (row), lbl_pass,  TRUE,  TRUE,  0);
+    gtk_widget_show_all (row);
+    gtk_box_pack_start (GTK_BOX (box), row, FALSE, FALSE, 0);
+    g_object_set_data (G_OBJECT (box), "pass-label-row", row);
+}
+
+static void
+fill_hotspot_section (NetPopup *popup)
+{
+    GtkWidget *box = popup->hotspot_section;
+    if (!box) return;
+
+    /* Vaciar */
+    GList *kids = gtk_container_get_children (GTK_CONTAINER (box));
+    g_list_foreach (kids, (GFunc) gtk_widget_destroy, NULL);
+    g_list_free (kids);
+    popup->hotspot_ssid_entry = NULL;
+    popup->hotspot_pass_entry = NULL;
+    popup->hotspot_switch     = NULL;
+
+    /* Separador */
+    if (popup->show_separators) {
+        GtkWidget *sep = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+        gtk_widget_set_size_request (sep, -1, 2);
+        gtk_style_context_add_class (gtk_widget_get_style_context (sep), "module-sep");
+        GtkCssProvider *sc = gtk_css_provider_new ();
+        gtk_css_provider_load_from_data (sc,
+            ".module-sep { background-color: mix(@theme_bg_color, @theme_fg_color, 0.3);"
+            " min-height: 2px; }", -1, NULL);
+        gtk_style_context_add_provider (gtk_widget_get_style_context (sep),
+            GTK_STYLE_PROVIDER (sc), GTK_STYLE_PROVIDER_PRIORITY_USER);
+        g_object_unref (sc);
+        gtk_box_pack_start (GTK_BOX (box), sep, FALSE, FALSE, 0);
+    }
+
+    /* Aviso si NM no tiene dnsmasq configurado */
+    if (!nm_check_hotspot_prerequisites ()) {
+        GtkWidget *warn_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+        gtk_widget_set_margin_start  (warn_row, 12);
+        gtk_widget_set_margin_end    (warn_row, 12);
+        gtk_widget_set_margin_top    (warn_row, 6);
+        gtk_widget_set_margin_bottom (warn_row, 6);
+        GtkWidget *warn_icon = gtk_image_new_from_icon_name ("dialog-warning-symbolic",
+                                                              GTK_ICON_SIZE_MENU);
+        GtkWidget *warn_lbl  = gtk_label_new (NULL);
+        gtk_label_set_markup (GTK_LABEL (warn_lbl),
+            "<small>Requiere <b>dns=dnsmasq</b> en NetworkManager.conf para que los clientes reciban IP.</small>");
+        gtk_label_set_line_wrap (GTK_LABEL (warn_lbl), TRUE);
+        gtk_label_set_xalign (GTK_LABEL (warn_lbl), 0.0);
+        gtk_style_context_add_class (gtk_widget_get_style_context (warn_lbl), "dim-label");
+        gtk_box_pack_start (GTK_BOX (warn_row), warn_icon, FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (warn_row), warn_lbl,  TRUE,  TRUE,  0);
+        gtk_box_pack_start (GTK_BOX (box), warn_row, FALSE, FALSE, 0);
+    }
+
+    /* Detectar estado actual */
+    gchar *cur_ssid = NULL, *cur_pass = NULL;
+    gboolean active = nm_get_hotspot_state (popup->conn, &cur_ssid, &cur_pass);
+
+    /* Nombre del adaptador AP para mostrar en modo activo */
+    gchar *ap_iface = NULL;
+    if (active && popup->ap_capable_device) {
+        GError   *ierr = NULL;
+        GVariant *ir   = g_dbus_connection_call_sync (
+            popup->conn, "org.freedesktop.NetworkManager",
+            popup->ap_capable_device,
+            "org.freedesktop.DBus.Properties", "Get",
+            g_variant_new ("(ss)",
+                "org.freedesktop.NetworkManager.Device", "Interface"),
+            G_VARIANT_TYPE ("(v)"),
+            G_DBUS_CALL_FLAGS_NONE, 1500, NULL, &ierr);
+        if (ir) {
+            GVariant *iv; g_variant_get (ir, "(v)", &iv);
+            ap_iface = g_strdup (g_variant_get_string (iv, NULL));
+            g_variant_unref (iv); g_variant_unref (ir);
+        } else if (ierr) g_error_free (ierr);
+    }
+
+    /* ── Header con switch ── */
+    GtkWidget *header_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_margin_start  (header_row, 12);
+    gtk_widget_set_margin_end    (header_row, 12);
+    gtk_widget_set_margin_top    (header_row, 8);
+    gtk_widget_set_margin_bottom (header_row, 4);
+
+    GtkWidget *header_vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+    GtkWidget *header = gtk_label_new (NULL);
+    gtk_label_set_markup (GTK_LABEL (header), "<b><small>Hotspot</small></b>");
+    gtk_label_set_xalign (GTK_LABEL (header), 0.0);
+    gtk_box_pack_start (GTK_BOX (header_vbox), header, FALSE, FALSE, 0);
+
+    if (active && ap_iface) {
+        gchar *iface_txt = g_strdup_printf ("<small>en %s</small>", ap_iface);
+        GtkWidget *iface_lbl = gtk_label_new (NULL);
+        gtk_label_set_markup (GTK_LABEL (iface_lbl), iface_txt);
+        gtk_label_set_xalign (GTK_LABEL (iface_lbl), 0.0);
+        gtk_style_context_add_class (gtk_widget_get_style_context (iface_lbl), "dim-label");
+        gtk_box_pack_start (GTK_BOX (header_vbox), iface_lbl, FALSE, FALSE, 0);
+        g_free (iface_txt);
+    }
+    gtk_box_pack_start (GTK_BOX (header_row), header_vbox, TRUE, TRUE, 0);
+
+    popup->hotspot_switch = gtk_switch_new ();
+    gtk_switch_set_active (GTK_SWITCH (popup->hotspot_switch), active);
+    gtk_widget_set_valign (popup->hotspot_switch, GTK_ALIGN_CENTER);
+    gtk_box_pack_end (GTK_BOX (header_row), popup->hotspot_switch, FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (box), header_row, FALSE, FALSE, 0);
+
+    if (active) {
+        /* ── MODO ACTIVO: solo lectura ── */
+        GtkWidget *ssid_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+        gtk_widget_set_margin_start  (ssid_row, 12);
+        gtk_widget_set_margin_end    (ssid_row, 12);
+        gtk_widget_set_margin_top    (ssid_row, 4);
+        gtk_widget_set_margin_bottom (ssid_row, 2);
+        GtkWidget *ssid_title = gtk_label_new (NULL);
+        gtk_label_set_markup (GTK_LABEL (ssid_title), "<small>Red:</small>");
+        gtk_label_set_xalign (GTK_LABEL (ssid_title), 0.0);
+        gtk_widget_set_size_request (ssid_title, 70, -1);
+        GtkWidget *ssid_val = gtk_label_new (cur_ssid ? cur_ssid : "");
+        gtk_label_set_xalign (GTK_LABEL (ssid_val), 0.0);
+        gtk_label_set_selectable (GTK_LABEL (ssid_val), TRUE);
+        gtk_box_pack_start (GTK_BOX (ssid_row), ssid_title, FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (ssid_row), ssid_val,   TRUE,  TRUE,  0);
+        gtk_box_pack_start (GTK_BOX (box), ssid_row, FALSE, FALSE, 0);
+
+        /* Fila de acciones */
+        GtkWidget *btn_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+        gtk_widget_set_margin_start  (btn_row, 12);
+        gtk_widget_set_margin_end    (btn_row, 12);
+        gtk_widget_set_margin_top    (btn_row, 4);
+        gtk_widget_set_margin_bottom (btn_row, 8);
+
+        /* Entry oculto que guarda la contraseña para QR y show-pass */
+        popup->hotspot_pass_entry = gtk_entry_new ();
+        gtk_entry_set_text (GTK_ENTRY (popup->hotspot_pass_entry),
+                            cur_pass ? cur_pass : "");
+        gtk_widget_set_no_show_all (popup->hotspot_pass_entry, TRUE);
+        gtk_widget_hide (popup->hotspot_pass_entry);
+        gtk_box_pack_start (GTK_BOX (box), popup->hotspot_pass_entry, FALSE, FALSE, 0);
+
+#ifdef HAVE_LIBQRENCODE
+        GtkWidget *qr_btn = gtk_button_new ();
+        GtkWidget *qr_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+        gtk_box_pack_start (GTK_BOX (qr_box),
+            gtk_image_new_from_icon_name ("view-list-symbolic", GTK_ICON_SIZE_MENU),
+            FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (qr_box), gtk_label_new (_("QR")), FALSE, FALSE, 0);
+        gtk_container_add (GTK_CONTAINER (qr_btn), qr_box);
+        gtk_button_set_relief (GTK_BUTTON (qr_btn), GTK_RELIEF_NONE);
+        g_object_set_data_full (G_OBJECT (qr_btn), "ssid",
+                                g_strdup (cur_ssid ? cur_ssid : ""), g_free);
+        g_signal_connect (qr_btn, "clicked", G_CALLBACK (on_qr_clicked), popup);
+        gtk_box_pack_start (GTK_BOX (btn_row), qr_btn, FALSE, FALSE, 0);
+#endif
+
+        /* Botón Mostrar contraseña */
+        GtkWidget *show_pass_btn = gtk_button_new ();
+        GtkWidget *sp_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+        gtk_box_pack_start (GTK_BOX (sp_box),
+            gtk_image_new_from_icon_name ("view-reveal-symbolic", GTK_ICON_SIZE_MENU),
+            FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (sp_box),
+            gtk_label_new (_("Password")), FALSE, FALSE, 0);
+        gtk_container_add (GTK_CONTAINER (show_pass_btn), sp_box);
+        gtk_button_set_relief (GTK_BUTTON (show_pass_btn), GTK_RELIEF_NONE);
+        g_object_set_data_full (G_OBJECT (show_pass_btn), "hotspot-pass",
+                                g_strdup (cur_pass ? cur_pass : ""), g_free);
+        g_signal_connect (show_pass_btn, "clicked",
+                          G_CALLBACK (on_hotspot_show_pass_clicked), box);
+        gtk_box_pack_start (GTK_BOX (btn_row), show_pass_btn, FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (box), btn_row, FALSE, FALSE, 0);
+
+        popup->hotspot_ssid_entry = NULL;
+
+    } else {
+        /* ── MODO APAGADO: campos editables ── */
+        GtkWidget *ssid_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+        gtk_widget_set_margin_start  (ssid_row, 12);
+        gtk_widget_set_margin_end    (ssid_row, 12);
+        gtk_widget_set_margin_top    (ssid_row, 4);
+        gtk_widget_set_margin_bottom (ssid_row, 2);
+        GtkWidget *ssid_lbl = gtk_label_new (_("SSID:"));
+        gtk_widget_set_size_request (ssid_lbl, 70, -1);
+        gtk_label_set_xalign (GTK_LABEL (ssid_lbl), 0.0);
+        popup->hotspot_ssid_entry = gtk_entry_new ();
+        gtk_entry_set_text (GTK_ENTRY (popup->hotspot_ssid_entry),
+                            cur_ssid ? cur_ssid : "Mi Hotspot");
+        gtk_entry_set_max_length (GTK_ENTRY (popup->hotspot_ssid_entry), 32);
+        gtk_box_pack_start (GTK_BOX (ssid_row), ssid_lbl, FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (ssid_row), popup->hotspot_ssid_entry, TRUE, TRUE, 0);
+        gtk_box_pack_start (GTK_BOX (box), ssid_row, FALSE, FALSE, 0);
+
+        GtkWidget *pass_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+        gtk_widget_set_margin_start  (pass_row, 12);
+        gtk_widget_set_margin_end    (pass_row, 12);
+        gtk_widget_set_margin_top    (pass_row, 2);
+        gtk_widget_set_margin_bottom (pass_row, 8);
+        GtkWidget *pass_lbl = gtk_label_new (_("Password:"));
+        gtk_widget_set_size_request (pass_lbl, 70, -1);
+        gtk_label_set_xalign (GTK_LABEL (pass_lbl), 0.0);
+        popup->hotspot_pass_entry = gtk_entry_new ();
+        gtk_entry_set_visibility (GTK_ENTRY (popup->hotspot_pass_entry), FALSE);
+        if (cur_pass) {
+            gtk_entry_set_text (GTK_ENTRY (popup->hotspot_pass_entry), cur_pass);
+        } else {
+            gchar rnd[13];
+            const gchar *chars = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+            for (gint i = 0; i < 12; i++)
+                rnd[i] = chars[g_random_int_range (0, 57)];
+            rnd[12] = ' ';
+            gtk_entry_set_text (GTK_ENTRY (popup->hotspot_pass_entry), rnd);
+        }
+        GtkWidget *eye_btn  = gtk_button_new ();
+        GtkWidget *eye_icon = gtk_image_new_from_icon_name ("view-reveal-symbolic",
+                                                             GTK_ICON_SIZE_MENU);
+        gtk_button_set_image  (GTK_BUTTON (eye_btn), eye_icon);
+        gtk_button_set_relief (GTK_BUTTON (eye_btn), GTK_RELIEF_NONE);
+        g_signal_connect (eye_btn, "clicked",
+            G_CALLBACK (on_eye_clicked), popup->hotspot_pass_entry);
+        gtk_box_pack_start (GTK_BOX (pass_row), pass_lbl,                    FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (pass_row), popup->hotspot_pass_entry,   TRUE,  TRUE,  0);
+        gtk_box_pack_start (GTK_BOX (pass_row), eye_btn,                     FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (box), pass_row, FALSE, FALSE, 0);
+    }
+
+    g_free (cur_ssid);
+    g_free (cur_pass);
+    g_free (ap_iface);
+
+    g_signal_connect (popup->hotspot_switch, "state-set",
+                      G_CALLBACK (on_hotspot_switch_toggled), popup);
+
+    gtk_widget_show_all (box);
+}
+
+static void
+update_hotspot_section (NetPopup *popup)
+{
+    if (!popup->ui_built) return;
+    if (!popup->hotspot_section) return;
+    if (!gtk_widget_get_visible (popup->hotspot_section)) return;
+    fill_hotspot_section (popup);
+}
+
+static void
+on_hotspot_clicked (GtkWidget *btn, NetPopup *popup)
+{
+    (void) btn;
+    if (!popup->hotspot_section) return;
+
+    if (gtk_widget_get_visible (popup->hotspot_section)) {
+        gtk_widget_hide (popup->hotspot_section);
+        if (popup->hotspot_arrow)
+            gtk_image_set_from_icon_name (GTK_IMAGE (popup->hotspot_arrow),
+                                          "pan-down-symbolic", GTK_ICON_SIZE_MENU);
+    } else {
+        gtk_widget_set_no_show_all (popup->hotspot_section, FALSE);
+        fill_hotspot_section (popup);
+        gtk_widget_show_all (popup->hotspot_section);
+        gtk_widget_set_no_show_all (popup->hotspot_section, TRUE);
+        if (popup->hotspot_arrow)
+            gtk_image_set_from_icon_name (GTK_IMAGE (popup->hotspot_arrow),
+                                          "pan-up-symbolic", GTK_ICON_SIZE_MENU);
+    }
+}
+
 static void
 rebuild_ui (NetPopup *popup)
 {
@@ -2184,14 +2975,23 @@ rebuild_ui (NetPopup *popup)
     GtkWidget *center_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
     gtk_box_pack_start (GTK_BOX (top_row), center_box, TRUE, TRUE, 0);
 
-    /* Botón Actualizar */
+    /* Detectar capacidad AP y decidir si mostrar botón hotspot */
+    gchar *ap_dev = nm_find_ap_capable_device (conn);
+    popup->ap_capable_device = ap_dev;
+    gboolean has_hotspot = ap_dev && nm_hotspot_should_show (conn);
+
+    /* Botón Actualizar — solo ícono si hay hotspot, ícono+texto si no */
     popup->refresh_button = gtk_button_new ();
     GtkWidget *refresh_box  = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
     GtkWidget *refresh_icon = gtk_image_new_from_icon_name (
                                   "view-refresh-symbolic", GTK_ICON_SIZE_MENU);
-    popup->refresh_label = gtk_label_new (popup->scanning ? _("Updating…") : _("Refresh"));
-    gtk_box_pack_start (GTK_BOX (refresh_box), refresh_icon,  FALSE, FALSE, 0);
-    gtk_box_pack_start (GTK_BOX (refresh_box), popup->refresh_label, FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (refresh_box), refresh_icon, FALSE, FALSE, 0);
+    if (!has_hotspot) {
+        popup->refresh_label = gtk_label_new (popup->scanning ? _("Updating…") : _("Refresh"));
+        gtk_box_pack_start (GTK_BOX (refresh_box), popup->refresh_label, FALSE, FALSE, 0);
+    } else {
+        popup->refresh_label = NULL;
+    }
     gtk_container_add  (GTK_CONTAINER (popup->refresh_button), refresh_box);
     gtk_button_set_relief (GTK_BUTTON (popup->refresh_button), GTK_RELIEF_NONE);
     gtk_widget_set_valign (popup->refresh_button, GTK_ALIGN_CENTER);
@@ -2199,7 +2999,37 @@ rebuild_ui (NetPopup *popup)
     gtk_widget_set_sensitive (popup->refresh_button, !popup->scanning);
     g_signal_connect (popup->refresh_button, "clicked",
                       G_CALLBACK (on_refresh_clicked), popup);
-    gtk_box_pack_end (GTK_BOX (top_row), popup->refresh_button, FALSE, FALSE, 0);
+
+    /* Botón Hotspot — solo si el hardware lo soporta, va antes de Actualizar */
+    popup->hotspot_btn = NULL;
+    if (has_hotspot) {
+        popup->hotspot_btn = gtk_button_new ();
+        GtkWidget *hs_box  = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+        const gchar *hs_icon_names[] = { "network-wireless-hotspot-symbolic",
+                                         "emblem-shared-symbolic", NULL };
+        GIcon     *hs_gicon = g_themed_icon_new_from_names ((gchar **) hs_icon_names, -1);
+        GtkWidget *hs_icon  = gtk_image_new_from_gicon (hs_gicon, GTK_ICON_SIZE_MENU);
+        g_object_unref (hs_gicon);
+        GtkWidget *hs_label = gtk_label_new (_("Hotspot"));
+        popup->hotspot_arrow = gtk_image_new_from_icon_name ("pan-down-symbolic",
+                                                               GTK_ICON_SIZE_MENU);
+        gtk_box_pack_start (GTK_BOX (hs_box), hs_icon,          FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (hs_box), hs_label,         FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (hs_box), popup->hotspot_arrow, FALSE, FALSE, 0);
+        gtk_widget_show_all (hs_box);
+        gtk_container_add (GTK_CONTAINER (popup->hotspot_btn), hs_box);
+        gtk_button_set_relief (GTK_BUTTON (popup->hotspot_btn), GTK_RELIEF_NONE);
+        gtk_widget_set_valign (popup->hotspot_btn, GTK_ALIGN_CENTER);
+        gtk_widget_set_margin_bottom (popup->hotspot_btn, 16);
+        g_signal_connect (popup->hotspot_btn, "clicked",
+                          G_CALLBACK (on_hotspot_clicked), popup);
+        gtk_box_pack_end (GTK_BOX (top_row), popup->refresh_button, FALSE, FALSE, 0);
+        gtk_box_pack_end (GTK_BOX (top_row), popup->hotspot_btn,    FALSE, FALSE, 0);
+        gtk_widget_show (popup->refresh_button);
+        gtk_widget_show (popup->hotspot_btn);
+    } else {
+        gtk_box_pack_end (GTK_BOX (top_row), popup->refresh_button, FALSE, FALSE, 0);
+    }
 
     /* Fila Wi-Fi + switch */
     GtkWidget *wifi_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
@@ -2231,6 +3061,12 @@ rebuild_ui (NetPopup *popup)
     popup->eth_section = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
     gtk_box_pack_start (GTK_BOX (popup->content_box), popup->eth_section, FALSE, FALSE, 0);
 
+    /* Contenedor sección Hotspot (se llena/muestra en on_hotspot_clicked). */
+    popup->hotspot_section = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_pack_start (GTK_BOX (popup->content_box), popup->hotspot_section, FALSE, FALSE, 0);
+    gtk_widget_hide (popup->hotspot_section);
+    gtk_widget_set_no_show_all (popup->hotspot_section, TRUE);
+
     /* Contenedor sección VPN (al fondo del content_box, se llena en update_vpn_section). */
     popup->vpn_section = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
     gtk_box_pack_start (GTK_BOX (popup->content_box), popup->vpn_section, FALSE, FALSE, 0);
@@ -2242,6 +3078,7 @@ rebuild_ui (NetPopup *popup)
     update_eth_section     (popup);
     update_devices_section (popup);
     update_vpn_section     (popup);
+    update_hotspot_section (popup);
 }
 
 /* ---------- diálogo "Conectar a red oculta" ---------- */

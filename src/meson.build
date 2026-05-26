@@ -9,13 +9,15 @@ project('xfce-net-plugin', 'c',
   meson_version : '>= 0.59.0',
 )
 
-i18n = import('i18n')
+i18n  = import('i18n')
+gnome = import('gnome')
 
 # Dependencias
 gtk3       = dependency('gtk+-3.0',         version : '>= 3.24')
 xfce4panel = dependency('libxfce4panel-2.0', version : '>= 4.18')
 intl       = dependency('intl')
 libnotify  = dependency('libnotify',         version : '>= 0.7', required : false)
+libqrencode = dependency('libqrencode',                                required : false)
 
 # Ruta de instalación del plugin
 # Auto: si existe el directorio multilib de Debian/Loc OS, lo usa. Si no, /usr/lib/xfce4/panel/plugins.
@@ -50,6 +52,21 @@ if libnotify.found()
 else
   message('libnotify: NO encontrada, notificaciones desactivadas')
 endif
+if libqrencode.found()
+  plugin_deps += libqrencode
+  add_project_arguments('-DHAVE_LIBQRENCODE', language : 'c')
+  message('libqrencode: encontrada, códigos QR activados')
+else
+  message('libqrencode: NO encontrada, códigos QR desactivados')
+endif
+
+# Recurso embebido con los íconos propios del plugin (candado fallback)
+lock_icons_resource = gnome.compile_resources(
+  'lock-icons-resource',
+  'icons/lock-icons.gresource.xml',
+  source_dir : 'icons',
+  c_name     : 'lock_icons',
+)
 
 # El módulo del plugin.
 # CRÍTICO: name_prefix : 'lib' para que el .so se llame libxfce-net-plugin.so
@@ -59,6 +76,7 @@ shared_module('xfce-net-plugin',
     'plugin.c',
     'popup.c',
     'nm-dbus.c',
+    lock_icons_resource,
   ],
   name_prefix     : 'lib',
   dependencies    : plugin_deps,
@@ -76,12 +94,6 @@ configure_file(
   configuration : desktop_conf,
   install       : true,
   install_dir   : get_option('prefix') / 'share/xfce4/panel/plugins',
-)
-
-# Ícono de candado fallback
-install_data(
-  'icons/nm-secure-lock.svg',
-  install_dir : get_option('prefix') / 'share/icons/hicolor/scalable/apps',
 )
 
 # Traducciones (.po → .mo automático, instalación en share/locale/<lang>/LC_MESSAGES)

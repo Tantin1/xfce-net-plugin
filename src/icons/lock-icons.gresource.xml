@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/org/xfce/net-plugin/icons">
+    <file alias="nm-secure-lock.svg">nm-secure-lock.svg</file>
+  </gresource>
+</gresources>

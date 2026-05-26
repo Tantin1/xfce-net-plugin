@@ -15,6 +15,19 @@
 #define DEFAULT_POPUP_HEIGHT    340
 #define DEFAULT_SHOW_SEPARATORS    TRUE
 #define DEFAULT_SHOW_NOTIFICATIONS FALSE
+#define DEFAULT_SHOW_FORGET_ACTIVE  FALSE
+
+/* Declaración forward: el cuerpo vive en popup.c y arma el candado con
+ * fallback nm-vpn-active-lock → nm-secure-lock → recurso embebido en el .so.
+ * Usa verificación robusta (lookup + g_file_test) para no caer en enlaces
+ * simbólicos rotos como los de RedmondX/RedmondX-Light. */
+GtkWidget *make_lock_overlay_image (gint icon_size);
+
+/* Recurso embebido generado por glib-compile-resources con c_name=lock_icons.
+ * Lo registramos en net_plugin_construct para que gtk_image_new_from_resource
+ * pueda cargar el SVG del candado sin depender de archivos del sistema. */
+GResource *lock_icons_get_resource (void);
+
 
 typedef struct {
     XfcePanelPlugin *plugin;
@@ -40,6 +53,7 @@ typedef struct {
     gboolean        connecting;
     gboolean        notif_ready;
     gboolean        show_notifications;
+    gboolean        show_forget_active;
 
     gint     last_strength;
     gboolean last_secure;
@@ -75,16 +89,15 @@ update_panel_icon (NetPlugin *np,
         if (wired) {
             if (vpn) {
                 GtkWidget *overlay  = gtk_overlay_new ();
-                const gchar *wired_icon_names[] = { "nm-device-wired", "network-wired-symbolic", NULL };
+                const gchar *wired_icon_names[] = { "network-wired-symbolic", "nm-device-wired", NULL };
                 GIcon     *wired_gicon = g_themed_icon_new_from_names ((gchar **) wired_icon_names, -1);
                 GtkWidget *base_img    = gtk_image_new_from_gicon (wired_gicon, GTK_ICON_SIZE_BUTTON);
                 g_object_unref (wired_gicon);
-                GtkWidget *lock_img = gtk_image_new_from_icon_name (
-                                          "nm-secure-lock", GTK_ICON_SIZE_BUTTON);
                 gtk_image_set_pixel_size (GTK_IMAGE (base_img), icon_px);
-                gtk_image_set_pixel_size (GTK_IMAGE (lock_img), icon_px);
-                gtk_widget_set_halign (lock_img, GTK_ALIGN_FILL);
-                gtk_widget_set_valign (lock_img, GTK_ALIGN_FILL);
+
+                /* Candado de VPN activa con fallback robusto. */
+                GtkWidget *lock_img = make_lock_overlay_image (icon_px);
+
                 gtk_container_add (GTK_CONTAINER (overlay), base_img);
                 gtk_overlay_add_overlay (GTK_OVERLAY (overlay), lock_img);
                 gtk_widget_set_size_request (overlay, icon_px, icon_px);
@@ -92,7 +105,7 @@ update_panel_icon (NetPlugin *np,
                 new_icon = overlay;
             } else {
                 {
-                    const gchar *wired_icon_names[] = { "nm-device-wired", "network-wired-symbolic", NULL };
+                    const gchar *wired_icon_names[] = { "network-wired-symbolic", "nm-device-wired", NULL };
                     GIcon *wired_gicon = g_themed_icon_new_from_names ((gchar **) wired_icon_names, -1);
                     new_icon = gtk_image_new_from_gicon (wired_gicon, GTK_ICON_SIZE_BUTTON);
                     g_object_unref (wired_gicon);
@@ -101,7 +114,7 @@ update_panel_icon (NetPlugin *np,
             }
         } else {
             {
-                const gchar *disc_names[] = { "nm-no-connection", "network-wireless-disconnected-symbolic", NULL };
+                const gchar *disc_names[] = { "network-wireless-disconnected-symbolic", "nm-no-connection", NULL };
                 GIcon *disc_gicon = g_themed_icon_new_from_names ((gchar **) disc_names, -1);
                 new_icon = gtk_image_new_from_gicon (disc_gicon, GTK_ICON_SIZE_BUTTON);
                 g_object_unref (disc_gicon);
@@ -169,6 +182,13 @@ get_config_path (void)
     return g_build_filename (g_get_user_config_dir (), CONFIG_PATH, NULL);
 }
 
+gchar *
+net_plugin_get_config_path (gpointer np_ptr)
+{
+    (void) np_ptr;
+    return get_config_path ();
+}
+
 static void
 load_config (NetPlugin *np)
 {
@@ -184,6 +204,7 @@ load_config (NetPlugin *np)
     np->popup_height   = DEFAULT_POPUP_HEIGHT;
     np->show_separators    = DEFAULT_SHOW_SEPARATORS;
     np->show_notifications = DEFAULT_SHOW_NOTIFICATIONS;
+    np->show_forget_active = DEFAULT_SHOW_FORGET_ACTIVE;
 
     if (!g_key_file_load_from_file (kf, path, G_KEY_FILE_NONE, &err)) {
         g_clear_error (&err);
@@ -202,6 +223,9 @@ load_config (NetPlugin *np)
     np->show_notifications = g_key_file_get_boolean (kf, "appearance", "show_notifications", NULL);
     if (!g_key_file_has_key (kf, "appearance", "show_notifications", NULL))
         np->show_notifications = DEFAULT_SHOW_NOTIFICATIONS;
+    np->show_forget_active = g_key_file_get_boolean (kf, "appearance", "show_forget_active", NULL);
+    if (!g_key_file_has_key (kf, "appearance", "show_forget_active", NULL))
+        np->show_forget_active = DEFAULT_SHOW_FORGET_ACTIVE;
 
     if (np->plugin_size  == 0) np->plugin_size  = DEFAULT_PLUGIN_SIZE;
     if (np->icon_size    == 0) np->icon_size    = DEFAULT_ICON_SIZE;
@@ -231,6 +255,7 @@ save_config (NetPlugin *np)
     g_key_file_set_integer  (kf, "appearance", "popup_height",    np->popup_height);
     g_key_file_set_boolean  (kf, "appearance", "show_separators",    np->show_separators);
     g_key_file_set_boolean  (kf, "appearance", "show_notifications", np->show_notifications);
+    g_key_file_set_boolean  (kf, "appearance", "show_forget_active",  np->show_forget_active);
 
     if (!g_key_file_save_to_file (kf, path, &err)) {
         g_warning ("xfce-net-plugin: no se pudo guardar config: %s", err->message);
@@ -247,6 +272,7 @@ save_config (NetPlugin *np)
 typedef struct {
     NetPlugin   *np;
     GtkWidget   *square_check;
+    GtkWidget   *forget_active_check;
     GtkWidget   *plugin_spin;
     GtkWidget   *panel_icon_check;
     GtkWidget   *icon_spin;
@@ -320,6 +346,14 @@ on_notifications_toggled (GtkToggleButton *btn, PropsDialog *pd)
 {
     pd->np->show_notifications = gtk_toggle_button_get_active (btn);
     save_config (pd->np);
+}
+
+static void
+on_forget_active_toggled (GtkToggleButton *btn, PropsDialog *pd)
+{
+    pd->np->show_forget_active = gtk_toggle_button_get_active (btn);
+    save_config (pd->np);
+    pd->np->popup->ui_built = FALSE;
 }
 
 static void
@@ -431,6 +465,12 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
     gtk_grid_attach (GTK_GRID (grid), pd->separators_check, 0, row, 2, 1);
     row++;
 
+    pd->forget_active_check = gtk_check_button_new_with_label (_("Show Forget button on active networks"));
+    gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (pd->forget_active_check),
+                                  np->show_forget_active);
+    gtk_grid_attach (GTK_GRID (grid), pd->forget_active_check, 0, row, 2, 1);
+    row++;
+
 #ifdef HAVE_LIBNOTIFY
     pd->notifications_check = gtk_check_button_new_with_label (_("Show notifications"));
     gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (pd->notifications_check),
@@ -463,6 +503,8 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
                       G_CALLBACK (on_popup_height_changed), pd);
     g_signal_connect (pd->separators_check, "toggled",
                       G_CALLBACK (on_separators_toggled), pd);
+    g_signal_connect (pd->forget_active_check, "toggled",
+                      G_CALLBACK (on_forget_active_toggled), pd);
 #ifdef HAVE_LIBNOTIFY
     g_signal_connect (pd->notifications_check, "toggled",
                       G_CALLBACK (on_notifications_toggled), pd);
@@ -496,6 +538,54 @@ net_plugin_set_connecting (gpointer np_ptr, gboolean connecting)
 }
 
 /* ---------- callback de refresco por señales DBus ---------- */
+
+void
+net_plugin_save_autoconnect_restore (gpointer np_ptr, GSList *states)
+{
+    NetPlugin *np = np_ptr;
+    if (!np) return;
+
+    GKeyFile *kf   = g_key_file_new ();
+    gchar    *path = get_config_path ();
+    g_key_file_load_from_file (kf, path, G_KEY_FILE_NONE, NULL);
+
+    GString *buf = g_string_new (NULL);
+    for (GSList *l = states; l; l = l->next) {
+        NmAutoconnectState *st = l->data;
+        if (buf->len) g_string_append_c (buf, '\n');
+        g_string_append (buf, st->conn_path);
+    }
+    g_key_file_set_string (kf, "hotspot", "autoconnect_restore", buf->str);
+    g_string_free (buf, TRUE);
+
+    GError *err = NULL;
+    if (!g_key_file_save_to_file (kf, path, &err)) {
+        g_warning ("xfce-net-plugin: save_autoconnect_restore: %s", err->message);
+        g_error_free (err);
+    }
+    g_key_file_free (kf);
+    g_free (path);
+}
+
+void
+net_plugin_clear_autoconnect_restore (gpointer np_ptr)
+{
+    NetPlugin *np = np_ptr;
+    if (!np) return;
+
+    GKeyFile *kf   = g_key_file_new ();
+    gchar    *path = get_config_path ();
+    g_key_file_load_from_file (kf, path, G_KEY_FILE_NONE, NULL);
+    g_key_file_remove_key (kf, "hotspot", "autoconnect_restore", NULL);
+
+    GError *err = NULL;
+    if (!g_key_file_save_to_file (kf, path, &err)) {
+        g_warning ("xfce-net-plugin: clear_autoconnect_restore: %s", err->message);
+        g_error_free (err);
+    }
+    g_key_file_free (kf);
+    g_free (path);
+}
 
 static gboolean
 on_nm_changed_cb (gpointer user_data)
@@ -698,7 +788,8 @@ on_button_toggled (GtkToggleButton *btn, NetPlugin *np)
 {
     (void) btn;
     if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (np->button))) {
-        np->popup->show_separators = np->show_separators;
+        np->popup->show_separators   = np->show_separators;
+        np->popup->show_forget_active = np->show_forget_active;
         popup_show (np->popup, np->plugin, np->button, np->conn,
                     np->popup_width, np->popup_height);
     } else {
@@ -742,6 +833,38 @@ net_plugin_new (XfcePanelPlugin *plugin)
 
     load_config (np);
 
+    /* Recuperacion tras caida con hotspot activo: restaurar autoconnect
+     * en los perfiles que quedaron pendientes en el .ini. */
+    {
+        GKeyFile *kf   = g_key_file_new ();
+        gchar    *path = get_config_path ();
+        if (g_key_file_load_from_file (kf, path, G_KEY_FILE_NONE, NULL)) {
+            gchar *raw = g_key_file_get_string (kf, "hotspot",
+                                                "autoconnect_restore", NULL);
+            if (raw && *raw) {
+                gchar **rutas = g_strsplit (raw, "\n", -1);
+                GSList *lista = NULL;
+                for (gint ri = 0; rutas[ri]; ri++) {
+                    if (*rutas[ri]) {
+                        NmAutoconnectState *st = g_new0 (NmAutoconnectState, 1);
+                        st->conn_path        = g_strdup (rutas[ri]);
+                        st->orig_autoconnect = TRUE;
+                        lista = g_slist_append (lista, st);
+                    }
+                }
+                g_strfreev (rutas);
+                nm_restore_wifi_autoconnect (np->conn, lista);
+                g_key_file_remove_key (kf, "hotspot", "autoconnect_restore", NULL);
+                GError *kerr = NULL;
+                g_key_file_save_to_file (kf, path, &kerr);
+                if (kerr) g_error_free (kerr);
+            }
+            g_free (raw);
+        }
+        g_key_file_free (kf);
+        g_free (path);
+    }
+
     np->button = gtk_toggle_button_new ();
     gtk_button_set_relief (GTK_BUTTON (np->button), GTK_RELIEF_NONE);
     gtk_widget_set_tooltip_text (np->button, _("Networks"));
@@ -750,7 +873,7 @@ net_plugin_new (XfcePanelPlugin *plugin)
 
     np->icon_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 
-    const gchar *init_disc_names[] = { "nm-no-connection", "network-wireless-disconnected-symbolic", NULL };
+    const gchar *init_disc_names[] = { "network-wireless-disconnected-symbolic", "nm-no-connection", NULL };
     GIcon     *init_disc_gicon = g_themed_icon_new_from_names ((gchar **) init_disc_names, -1);
     GtkWidget *init_icon       = gtk_image_new_from_gicon (init_disc_gicon, GTK_ICON_SIZE_BUTTON);
     g_object_unref (init_disc_gicon);
@@ -831,6 +954,10 @@ net_plugin_construct (XfcePanelPlugin *plugin)
 #ifdef HAVE_LIBNOTIFY
     notify_init ("xfce-net-plugin");
 #endif
+
+    /* Registrar el recurso embebido para que el candado fallback funcione
+     * desde gtk_image_new_from_resource. Se llama una sola vez por instancia. */
+    g_resources_register (lock_icons_get_resource ());
 
     NetPlugin *np = net_plugin_new (plugin);
     xfce_panel_plugin_menu_show_configure (plugin);
