@@ -311,7 +311,8 @@ op_timeout_cb (gpointer user_data)
     gchar    *failed_ssid = NULL;
     if (op->kind == OP_CONNECT && op->ssid) {
         g_hash_table_replace (op->popup->failed_ssids,
-                              g_strdup (op->ssid), GINT_TO_POINTER (1));
+                              g_strdup_printf ("%s|%s", op->ssid, op->device_path),
+                              GINT_TO_POINTER (1));
         /* Ya procesamos visualmente el fallo, no es "pending". */
         {
             gchar *attempt_key = g_strdup_printf ("%s|%s", op->ssid, op->device_path);
@@ -454,7 +455,8 @@ process_pending_attempts (NetPopup *popup)
             connected = is_ssid_connected_anywhere (popup->conn, attempt_ssid);
         }
         if (!connected)
-            to_mark_failed = g_slist_prepend (to_mark_failed, g_strdup (attempt_ssid));
+            to_mark_failed = g_slist_prepend (to_mark_failed,
+                                              g_strdup_printf ("%s|%s", attempt_ssid, attempt_dev ? attempt_dev : ""));
         g_strfreev (parts);
     }
 
@@ -514,7 +516,11 @@ check_ops_progress (NetPopup *popup)
                     /* Confirmado: marcamos para eliminar. */
                     to_remove = g_slist_append (to_remove, g_strdup (device_path));
                     /* Limpiar marca de fallo: la red conectó OK. */
-                    g_hash_table_remove (popup->failed_ssids, op->ssid);
+                    {
+                        gchar *fk = g_strdup_printf ("%s|%s", op->ssid, op->device_path);
+                        g_hash_table_remove (popup->failed_ssids, fk);
+                        g_free (fk);
+                    }
                     /* Limpiar intento pendiente: ya resuelto en este ciclo. */
                     {
                         gchar *attempt_key = g_strdup_printf ("%s|%s", op->ssid, op->device_path);
@@ -1097,7 +1103,11 @@ on_forget_response (GtkDialog *dialog, gint response, gpointer rd_ptr)
         return;
     nm_forget_connection (rd->popup->conn, rd->ssid);
     /* Limpiar marca de fallo: la red ya no está guardada. */
-    g_hash_table_remove (rd->popup->failed_ssids, rd->ssid);
+    {
+        gchar *fk = g_strdup_printf ("%s|%s", rd->ssid, rd->device_path);
+        g_hash_table_remove (rd->popup->failed_ssids, fk);
+        g_free (fk);
+    }
     /* Limpiar intento pendiente: la red fue olvidada explícitamente. */
     {
         gchar *attempt_key = g_strdup_printf ("%s|%s", rd->ssid, rd->device_path);
@@ -1152,7 +1162,11 @@ on_forget_confirm_clicked (GtkWidget *btn, gpointer rd_ptr)
     if (rd->active)
         nm_disconnect_device_async (rd->popup->conn, rd->device_path);
     nm_forget_connection (rd->popup->conn, rd->ssid);
-    g_hash_table_remove (rd->popup->failed_ssids, rd->ssid);
+    {
+        gchar *fk = g_strdup_printf ("%s|%s", rd->ssid, rd->device_path);
+        g_hash_table_remove (rd->popup->failed_ssids, fk);
+        g_free (fk);
+    }
     {
         gchar *attempt_key = g_strdup_printf ("%s|%s", rd->ssid, rd->device_path);
         g_hash_table_remove (rd->popup->pending_attempts, attempt_key);
@@ -1164,6 +1178,17 @@ on_forget_confirm_clicked (GtkWidget *btn, gpointer rd_ptr)
             rd->popup->current_expand_box = NULL;
     }
     schedule_refresh_ui (rd->popup);
+}
+
+static void
+on_autoconnect_toggled (GtkToggleButton *btn, gpointer user_data)
+{
+    (void) user_data;
+    const gchar     *ssid = g_object_get_data (G_OBJECT (btn), "ssid");
+    GDBusConnection *conn = g_object_get_data (G_OBJECT (btn), "conn");
+    if (!ssid || !conn) return;
+    gboolean active = gtk_toggle_button_get_active (btn);
+    nm_set_autoconnect_by_ssid (conn, ssid, active);
 }
 
 static void
@@ -1264,6 +1289,8 @@ do_connect (RowData *rd)
          * específico (campo interface-name fijado), se lo sacamos para que sirva
          * a cualquier wlanX. También borra duplicados si quedaron de antes. */
         nm_strip_interface_name (rd->popup->conn, rd->ssid);
+        /* Aplicar el valor del checkbox antes de activar. */
+        nm_set_autoconnect_by_ssid (rd->popup->conn, rd->ssid, autoconnect);
         nm_activate_connection_async (rd->popup->conn, rd->device_path,
                                       rd->ap_path, rd->ssid);
     } else {
@@ -1599,8 +1626,10 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
         }
     } else {
         gboolean saved = nm_has_saved_connection (conn, ap->ssid);
+        gchar   *fk_row = g_strdup_printf ("%s|%s", ap->ssid, device_path ? device_path : "");
         gboolean had_failure = saved && ap->secure &&
-            g_hash_table_contains (popup->failed_ssids, ap->ssid);
+            g_hash_table_contains (popup->failed_ssids, fk_row);
+        g_free (fk_row);
 
         /* Label de información: señal siempre, + "Red guardada" si aplica. */
         {
@@ -1632,7 +1661,14 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
 
             GtkWidget *autoconnect_check_saved =
                 gtk_check_button_new_with_label (_("Connect automatically"));
-            gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (autoconnect_check_saved), TRUE);
+            /* Leer el valor real del perfil guardado en NM */
+            gboolean cur_ac = nm_get_autoconnect_by_ssid (popup->conn, ap->ssid);
+            gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (autoconnect_check_saved), cur_ac);
+            g_object_set_data_full (G_OBJECT (autoconnect_check_saved), "ssid",
+                                    g_strdup (ap->ssid), g_free);
+            g_object_set_data (G_OBJECT (autoconnect_check_saved), "conn", popup->conn);
+            g_signal_connect (autoconnect_check_saved, "toggled",
+                              G_CALLBACK (on_autoconnect_toggled), NULL);
             gtk_box_pack_start (GTK_BOX (expand_box), autoconnect_check_saved, FALSE, FALSE, 0);
             gtk_widget_show (autoconnect_check_saved);
             autoconnect_check_widget = autoconnect_check_saved;
@@ -1883,8 +1919,10 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
      * (estado A = botones de reintentar/probar otra; estado B = entry de
      * reescribir contraseña + Volver/Conectar). Se intercalan después del
      * autoconnect_check y antes del action_row (que solo tiene "Olvidar"). */
-    if (!ap_active && rd->saved && ap->secure &&
-        g_hash_table_contains (popup->failed_ssids, ap->ssid)) {
+    gchar   *fk_exp      = g_strdup_printf ("%s|%s", ap->ssid, device_path ? device_path : "");
+    gboolean had_fail_exp = g_hash_table_contains (popup->failed_ssids, fk_exp);
+    g_free (fk_exp);
+    if (!ap_active && rd->saved && ap->secure && had_fail_exp) {
 
         /* ---- Estado A ---- */
         rd->state_a_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);

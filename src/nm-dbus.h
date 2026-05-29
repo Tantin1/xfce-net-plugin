@@ -6,7 +6,6 @@
 typedef struct {
     gchar    *iface;
     gchar    *object_path;
-    gboolean  enabled;
 } NmDevice;
 
 typedef struct {
@@ -26,6 +25,19 @@ void    nm_device_list_free  (GSList *list);
 
 GSList *nm_get_access_points (GDBusConnection *conn, const gchar *device_path);
 void    nm_ap_list_free      (GSList *list);
+/* Información del AP activo: una sola lectura para ícono + tooltip + notificaciones.
+ * Liberar con nm_active_ap_info_free(). */
+typedef struct {
+    gboolean  connected;
+    gint      strength;
+    gboolean  secure;
+    gchar    *ssid;   /* liberar con g_free() */
+    gchar    *band;   /* "2.4G" / "5G" / "6G" — liberar con g_free() */
+} NmActiveApInfo;
+
+NmActiveApInfo *nm_get_active_ap_info  (GDBusConnection *conn);
+void            nm_active_ap_info_free (NmActiveApInfo  *info);
+
 
 GDBusConnection *nm_dbus_connect         (void);
 gboolean         nm_has_saved_connection (GDBusConnection *conn, const gchar *ssid);
@@ -119,6 +131,18 @@ typedef struct {
 NmConnectionDetails *nm_get_connection_details (GDBusConnection *conn,
                                                 const gchar     *device_path);
 void                 nm_connection_details_free (NmConnectionDetails *d);
+
+/* Cambia el valor de autoconexión del perfil guardado para un SSID. */
+gboolean nm_set_autoconnect_by_ssid (GDBusConnection *conn,
+                                     const gchar     *ssid,
+                                     gboolean         autoconnect);
+
+/* Cambia el valor de autoconexión del perfil guardado para un SSID. */
+gboolean nm_get_autoconnect_by_ssid (GDBusConnection *conn,
+                                     const gchar     *ssid);
+gboolean nm_set_autoconnect_by_ssid (GDBusConnection *conn,
+                                     const gchar     *ssid,
+                                     gboolean         autoconnect);
 
 /* Solicita un escaneo Wi-Fi activo al adaptador. */
 void nm_request_scan (GDBusConnection *conn, const gchar *device_path);

@@ -539,27 +539,16 @@ static gboolean
 on_nm_changed_cb (gpointer user_data)
 {
     NetPlugin *np = user_data;
+    if (!np->conn)
+        return G_SOURCE_REMOVE;
     g_object_set_data (G_OBJECT (np->button), "nm-refresh-pending", NULL);
 
-    gboolean connected = FALSE;
-    gint     strength  = 0;
-    gboolean secure    = FALSE;
-
-    GSList *devices = nm_get_wifi_devices (np->conn);
-    for (GSList *l = devices; l; l = l->next) {
-        NmDevice *dev = l->data;
-        GSList   *aps = nm_get_access_points (np->conn, dev->object_path);
-        for (GSList *a = aps; a; a = a->next) {
-            NmAccessPoint *ap = a->data;
-            if (ap->active) {
-                connected = TRUE;
-                strength  = ap->strength;
-                secure    = ap->secure;
-            }
-        }
-        nm_ap_list_free (aps);
-    }
-    nm_device_list_free (devices);
+    /* Una sola lectura del AP activo: ícono, tooltip y notificaciones
+     * reusan este resultado sin repetir la enumeración completa. */
+    NmActiveApInfo *ai = nm_get_active_ap_info (np->conn);
+    gboolean connected = ai->connected;
+    gint     strength  = ai->strength;
+    gboolean secure    = ai->secure;
 
     gboolean vpn   = nm_get_vpn_active (np->conn);
     gboolean wired = FALSE;
@@ -593,23 +582,9 @@ on_nm_changed_cb (gpointer user_data)
 
         if (connected && !prev_connected) {
             /* Wi-Fi conectado */
-            GSList *devs3 = nm_get_wifi_devices (np->conn);
-            const gchar *ssid_notif = NULL;
-            gchar *ssid_copy = NULL;
-            for (GSList *l = devs3; l && !ssid_notif; l = l->next) {
-                NmDevice *dev = l->data;
-                GSList *aps3 = nm_get_access_points (np->conn, dev->object_path);
-                for (GSList *a = aps3; a; a = a->next) {
-                    NmAccessPoint *ap = a->data;
-                    if (ap->active) { ssid_copy = g_strdup (ap->ssid); ssid_notif = ssid_copy; break; }
-                }
-                nm_ap_list_free (aps3);
-            }
-            nm_device_list_free (devs3);
-            gchar *body = g_strdup_printf (_("Connected to %s"), ssid_notif ? ssid_notif : "Wi-Fi");
+            gchar *body = g_strdup_printf (_("Connected to %s"), ai->ssid ? ai->ssid : "Wi-Fi");
             notif = notify_notification_new (_("Wi-Fi"), body, "network-wireless-symbolic");
             g_free (body);
-            g_free (ssid_copy);
         } else if (!connected && prev_connected) {
             /* Wi-Fi desconectado */
             notif = notify_notification_new (_("Wi-Fi"), _("Disconnected"), "network-wireless-disconnected-symbolic");
@@ -642,22 +617,9 @@ on_nm_changed_cb (gpointer user_data)
         /* Notificación de estado inicial al arrancar */
         NotifyNotification *inotif = NULL;
         if (connected) {
-            GSList *devs4 = nm_get_wifi_devices (np->conn);
-            gchar *ssid_copy = NULL;
-            for (GSList *l = devs4; l && !ssid_copy; l = l->next) {
-                NmDevice *dev = l->data;
-                GSList *aps4 = nm_get_access_points (np->conn, dev->object_path);
-                for (GSList *a = aps4; a; a = a->next) {
-                    NmAccessPoint *ap = a->data;
-                    if (ap->active) { ssid_copy = g_strdup (ap->ssid); break; }
-                }
-                nm_ap_list_free (aps4);
-            }
-            nm_device_list_free (devs4);
-            gchar *body = g_strdup_printf (_("Connected to %s"), ssid_copy ? ssid_copy : "Wi-Fi");
+            gchar *body = g_strdup_printf (_("Connected to %s"), ai->ssid ? ai->ssid : "Wi-Fi");
             inotif = notify_notification_new (_("Wi-Fi"), body, "network-wireless-symbolic");
             g_free (body);
-            g_free (ssid_copy);
         } else if (wired) {
             inotif = notify_notification_new (_("Ethernet"), _("Cable connected"), "network-wired-symbolic");
         }
@@ -681,24 +643,9 @@ on_nm_changed_cb (gpointer user_data)
         if (!connected) {
             g_string_append (tip, _("Not connected"));
         } else {
-            GSList *devs2 = nm_get_wifi_devices (np->conn);
-            for (GSList *l = devs2; l; l = l->next) {
-                NmDevice *dev = l->data;
-                GSList   *aps = nm_get_access_points (np->conn, dev->object_path);
-                for (GSList *a = aps; a; a = a->next) {
-                    NmAccessPoint *ap = a->data;
-                    if (ap->active) {
-                        const gchar *band;
-                        if (ap->frequency >= 5925)      band = "6G";
-                        else if (ap->frequency >= 5000) band = "5G";
-                        else                            band = "2.4G";
-                        g_string_append_printf (tip, _("Connected to %s (%s)"),
-                                                ap->ssid, band);
-                    }
-                }
-                nm_ap_list_free (aps);
-            }
-            nm_device_list_free (devs2);
+            g_string_append_printf (tip, _("Connected to %s (%s)"),
+                                    ai->ssid ? ai->ssid : "Wi-Fi",
+                                    ai->band  ? ai->band  : "");
         }
 
         if (vpn) {
@@ -711,6 +658,8 @@ on_nm_changed_cb (gpointer user_data)
         gtk_widget_set_tooltip_text (np->button, tip->str);
         g_string_free (tip, TRUE);
     }
+
+    nm_active_ap_info_free (ai);
 
     /* IMPORTANTE: ya no reconstruimos el popup desde acá. El popup tiene su
      * propia suscripción a señales DBus mientras está abierto. Esta función
@@ -735,6 +684,10 @@ static void
 on_button_toggled (GtkToggleButton *btn, NetPlugin *np)
 {
     (void) btn;
+    if (!np->conn) {
+        gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (np->button), FALSE);
+        return;
+    }
     if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (np->button))) {
         np->popup->show_separators   = np->show_separators;
         np->popup->show_forget_active = np->show_forget_active;

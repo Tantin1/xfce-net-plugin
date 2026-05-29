@@ -110,7 +110,6 @@ nm_get_wifi_devices (GDBusConnection *conn)
         NmDevice *dev    = g_new0 (NmDevice, 1);
         dev->iface       = g_strdup (g_variant_get_string (iface_v, NULL));
         dev->object_path = g_strdup (paths[i]);
-        dev->enabled     = TRUE;
         g_variant_unref (iface_v);
 
         list = g_slist_append (list, dev);
@@ -153,6 +152,68 @@ get_active_ap_path (GDBusConnection *conn, const gchar *device_path)
 
     g_variant_unref (v);
     return result;
+}
+
+NmActiveApInfo *
+nm_get_active_ap_info (GDBusConnection *conn)
+{
+    NmActiveApInfo *info = g_new0 (NmActiveApInfo, 1);
+    GSList *devices = nm_get_wifi_devices (conn);
+
+    for (GSList *l = devices; l && !info->connected; l = l->next) {
+        NmDevice *dev     = l->data;
+        gchar    *ap_path = get_active_ap_path (conn, dev->object_path);
+        if (!ap_path)
+            continue;
+
+        GVariant *strength_v = get_property (conn, ap_path, NM_AP_IFACE, "Strength");
+        GVariant *wpa_v      = get_property (conn, ap_path, NM_AP_IFACE, "WpaFlags");
+        GVariant *rsn_v      = get_property (conn, ap_path, NM_AP_IFACE, "RsnFlags");
+        GVariant *freq_v     = get_property (conn, ap_path, NM_AP_IFACE, "Frequency");
+        GVariant *ssid_v     = get_property (conn, ap_path, NM_AP_IFACE, "Ssid");
+
+        info->connected = TRUE;
+        info->strength  = strength_v ? (gint) g_variant_get_byte (strength_v) : 0;
+        guint32 wpa     = wpa_v ? g_variant_get_uint32 (wpa_v) : 0;
+        guint32 rsn     = rsn_v ? g_variant_get_uint32 (rsn_v) : 0;
+        info->secure    = (wpa | rsn) != 0;
+
+        if (freq_v) {
+            guint32 freq = g_variant_get_uint32 (freq_v);
+            if (freq >= 5925)      info->band = g_strdup ("6G");
+            else if (freq >= 5000) info->band = g_strdup ("5G");
+            else                   info->band = g_strdup ("2.4G");
+        }
+
+        if (ssid_v) {
+            GVariantIter *iter = g_variant_iter_new (ssid_v);
+            GString      *s    = g_string_new (NULL);
+            guchar        c;
+            while (g_variant_iter_next (iter, "y", &c))
+                g_string_append_c (s, (gchar) c);
+            g_variant_iter_free (iter);
+            info->ssid = g_string_free (s, FALSE);
+        }
+
+        if (strength_v) g_variant_unref (strength_v);
+        if (wpa_v)      g_variant_unref (wpa_v);
+        if (rsn_v)      g_variant_unref (rsn_v);
+        if (freq_v)     g_variant_unref (freq_v);
+        if (ssid_v)     g_variant_unref (ssid_v);
+        g_free (ap_path);
+    }
+
+    nm_device_list_free (devices);
+    return info;
+}
+
+void
+nm_active_ap_info_free (NmActiveApInfo *info)
+{
+    if (!info) return;
+    g_free (info->ssid);
+    g_free (info->band);
+    g_free (info);
 }
 
 GSList *
@@ -944,7 +1005,6 @@ nm_get_ethernet_devices (GDBusConnection *conn)
         NmDevice *dev    = g_new0 (NmDevice, 1);
         dev->iface       = g_strdup (g_variant_get_string (iface_v, NULL));
         dev->object_path = g_strdup (paths[i]);
-        dev->enabled     = TRUE;
         g_variant_unref (iface_v);
 
         list = g_slist_append (list, dev);
@@ -957,6 +1017,100 @@ nm_get_ethernet_devices (GDBusConnection *conn)
 }
 
 /* ---------- VPN ---------- */
+
+gboolean
+nm_get_autoconnect_by_ssid (GDBusConnection *conn, const gchar *ssid)
+{
+    gchar *path = find_connection_path_by_ssid (conn, ssid);
+    if (!path) return TRUE; /* default NM */
+    GVariant *settings = g_dbus_connection_call_sync (
+        conn, NM_BUS_NAME, path, NM_CONN_IFACE,
+        "GetSettings", NULL, G_VARIANT_TYPE ("(a{sa{sv}})"),
+        G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
+    g_free (path);
+    if (!settings) return TRUE;
+    gboolean val = TRUE;
+    GVariant *outer = g_variant_get_child_value (settings, 0);
+    GVariant *conn_dict = NULL;
+    g_variant_lookup (outer, "connection", "@a{sv}", &conn_dict);
+    if (conn_dict) {
+        gboolean v = TRUE;
+        if (g_variant_lookup (conn_dict, "autoconnect", "b", &v)) val = v;
+        g_variant_unref (conn_dict);
+    }
+    g_variant_unref (outer);
+    g_variant_unref (settings);
+    return val;
+}
+
+gboolean
+nm_set_autoconnect_by_ssid (GDBusConnection *conn,
+                             const gchar     *ssid,
+                             gboolean         autoconnect)
+{
+    gchar *path = find_connection_path_by_ssid (conn, ssid);
+    if (!path) return FALSE;
+
+    GVariant *settings = g_dbus_connection_call_sync (
+        conn, NM_BUS_NAME, path, NM_CONN_IFACE,
+        "GetSettings", NULL, G_VARIANT_TYPE ("(a{sa{sv}})"),
+        G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
+    if (!settings) { g_free (path); return FALSE; }
+
+    GVariant *outer = g_variant_get_child_value (settings, 0);
+    g_variant_unref (settings);
+
+    GVariantBuilder top;
+    g_variant_builder_init (&top, G_VARIANT_TYPE ("a{sa{sv}}"));
+
+    GVariantIter iter_top;
+    g_variant_iter_init (&iter_top, outer);
+    const gchar *section;
+    GVariant    *section_dict;
+    gboolean     wrote = FALSE;
+
+    while (g_variant_iter_next (&iter_top, "{s@a{sv}}", &section, &section_dict)) {
+        GVariantBuilder sec_b;
+        g_variant_builder_init (&sec_b, G_VARIANT_TYPE ("a{sv}"));
+        GVariantIter iter_sec;
+        g_variant_iter_init (&iter_sec, section_dict);
+        const gchar *key;
+        GVariant    *val;
+        while (g_variant_iter_next (&iter_sec, "{sv}", &key, &val)) {
+            if (g_strcmp0 (section, "connection") == 0 &&
+                g_strcmp0 (key, "autoconnect") == 0) {
+                g_variant_builder_add (&sec_b, "{sv}", "autoconnect",
+                                       g_variant_new_boolean (autoconnect));
+                wrote = TRUE;
+                g_variant_unref (val);
+            } else {
+                g_variant_builder_add (&sec_b, "{sv}", key, val);
+                g_variant_unref (val);
+            }
+            g_free ((gchar *) key);
+        }
+        if (g_strcmp0 (section, "connection") == 0 && !wrote) {
+            g_variant_builder_add (&sec_b, "{sv}", "autoconnect",
+                                   g_variant_new_boolean (autoconnect));
+            wrote = TRUE;
+        }
+        g_variant_builder_add (&top, "{sa{sv}}", section, &sec_b);
+        g_variant_unref (section_dict);
+        g_free ((gchar *) section);
+    }
+    g_variant_unref (outer);
+
+    GError   *err = NULL;
+    GVariant *res = g_dbus_connection_call_sync (
+        conn, NM_BUS_NAME, path, NM_CONN_IFACE,
+        "Update",
+        g_variant_new ("(a{sa{sv}})", &top),
+        NULL, G_DBUS_CALL_FLAGS_NONE, 3000, NULL, &err);
+    g_free (path);
+    if (res) { g_variant_unref (res); return TRUE; }
+    if (err) { g_warning ("nm_set_autoconnect_by_ssid: %s", err->message); g_error_free (err); }
+    return FALSE;
+}
 
 GSList *
 nm_get_vpn_connections (GDBusConnection *conn)
