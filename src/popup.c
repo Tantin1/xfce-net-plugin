@@ -49,11 +49,14 @@ typedef struct {
     GtkWidget *error_label;   /* Label de error reusable, si se crea. */
     GSList    *extra_disabled;/* Lista de GtkWidget* extra que se deshabilitaron y hay que rehabilitar al fallar. */
     guint      timeout_id;    /* Fuente de timeout de 20s. */
+    gboolean   extended;      /* TRUE si ya se le dio la prórroga única por "sigue intentando". */
     NetPopup  *popup;
 } OpInProgress;
 
 static void op_free (gpointer p);
 static gboolean op_timeout_cb (gpointer user_data);
+static gboolean device_is_connecting (GDBusConnection *conn, const gchar *device_path);
+static void clear_open_highlight (NetPopup *popup);
 static void schedule_refresh_ui (NetPopup *popup);
 
 typedef struct {
@@ -296,6 +299,19 @@ op_timeout_cb (gpointer user_data)
 {
     OpInProgress *op = user_data;
     op->timeout_id = 0;
+
+    /* Prórroga única: si es un intento de conexión y la antena TODAVÍA está
+     * intentando (autenticando, pidiendo IP, etc.), no declaramos fallo aún.
+     * Le damos una sola tanda extra de OP_TIMEOUT_MS. Si al vencer esa tanda
+     * sigue sin conectar, ahí sí se declara el fallo (este mismo callback
+     * vuelve a entrar, pero op->extended ya estará en TRUE). */
+    if (op->kind == OP_CONNECT && !op->extended && op->popup &&
+        device_is_connecting (op->popup->conn, op->device_path)) {
+        op->extended   = TRUE;
+        op->timeout_id = g_timeout_add (OP_TIMEOUT_MS, op_timeout_cb, op);
+        return G_SOURCE_REMOVE;
+    }
+
     /* Apagar spinner: operación falló. */
     if (op->kind == OP_CONNECT && op->popup && op->popup->plugin_ref)
         net_plugin_set_connecting (op->popup->plugin_ref, FALSE);
@@ -386,6 +402,29 @@ device_is_disconnected (GDBusConnection *conn, const gchar *device_path)
     g_variant_unref (v);
     /* 30 = DISCONNECTED, 20 = UNAVAILABLE, 10 = UNMANAGED */
     return (state <= 30);
+}
+
+/* Verifica si un dispositivo TODAVÍA está intentando conectar.
+ * Estados 40-90: 40=PREPARE 50=CONFIG 60=NEED_AUTH 70=IP_CONFIG
+ * 80=IP_CHECK 90=SECONDARIES. En ese rango la conexión sigue en curso,
+ * así que no debemos declarar fallo todavía: merece la prórroga única. */
+static gboolean
+device_is_connecting (GDBusConnection *conn, const gchar *device_path)
+{
+    GVariant *v = g_dbus_connection_call_sync (
+            conn, NM_BUS_NAME, device_path,
+            "org.freedesktop.DBus.Properties", "Get",
+            g_variant_new ("(ss)",
+                "org.freedesktop.NetworkManager.Device", "State"),
+            G_VARIANT_TYPE ("(v)"),
+            G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
+    if (!v) return FALSE;
+    GVariant *inner;
+    g_variant_get (v, "(v)", &inner);
+    guint32 state = g_variant_get_uint32 (inner);
+    g_variant_unref (inner);
+    g_variant_unref (v);
+    return (state >= 40 && state <= 90);
 }
 
 /* ---------- Intentos pendientes (popup cerrado durante conexión) ---------- */
@@ -532,6 +571,7 @@ check_ops_progress (NetPopup *popup)
                         if (popup->current_expand_box == op->expand_box)
                             popup->current_expand_box = NULL;
                     }
+                    clear_open_highlight (popup);
                     /* Apagar spinner: conexión confirmada. */
                     if (popup->plugin_ref)
                         net_plugin_set_connecting (popup->plugin_ref, FALSE);
@@ -546,6 +586,7 @@ check_ops_progress (NetPopup *popup)
                     if (popup->current_expand_box == op->expand_box)
                         popup->current_expand_box = NULL;
                 }
+                clear_open_highlight (popup);
             }
         }
     }
@@ -766,10 +807,12 @@ typedef struct {
     GtkWidget       *action_row;     /* Fila con botones Conectar/Olvidar — se oculta al confirmar. */
     GtkWidget       *qr_drawing_area;  /* GtkDrawingArea con el QR (solo en red activa+segura). */
     GtkWidget       *qr_btn;           /* Botón "Mostrar QR" — se oculta al confirmar Olvidar. */
+    GtkWidget       *qr_lbl;           /* Label dentro del botón QR — se actualiza sin destruir el ícono. */
     GtkWidget       *active_forget_btn; /* Botón "Olvidar" en red activa. */
     GtkWidget       *details_btn;       /* Botón "Detalles" con flecha. */
     GtkWidget       *details_box;       /* Panel de detalles expandible. */
     GtkWidget       *details_arrow;     /* Ícono flecha arriba/abajo. */
+    GtkWidget       *row_box;           /* El event_box de la fila, para marcar realce "abierta". */
 } RowData;
 
 /* ---------- ícono decorativo QR para botón (Cairo) ---------- */
@@ -791,14 +834,12 @@ draw_qr_button_icon (GtkWidget *widget, cairo_t *cr, gpointer user_data)
 
     gdouble u = s / 7.0;  /* unidad base */
 
-    /* Dibuja un cuadro de posición QR en (cx, cy): borde exterior + hueco + punto central */
-#define DRAW_FINDER(cx, cy)     cairo_set_source_rgba (cr, color.red, color.green, color.blue, color.alpha);     cairo_rectangle (cr, (cx), (cy), u*3, u*3); cairo_fill (cr);     cairo_set_operator (cr, CAIRO_OPERATOR_CLEAR);     cairo_rectangle (cr, (cx)+u*0.5, (cy)+u*0.5, u*2, u*2); cairo_fill (cr);     cairo_set_operator (cr, CAIRO_OPERATOR_OVER);     cairo_set_source_rgba (cr, color.red, color.green, color.blue, color.alpha);     cairo_rectangle (cr, (cx)+u, (cy)+u, u, u); cairo_fill (cr);
+    /* Surface intermedio con alpha para que CAIRO_OPERATOR_CLEAR funcione
+     * correctamente independientemente de si el surface del widget tiene alpha. */
+    cairo_surface_t *surf = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, w, h);
+    cairo_t         *c    = cairo_create (surf);
 
-    /* Necesario para que CAIRO_OPERATOR_CLEAR funcione */
-    cairo_save (cr);
-    cairo_set_operator (cr, CAIRO_OPERATOR_CLEAR);
-    cairo_paint (cr);
-    cairo_restore (cr);
+#define DRAW_FINDER(cx, cy)     cairo_set_source_rgba (c, color.red, color.green, color.blue, color.alpha);     cairo_rectangle (c, (cx), (cy), u*3, u*3); cairo_fill (c);     cairo_set_operator (c, CAIRO_OPERATOR_CLEAR);     cairo_rectangle (c, (cx)+u*0.5, (cy)+u*0.5, u*2, u*2); cairo_fill (c);     cairo_set_operator (c, CAIRO_OPERATOR_OVER);     cairo_set_source_rgba (c, color.red, color.green, color.blue, color.alpha);     cairo_rectangle (c, (cx)+u, (cy)+u, u, u); cairo_fill (c);
 
     DRAW_FINDER (x0,         y0)          /* esquina superior izquierda */
     DRAW_FINDER (x0+s-u*3,   y0)          /* esquina superior derecha   */
@@ -807,14 +848,21 @@ draw_qr_button_icon (GtkWidget *widget, cairo_t *cr, gpointer user_data)
 #undef DRAW_FINDER
 
     /* Algunos módulos de datos en la zona central */
-    cairo_set_source_rgba (cr, color.red, color.green, color.blue, color.alpha);
+    cairo_set_source_rgba (c, color.red, color.green, color.blue, color.alpha);
     gdouble pts[][2] = {
         {3.5, 1.5}, {4.5, 2.5}, {3.5, 3.5}, {5.0, 3.5},
         {3.5, 4.5}, {4.5, 5.0}, {5.5, 4.0}, {4.0, 4.0}
     };
     for (gsize i = 0; i < G_N_ELEMENTS (pts); i++)
-        cairo_rectangle (cr, x0 + pts[i][0]*u, y0 + pts[i][1]*u, u*0.8, u*0.8);
-    cairo_fill (cr);
+        cairo_rectangle (c, x0 + pts[i][0]*u, y0 + pts[i][1]*u, u*0.8, u*0.8);
+    cairo_fill (c);
+
+    cairo_destroy (c);
+
+    /* Composite el surface sobre el context del widget */
+    cairo_set_source_surface (cr, surf, 0, 0);
+    cairo_paint (cr);
+    cairo_surface_destroy (surf);
 
     return FALSE;
 }
@@ -871,7 +919,10 @@ on_qr_clicked (GtkWidget *btn, gpointer rd_ptr)
 
     if (gtk_widget_get_visible (da)) {
         gtk_widget_hide (da);
-        gtk_button_set_label (GTK_BUTTON (btn), _("Show QR"));
+        {
+            GtkWidget *lbl = g_object_get_data (G_OBJECT (btn), "qr-label");
+            if (lbl) gtk_label_set_text (GTK_LABEL (lbl), _("Show QR"));
+        }
         return;
     }
 
@@ -886,7 +937,10 @@ on_qr_clicked (GtkWidget *btn, gpointer rd_ptr)
     /* Obtener contraseña guardada */
     gchar *password = nm_get_saved_password (rd->popup->conn, rd->ssid);
     if (!password) {
-        gtk_button_set_label (GTK_BUTTON (btn), _("No saved password"));
+        {
+            GtkWidget *lbl = g_object_get_data (G_OBJECT (btn), "qr-label");
+            if (lbl) gtk_label_set_text (GTK_LABEL (lbl), _("No saved password"));
+        }
         return;
     }
 
@@ -898,7 +952,10 @@ on_qr_clicked (GtkWidget *btn, gpointer rd_ptr)
     g_free (wifi_str);
 
     if (!qr) {
-        gtk_button_set_label (GTK_BUTTON (btn), _("QR error"));
+        {
+            GtkWidget *lbl = g_object_get_data (G_OBJECT (btn), "qr-label");
+            if (lbl) gtk_label_set_text (GTK_LABEL (lbl), _("QR error"));
+        }
         return;
     }
 
@@ -914,7 +971,10 @@ on_qr_clicked (GtkWidget *btn, gpointer rd_ptr)
     g_signal_connect (da, "draw", G_CALLBACK (draw_qr_matrix), qr);
     gtk_widget_show (da);
     gtk_widget_queue_draw (da);
-    gtk_button_set_label (GTK_BUTTON (btn), _("Hide QR"));
+    {
+        GtkWidget *lbl = g_object_get_data (G_OBJECT (btn), "qr-label");
+        if (lbl) gtk_label_set_text (GTK_LABEL (lbl), _("Hide QR"));
+    }
 #endif /* HAVE_LIBQRENCODE */
 }
 
@@ -1027,14 +1087,52 @@ scroll_to_expand_on_alloc (GtkWidget *expand, GdkRectangle *alloc, gpointer user
     g_idle_add (scroll_to_expand_idle, user_data);
 }
 
+/* Saca el realce "abierta" (.net-row-open) de TODAS las filas. Se usa cuando
+ * el expand se cierra desde lugares que no conocen la fila concreta (confirmar
+ * conexión, timeout, olvidar). Recorre las secciones del content_box igual que
+ * reopen_expand_for_ssid. */
 static void
-on_row_clicked (GtkWidget *event_box, GdkEventButton *event, gpointer rd_ptr)
+clear_open_highlight (NetPopup *popup)
 {
-    (void) event;
-    (void) event_box;
-    RowData *rd = rd_ptr;
+    if (!popup || !popup->content_box) return;
+    GList *sections = gtk_container_get_children (GTK_CONTAINER (popup->content_box));
+    for (GList *s = sections; s; s = s->next) {
+        if (!GTK_IS_CONTAINER (s->data)) continue;
+        GList *rows = gtk_container_get_children (GTK_CONTAINER (s->data));
+        for (GList *r = rows; r; r = r->next) {
+            if (!GTK_IS_EVENT_BOX (r->data)) continue;
+            gtk_style_context_remove_class (
+                gtk_widget_get_style_context (GTK_WIDGET (r->data)),
+                "net-row-open");
+        }
+        g_list_free (rows);
+    }
+    g_list_free (sections);
+}
 
+/* Al abrir un expand, mover el foco al primer widget enfocable de adentro
+ * (típicamente el campo de contraseña o el primer botón). Se difiere con
+ * g_idle_add porque el expand recién se muestra y el foco no agarra bien
+ * en el mismo instante. Devuelve el GtkWidget* del expand por user_data. */
+static gboolean
+focus_into_expand_idle (gpointer user_data)
+{
+    GtkWidget *expand_box = user_data;
+    if (GTK_IS_WIDGET (expand_box) && gtk_widget_get_visible (expand_box))
+        gtk_widget_child_focus (expand_box, GTK_DIR_TAB_FORWARD);
+    return G_SOURCE_REMOVE;
+}
+
+/* Abre/cierra el expand de una fila. Compartido entre el click de mouse
+ * (on_row_clicked) y el teclado (on_row_key_press), para que ambos hagan
+ * exactamente lo mismo. */
+static void
+row_toggle_expand (RowData *rd)
+{
     gboolean ya_abierto = (rd->popup->current_expand_box == rd->expand_box);
+
+    /* Sacar el realce "abierta" de cualquier fila que lo tuviera. */
+    clear_open_highlight (rd->popup);
 
     if (rd->popup->current_expand_box) {
         gtk_widget_hide (rd->popup->current_expand_box);
@@ -1053,6 +1151,10 @@ on_row_clicked (GtkWidget *event_box, GdkEventButton *event, gpointer rd_ptr)
         }
         gtk_widget_show (rd->expand_box);
         rd->popup->current_expand_box = rd->expand_box;
+        /* Marcar esta fila como abierta (realce visible con mouse y teclado). */
+        if (rd->row_box)
+            gtk_style_context_add_class (
+                gtk_widget_get_style_context (rd->row_box), "net-row-open");
         /* Desconectar cualquier conexión previa antes de reconectar,
          * para que al reabrir el mismo expand también se dispare. */
         g_signal_handlers_disconnect_by_func (rd->expand_box,
@@ -1060,10 +1162,41 @@ on_row_clicked (GtkWidget *event_box, GdkEventButton *event, gpointer rd_ptr)
                                               rd->popup);
         g_signal_connect (rd->expand_box, "size-allocate",
                           G_CALLBACK (scroll_to_expand_on_alloc), rd->popup);
+        /* Bajar el foco al primer control del expand para poder navegarlo
+         * con Tab/flechas (si no, el foco se queda en la fila y Enter cierra). */
+        g_idle_add (focus_into_expand_idle, rd->expand_box);
     }
 }
 
-/* ---------- conectar / desconectar ---------- */
+static void
+on_row_clicked (GtkWidget *event_box, GdkEventButton *event, gpointer rd_ptr)
+{
+    (void) event_box;
+    (void) event;
+    row_toggle_expand ((RowData *) rd_ptr);
+}
+
+/* Permite abrir la fila con el teclado: Enter o Espacio cuando la fila
+ * (event_box) tiene el foco. Devolver TRUE consume la tecla.
+ *
+ * IMPORTANTE: el expand vive DENTRO de este event_box, así que sus botones
+ * (Conectar, Olvidar, etc.) son descendientes. Sin el chequeo de abajo, este
+ * manejador se tragaría el Enter dirigido a esos botones y dispararía el
+ * toggle (cerrando el expand) en vez de accionar el botón. Por eso solo
+ * actuamos si el foco está exactamente en el event_box de la fila. */
+static gboolean
+on_row_key_press (GtkWidget *event_box, GdkEventKey *event, gpointer rd_ptr)
+{
+    if (!gtk_widget_is_focus (event_box))
+        return FALSE;   /* el foco está en un botón del expand: dejar pasar la tecla */
+    if (event->keyval == GDK_KEY_Return ||
+        event->keyval == GDK_KEY_KP_Enter ||
+        event->keyval == GDK_KEY_space) {
+        row_toggle_expand ((RowData *) rd_ptr);
+        return TRUE;
+    }
+    return FALSE;
+}
 
 static void
 on_disconnect_clicked (GtkWidget *btn, gpointer rd_ptr)
@@ -1437,8 +1570,10 @@ on_details_clicked (GtkWidget *btn, gpointer rd_ptr)
         /* Cerrar QR si estaba abierto */
         if (rd->qr_drawing_area && gtk_widget_get_visible (rd->qr_drawing_area)) {
             gtk_widget_hide (rd->qr_drawing_area);
-            if (rd->qr_btn)
-                gtk_button_set_label (GTK_BUTTON (rd->qr_btn), _("Show QR"));
+            if (rd->qr_btn) {
+                GtkWidget *lbl = g_object_get_data (G_OBJECT (rd->qr_btn), "qr-label");
+                if (lbl) gtk_label_set_text (GTK_LABEL (lbl), _("Show QR"));
+            }
         }
         if (rd->details_arrow)
             gtk_image_set_from_icon_name (GTK_IMAGE (rd->details_arrow),
@@ -1484,6 +1619,26 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
     outer     = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
     event_box = gtk_event_box_new ();
     gtk_event_box_set_above_child (GTK_EVENT_BOX (event_box), FALSE);
+    /* Enfocable con Tab y navegable con teclado (accesibilidad). */
+    gtk_widget_set_can_focus (event_box, TRUE);
+    /* Realce visual del foco: fondo sutil derivado del color del tema.
+     * Reutiliza el mismo mecanismo (mix + provider) que ya usan los
+     * separadores de módulo, que sabemos que funciona en este entorno.
+     * Solo se pinta en :focus, así que la fila normal queda neutra. */
+    gtk_style_context_add_class (gtk_widget_get_style_context (event_box),
+                                 "net-row");
+    {
+        GtkCssProvider *rc = gtk_css_provider_new ();
+gtk_css_provider_load_from_data (rc,
+    ".net-row:focus { background-color: mix(@theme_bg_color, @theme_fg_color, 0.03); }"
+    ".net-row-open { background-color: mix(@theme_bg_color, @theme_fg_color, 0.05); }"
+    ".net-row-open:focus { background-color: mix(@theme_bg_color, @theme_fg_color, 0.05); }",
+    -1, NULL);
+gtk_style_context_add_provider (
+    gtk_widget_get_style_context (event_box),
+    GTK_STYLE_PROVIDER (rc), GTK_STYLE_PROVIDER_PRIORITY_USER);
+g_object_unref (rc);
+    }
     gtk_container_add (GTK_CONTAINER (event_box), outer);
 
     row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
@@ -1752,10 +1907,12 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
             GtkWidget *qr_box  = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
             GtkWidget *qr_da   = gtk_drawing_area_new ();
             gtk_widget_set_size_request (qr_da, 16, 16);
+            gtk_widget_set_app_paintable (qr_da, TRUE);
             g_signal_connect (qr_da, "draw", G_CALLBACK (draw_qr_button_icon), NULL);
             GtkWidget *qr_lbl  = gtk_label_new (_("Show QR"));
             gtk_box_pack_start (GTK_BOX (qr_box), qr_da,  FALSE, FALSE, 0);
             gtk_box_pack_start (GTK_BOX (qr_box), qr_lbl, FALSE, FALSE, 0);
+            g_object_set_data (G_OBJECT (qr_btn), "qr-label", qr_lbl);
             gtk_widget_show_all (qr_box);
             gtk_container_add (GTK_CONTAINER (qr_btn), qr_box);
             gtk_button_set_relief (GTK_BUTTON (qr_btn), GTK_RELIEF_NONE);
@@ -2016,6 +2173,7 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
 
     g_object_set_data_full (G_OBJECT (outer), "row-data", rd,
                             (GDestroyNotify) row_data_free);
+    rd->row_box = event_box;
     /* Marca el SSID y device_path en el event_box para identificar la fila desde afuera. */
     g_object_set_data_full (G_OBJECT (event_box), "ssid",
                             g_strdup (ap->ssid), g_free);
@@ -2024,6 +2182,8 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path)
 
     g_signal_connect (event_box, "button-press-event",
                       G_CALLBACK (on_row_clicked), rd);
+    g_signal_connect (event_box, "key-press-event",
+                      G_CALLBACK (on_row_key_press), rd);
 
     if (ap_active) {
         g_signal_connect (action_btn, "clicked",
@@ -2868,6 +3028,26 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, NetPopup *popup)
         popup_hide (popup);
         return GDK_EVENT_STOP;
     }
+
+    /* Navegación con teclado dentro del popup.
+     *
+     * La ventana del popup es de tipo "menú emergente": el gestor de ventanas
+     * no la trata como ventana con foco de teclado activo, así que GTK no
+     * dispara solo su navegación con Tab. Las teclas SÍ llegan (Escape anda),
+     * por eso movemos el foco nosotros con gtk_widget_child_focus, que recorre
+     * los widgets enfocables (filas, botones del expand, switches, entry).
+     *
+     * Solo interceptamos Tab y Shift+Tab. Las flechas se dejan pasar a propósito
+     * para no romper el movimiento del cursor dentro del campo de contraseña. */
+    if (event->keyval == GDK_KEY_Tab || event->keyval == GDK_KEY_KP_Tab) {
+        gtk_widget_child_focus (popup->window, GTK_DIR_TAB_FORWARD);
+        return GDK_EVENT_STOP;
+    }
+    if (event->keyval == GDK_KEY_ISO_Left_Tab) {   /* Shift+Tab */
+        gtk_widget_child_focus (popup->window, GTK_DIR_TAB_BACKWARD);
+        return GDK_EVENT_STOP;
+    }
+
     return GDK_EVENT_PROPAGATE;
 }
 
@@ -3129,6 +3309,7 @@ popup_hide (NetPopup *popup)
         gtk_widget_hide (popup->current_expand_box);
         popup->current_expand_box = NULL;
     }
+    clear_open_highlight (popup);
 
     if (popup->button)
         g_signal_handlers_block_matched (popup->button,
