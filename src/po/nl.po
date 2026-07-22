@@ -1,230 +1,318 @@
 # Dutch translation of xfce-net-plugin
 msgid ""
 msgstr ""
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-06-12 12:00+0000\n"
+"Language: nl\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Language: nl\n"
 
+#: plugin.c:369
 msgid "Properties — Network"
 msgstr "Eigenschappen — Netwerk"
 
+#: plugin.c:372
 msgid "Close"
 msgstr "Sluiten"
 
+#: plugin.c:379
 msgid "Appearance"
 msgstr "Uiterlijk"
 
+#: plugin.c:388
 msgid "Square button"
 msgstr "Vierkante knop"
 
+#: plugin.c:394
 msgid "Plugin size:"
 msgstr "Plugingrootte:"
 
+#: plugin.c:410
 msgid "Use panel size"
 msgstr "Panelgrootte gebruiken"
 
+#: plugin.c:416
 msgid "Icon size:"
 msgstr "Pictogramgrootte:"
 
-msgid "Not connected"
-msgstr "Niet verbonden"
-
-msgid "Connected to %s (%s)"
-msgstr "Verbonden met %s (%s)"
-
-msgid " · VPN active"
-msgstr " · VPN actief"
-
-msgid "VPN active"
-msgstr "VPN actief"
-
-msgid "Networks"
-msgstr "Netwerken"
-
-msgid "Forget network \"%s\"?"
-msgstr "Netwerk \"%s\" vergeten?"
-
-msgid "Confirm"
-msgstr "Bevestigen"
-
-msgid "Connect"
-msgstr "Verbinden"
-
-msgid "Incorrect password"
-msgstr "Onjuist wachtwoord"
-
-msgid "Connected"
-msgstr "Verbonden"
-
-msgid "Disconnect"
-msgstr "Verbreken"
-
-msgid "Saved network"
-msgstr "Opgeslagen netwerk"
-
-msgid "Connect automatically"
-msgstr "Automatisch verbinden"
-
-msgid "Forget"
-msgstr "Vergeten"
-
-msgid "Password"
-msgstr "Wachtwoord"
-
-msgid "Advanced settings…"
-msgstr "Geavanceerde instellingen…"
-
-msgid "Connect to hidden network…"
-msgstr "Verbinden met verborgen netwerk…"
-
-msgid "Refresh"
-msgstr "Vernieuwen"
-
-
-msgid "Updating…"
-msgstr "Bijwerken…"
-
+#: plugin.c:432
 msgid "Popup width:"
 msgstr "Popupbreedte:"
 
+#: plugin.c:441
 msgid "Popup height:"
 msgstr "Popuphoogte:"
 
-msgid "Wi-Fi"
-msgstr "Wi-Fi"
-
-msgid "Connected to <b>%s</b>"
-msgstr "Verbonden met <b>%s</b>"
-
-msgid "Connect to hidden network"
-msgstr "Verbinden met verborgen netwerk"
-
-msgid "Cancel"
-msgstr "Annuleren"
-
-msgid "Network name:"
-msgstr "Netwerknaam:"
-
-msgid "Security:"
-msgstr "Beveiliging:"
-
-msgid "None"
-msgstr "Geen"
-
-msgid "Password:"
-msgstr "Wachtwoord:"
-
-msgid "Disabled"
-msgstr "Uitgeschakeld"
-
-msgid "Enabled – not connected"
-msgstr "Ingeschakeld – niet verbonden"
-
-msgid "Disconnecting…"
-msgstr "Verbreken…"
-
-msgid "Connecting…"
-msgstr "Verbinden…"
-
-msgid "Connection failed"
-msgstr "Verbinding mislukt"
-
+#: plugin.c:456
 msgid "Show separators"
 msgstr "Scheidingslijnen tonen"
 
-msgid "Connected to %s"
-msgstr "Verbonden met %s"
-
-msgid "Disconnected"
-msgstr "Verbroken"
-
-msgid "Ethernet"
-msgstr "Ethernet"
-
-msgid "Cable connected"
-msgstr "Kabel verbonden"
-
-msgid "Cable disconnected"
-msgstr "Kabel verbroken"
-
-msgid "VPN"
-msgstr "VPN"
-
-msgid "Show notifications"
-msgstr "Meldingen weergeven"
-
-msgid "If the popup and the notification overlap, the notification will partially cover the popup."
-msgstr "Als het popup en de melding overlappen, zal de melding het popup gedeeltelijk bedekken."
-
-
-msgid "Connecting to <b>%s</b>…"
-msgstr "Verbinden met <b>%s</b>…"
-
-msgid "Last connection attempt failed"
-msgstr "Laatste verbindingspoging mislukt"
-
-msgid "Retry with saved password"
-msgstr "Opnieuw proberen met opgeslagen wachtwoord"
-
-msgid "Rewrite password"
-msgstr "Wachtwoord opnieuw invoeren"
-
-msgid "Try a different password"
-msgstr "Ander wachtwoord proberen"
-
-msgid "Back"
-msgstr "Terug"
-
-msgid "Network manager plugin for the XFCE panel"
-msgstr "Netwerkbeheer-plugin voor het XFCE-paneel"
-
-msgid "Details"
-msgstr "Details"
-
-msgid "Show QR"
-msgstr "QR tonen"
-
-msgid "Hide QR"
-msgstr "QR verbergen"
-
-msgid "BSSID:"
-msgstr "BSSID:"
-
-msgid "Channel:"
-msgstr "Kanaal:"
-
-msgid "DNS:"
-msgstr "DNS:"
-
-msgid "Frequency:"
-msgstr "Frequentie:"
-
-msgid "Gateway:"
-msgstr "Gateway:"
-
-msgid "IP:"
-msgstr "IP:"
-
-msgid "IPv6:"
-msgstr "IPv6:"
-
-msgid "Encrypted"
-msgstr "Versleuteld"
-
-msgid "Open"
-msgstr "Open"
-
-msgid "QR error"
-msgstr "QR-fout"
-
-msgid "No saved password"
-msgstr "Geen opgeslagen wachtwoord"
-
+#: plugin.c:462
 msgid "Show Forget button on active networks"
 msgstr "Knop Vergeten tonen bij actieve netwerken"
 
+#: plugin.c:469
+msgid "Show notifications"
+msgstr "Meldingen weergeven"
+
+#: plugin.c:475
+msgid ""
+"If the popup and the notification overlap, the notification will partially "
+"cover the popup."
+msgstr ""
+"Als het popup en de melding overlappen, zal de melding het popup "
+"gedeeltelijk bedekken."
+
+#: plugin.c:585 plugin.c:620
+#, c-format
+msgid "Connected to %s"
+msgstr "Verbonden met %s"
+
+#: plugin.c:586 plugin.c:590 plugin.c:621 popup-sections.c:959
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+#: plugin.c:590 plugin.c:606
+msgid "Disconnected"
+msgstr "Verbroken"
+
+#: plugin.c:593 plugin.c:596 plugin.c:624
+msgid "Ethernet"
+msgstr "Ethernet"
+
+#: plugin.c:593 plugin.c:624
+msgid "Cable connected"
+msgstr "Kabel verbonden"
+
+#: plugin.c:596
+msgid "Cable disconnected"
+msgstr "Kabel verbroken"
+
+#: plugin.c:601 plugin.c:606 plugin.c:631
+msgid "VPN"
+msgstr "VPN"
+
+#: plugin.c:601 plugin.c:631 popup-rows.c:963 popup-sections.c:276
+msgid "Connected"
+msgstr "Verbonden"
+
+#: plugin.c:644
+msgid "Not connected"
+msgstr "Niet verbonden"
+
+#: plugin.c:646
+#, c-format
+msgid "Connected to %s (%s)"
+msgstr "Verbonden met %s (%s)"
+
+#: plugin.c:653
+msgid " · VPN active"
+msgstr " · VPN actief"
+
+#: plugin.c:655
+msgid "VPN active"
+msgstr "VPN actief"
+
+#: plugin.c:740
+msgid "Networks"
+msgstr "Netwerken"
+
+#: plugin.c:794
+msgid "Network manager plugin for the XFCE panel"
+msgstr "Netwerkbeheer-plugin voor het XFCE-paneel"
+
+#: popup.c:222 popup.c:792 popup-rows.c:575 popup-rows.c:577 popup-rows.c:1038
+#: popup-rows.c:1165 popup-rows.c:1449
+msgid "Connect"
+msgstr "Verbinden"
+
+#: popup.c:222 popup-rows.c:1021
+msgid "Disconnect"
+msgstr "Verbreken"
+
+#: popup.c:237
+msgid "Incorrect password"
+msgstr "Onjuist wachtwoord"
+
+#: popup.c:720 popup-sections.c:942
+msgid "Refresh"
+msgstr "Vernieuwen"
+
+#: popup.c:733 popup-sections.c:942
+msgid "Updating…"
+msgstr "Bijwerken…"
+
+#: popup.c:788
+msgid "Connect to hidden network"
+msgstr "Verbinden met verborgen netwerk"
+
+#: popup.c:791 popup-rows.c:1330
+msgid "Cancel"
+msgstr "Annuleren"
+
+#: popup.c:805
+msgid "Network name:"
+msgstr "Netwerknaam:"
+
+#: popup.c:812 popup-rows.c:1287
+msgid "Security:"
+msgstr "Beveiliging:"
+
+#: popup.c:815
+msgid "None"
+msgstr "Geen"
+
+#: popup.c:821
+msgid "Password:"
+msgstr "Wachtwoord:"
+
+#: popup.c:1005
+msgid "Advanced settings…"
+msgstr "Geavanceerde instellingen…"
+
+#: popup.c:1015
+msgid "Connect to hidden network…"
+msgstr "Verbinden met verborgen netwerk…"
+
+#: popup-rows.c:134 popup-rows.c:791 popup-rows.c:1215
+msgid "Show QR"
+msgstr "QR tonen"
+
+#: popup-rows.c:152
+msgid "No saved password"
+msgstr "Geen opgeslagen wachtwoord"
+
+#: popup-rows.c:172
+msgid "QR error"
+msgstr "QR-fout"
+
+#: popup-rows.c:191
+msgid "Hide QR"
+msgstr "QR verbergen"
+
+#: popup-rows.c:422
+msgid "Disconnecting…"
+msgstr "Verbreken…"
+
+#: popup-rows.c:571 popup-rows.c:1398
+msgid "Retry with saved password"
+msgstr "Opnieuw proberen met opgeslagen wachtwoord"
+
+#: popup-rows.c:582 popup-rows.c:977 popup-rows.c:1033
+msgid "Connecting…"
+msgstr "Verbinden…"
+
+#: popup-rows.c:1024 popup-rows.c:1078 popup-sections.c:507
+#, c-format
 msgid "Signal %d%%"
 msgstr "Signaal %d%%"
 
+#: popup-rows.c:1076 popup-sections.c:506
+#, c-format
 msgid "Saved network · Signal %d%%"
 msgstr "Opgeslagen netwerk · Signaal %d%%"
+
+#: popup-rows.c:1096
+msgid "Last connection attempt failed"
+msgstr "Laatste verbindingspoging mislukt"
+
+#: popup-rows.c:1106 popup-rows.c:1153
+msgid "Connect automatically"
+msgstr "Automatisch verbinden"
+
+#: popup-rows.c:1119 popup-rows.c:1178
+msgid "Forget"
+msgstr "Vergeten"
+
+#: popup-rows.c:1127
+msgid "Enterprise network (802.1X) — use Advanced settings"
+msgstr "Bedrijfsnetwerk (802.1X) — gebruik Geavanceerde instellingen"
+
+#: popup-rows.c:1138
+msgid "Password"
+msgstr "Wachtwoord"
+
+#: popup-rows.c:1231
+msgid "Details"
+msgstr "Details"
+
+#: popup-rows.c:1268
+msgid "IP:"
+msgstr "IP:"
+
+#: popup-rows.c:1269
+msgid "Gateway:"
+msgstr "Gateway:"
+
+#: popup-rows.c:1270
+msgid "DNS:"
+msgstr "DNS:"
+
+#: popup-rows.c:1271
+msgid "IPv6:"
+msgstr "IPv6:"
+
+#: popup-rows.c:1279
+msgid "Open"
+msgstr "Open"
+
+#: popup-rows.c:1286
+msgid "Encrypted"
+msgstr "Versleuteld"
+
+#: popup-rows.c:1291
+msgid "Frequency:"
+msgstr "Frequentie:"
+
+#: popup-rows.c:1300
+msgid "Channel:"
+msgstr "Kanaal:"
+
+#: popup-rows.c:1305
+msgid "BSSID:"
+msgstr "BSSID:"
+
+#: popup-rows.c:1321
+#, c-format
+msgid "Forget network \"%s\"?"
+msgstr "Netwerk \"%s\" vergeten?"
+
+#: popup-rows.c:1331
+msgid "Confirm"
+msgstr "Bevestigen"
+
+#: popup-rows.c:1405
+msgid "Try a different password"
+msgstr "Ander wachtwoord proberen"
+
+#: popup-rows.c:1428
+msgid "Rewrite password"
+msgstr "Wachtwoord opnieuw invoeren"
+
+#: popup-rows.c:1445
+msgid "Back"
+msgstr "Terug"
+
+#: popup-sections.c:401
+#, c-format
+msgid "Connected to <b>%s</b>"
+msgstr "Verbonden met <b>%s</b>"
+
+#: popup-sections.c:405
+msgid "Disabled"
+msgstr "Uitgeschakeld"
+
+#: popup-sections.c:408
+#, c-format
+msgid "Connecting to <b>%s</b>…"
+msgstr "Verbinden met <b>%s</b>…"
+
+#: popup-sections.c:412
+msgid "Enabled – not connected"
+msgstr "Ingeschakeld – niet verbonden"
+
+#~ msgid "Saved network"
+#~ msgstr "Opgeslagen netwerk"
+
+#~ msgid "Connection failed"
+#~ msgstr "Verbinding mislukt"

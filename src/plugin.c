@@ -838,8 +838,8 @@ net_plugin_construct (XfcePanelPlugin *plugin)
                       G_CALLBACK (net_plugin_free),     np);
     g_signal_connect (plugin, "configure-plugin",
                       G_CALLBACK (on_configure_plugin),  np);
-    g_signal_connect (plugin, "size-changed",
-                      G_CALLBACK (on_size_changed),       np);
+    /* OJO: "size-changed" ya se conecta en net_plugin_new; conectarla otra
+     * vez acá hacía que apply_config corriera dos veces por cada cambio. */
 }
 
 XFCE_PANEL_PLUGIN_REGISTER (net_plugin_construct);

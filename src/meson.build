@@ -75,6 +75,8 @@ shared_module('xfce-net-plugin',
   [
     'plugin.c',
     'popup.c',
+    'popup-rows.c',
+    'popup-sections.c',
     'nm-dbus.c',
     lock_icons_resource,
   ],

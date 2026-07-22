@@ -1,230 +1,316 @@
 # Japanese translation of xfce-net-plugin
 msgid ""
 msgstr ""
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-06-12 12:00+0000\n"
+"Language: ja\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Language: ja\n"
 
+#: plugin.c:369
 msgid "Properties — Network"
 msgstr "プロパティ — ネットワーク"
 
+#: plugin.c:372
 msgid "Close"
 msgstr "閉じる"
 
+#: plugin.c:379
 msgid "Appearance"
 msgstr "外観"
 
+#: plugin.c:388
 msgid "Square button"
 msgstr "正方形ボタン"
 
+#: plugin.c:394
 msgid "Plugin size:"
 msgstr "プラグインサイズ："
 
+#: plugin.c:410
 msgid "Use panel size"
 msgstr "パネルサイズを使用"
 
+#: plugin.c:416
 msgid "Icon size:"
 msgstr "アイコンサイズ："
 
-msgid "Not connected"
-msgstr "未接続"
-
-msgid "Connected to %s (%s)"
-msgstr "%s (%s) に接続済み"
-
-msgid " · VPN active"
-msgstr " · VPN 有効"
-
-msgid "VPN active"
-msgstr "VPN 有効"
-
-msgid "Networks"
-msgstr "ネットワーク"
-
-msgid "Forget network \"%s\"?"
-msgstr "ネットワーク \"%s\" を忘れますか？"
-
-msgid "Confirm"
-msgstr "確認"
-
-msgid "Connect"
-msgstr "接続"
-
-msgid "Incorrect password"
-msgstr "パスワードが正しくありません"
-
-msgid "Connected"
-msgstr "接続済み"
-
-msgid "Disconnect"
-msgstr "切断"
-
-msgid "Saved network"
-msgstr "保存済みネットワーク"
-
-msgid "Connect automatically"
-msgstr "自動的に接続"
-
-msgid "Forget"
-msgstr "忘れる"
-
-msgid "Password"
-msgstr "パスワード"
-
-msgid "Advanced settings…"
-msgstr "詳細設定…"
-
-msgid "Connect to hidden network…"
-msgstr "非表示ネットワークに接続…"
-
-msgid "Refresh"
-msgstr "更新"
-
-
-msgid "Updating…"
-msgstr "更新中…"
-
+#: plugin.c:432
 msgid "Popup width:"
 msgstr "ポップアップの幅:"
 
+#: plugin.c:441
 msgid "Popup height:"
 msgstr "ポップアップの高さ:"
 
-msgid "Wi-Fi"
-msgstr "Wi-Fi"
-
-msgid "Connected to <b>%s</b>"
-msgstr "<b>%s</b> に接続済み"
-
-msgid "Connect to hidden network"
-msgstr "非公開ネットワークに接続"
-
-msgid "Cancel"
-msgstr "キャンセル"
-
-msgid "Network name:"
-msgstr "ネットワーク名:"
-
-msgid "Security:"
-msgstr "セキュリティ:"
-
-msgid "None"
-msgstr "なし"
-
-msgid "Password:"
-msgstr "パスワード:"
-
-msgid "Disabled"
-msgstr "無効"
-
-msgid "Enabled – not connected"
-msgstr "有効 – 未接続"
-
-msgid "Disconnecting…"
-msgstr "切断中…"
-
-msgid "Connecting…"
-msgstr "接続中…"
-
-msgid "Connection failed"
-msgstr "接続失敗"
-
+#: plugin.c:456
 msgid "Show separators"
 msgstr "区切り線を表示"
 
-msgid "Connected to %s"
-msgstr "%s に接続しました"
-
-msgid "Disconnected"
-msgstr "切断されました"
-
-msgid "Ethernet"
-msgstr "Ethernet"
-
-msgid "Cable connected"
-msgstr "ケーブル接続"
-
-msgid "Cable disconnected"
-msgstr "ケーブル切断"
-
-msgid "VPN"
-msgstr "VPN"
-
-msgid "Show notifications"
-msgstr "通知を表示"
-
-msgid "If the popup and the notification overlap, the notification will partially cover the popup."
-msgstr "ポップアップと通知が重なる場合、通知がポップアップを部分的に覆います。"
-
-
-msgid "Connecting to <b>%s</b>…"
-msgstr "<b>%s</b> に接続中…"
-
-msgid "Last connection attempt failed"
-msgstr "前回の接続試行が失敗しました"
-
-msgid "Retry with saved password"
-msgstr "保存済みパスワードで再試行"
-
-msgid "Rewrite password"
-msgstr "パスワードを再入力"
-
-msgid "Try a different password"
-msgstr "別のパスワードを試す"
-
-msgid "Back"
-msgstr "戻る"
-
-msgid "Network manager plugin for the XFCE panel"
-msgstr "XFCEパネル用ネットワーク管理プラグイン"
-
-msgid "Details"
-msgstr "詳細"
-
-msgid "Show QR"
-msgstr "QRを表示"
-
-msgid "Hide QR"
-msgstr "QRを隠す"
-
-msgid "BSSID:"
-msgstr "BSSID:"
-
-msgid "Channel:"
-msgstr "チャンネル:"
-
-msgid "DNS:"
-msgstr "DNS:"
-
-msgid "Frequency:"
-msgstr "周波数:"
-
-msgid "Gateway:"
-msgstr "ゲートウェイ:"
-
-msgid "IP:"
-msgstr "IP:"
-
-msgid "IPv6:"
-msgstr "IPv6:"
-
-msgid "Encrypted"
-msgstr "暗号化済み"
-
-msgid "Open"
-msgstr "オープン"
-
-msgid "QR error"
-msgstr "QRエラー"
-
-msgid "No saved password"
-msgstr "保存されたパスワードなし"
-
+#: plugin.c:462
 msgid "Show Forget button on active networks"
 msgstr "アクティブなネットワークに「忘れる」ボタンを表示"
 
+#: plugin.c:469
+msgid "Show notifications"
+msgstr "通知を表示"
+
+#: plugin.c:475
+msgid ""
+"If the popup and the notification overlap, the notification will partially "
+"cover the popup."
+msgstr "ポップアップと通知が重なる場合、通知がポップアップを部分的に覆います。"
+
+#: plugin.c:585 plugin.c:620
+#, c-format
+msgid "Connected to %s"
+msgstr "%s に接続しました"
+
+#: plugin.c:586 plugin.c:590 plugin.c:621 popup-sections.c:959
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+#: plugin.c:590 plugin.c:606
+msgid "Disconnected"
+msgstr "切断されました"
+
+#: plugin.c:593 plugin.c:596 plugin.c:624
+msgid "Ethernet"
+msgstr "Ethernet"
+
+#: plugin.c:593 plugin.c:624
+msgid "Cable connected"
+msgstr "ケーブル接続"
+
+#: plugin.c:596
+msgid "Cable disconnected"
+msgstr "ケーブル切断"
+
+#: plugin.c:601 plugin.c:606 plugin.c:631
+msgid "VPN"
+msgstr "VPN"
+
+#: plugin.c:601 plugin.c:631 popup-rows.c:963 popup-sections.c:276
+msgid "Connected"
+msgstr "接続済み"
+
+#: plugin.c:644
+msgid "Not connected"
+msgstr "未接続"
+
+#: plugin.c:646
+#, c-format
+msgid "Connected to %s (%s)"
+msgstr "%s (%s) に接続済み"
+
+#: plugin.c:653
+msgid " · VPN active"
+msgstr " · VPN 有効"
+
+#: plugin.c:655
+msgid "VPN active"
+msgstr "VPN 有効"
+
+#: plugin.c:740
+msgid "Networks"
+msgstr "ネットワーク"
+
+#: plugin.c:794
+msgid "Network manager plugin for the XFCE panel"
+msgstr "XFCEパネル用ネットワーク管理プラグイン"
+
+#: popup.c:222 popup.c:792 popup-rows.c:575 popup-rows.c:577 popup-rows.c:1038
+#: popup-rows.c:1165 popup-rows.c:1449
+msgid "Connect"
+msgstr "接続"
+
+#: popup.c:222 popup-rows.c:1021
+msgid "Disconnect"
+msgstr "切断"
+
+#: popup.c:237
+msgid "Incorrect password"
+msgstr "パスワードが正しくありません"
+
+#: popup.c:720 popup-sections.c:942
+msgid "Refresh"
+msgstr "更新"
+
+#: popup.c:733 popup-sections.c:942
+msgid "Updating…"
+msgstr "更新中…"
+
+#: popup.c:788
+msgid "Connect to hidden network"
+msgstr "非公開ネットワークに接続"
+
+#: popup.c:791 popup-rows.c:1330
+msgid "Cancel"
+msgstr "キャンセル"
+
+#: popup.c:805
+msgid "Network name:"
+msgstr "ネットワーク名:"
+
+#: popup.c:812 popup-rows.c:1287
+msgid "Security:"
+msgstr "セキュリティ:"
+
+#: popup.c:815
+msgid "None"
+msgstr "なし"
+
+#: popup.c:821
+msgid "Password:"
+msgstr "パスワード:"
+
+#: popup.c:1005
+msgid "Advanced settings…"
+msgstr "詳細設定…"
+
+#: popup.c:1015
+msgid "Connect to hidden network…"
+msgstr "非表示ネットワークに接続…"
+
+#: popup-rows.c:134 popup-rows.c:791 popup-rows.c:1215
+msgid "Show QR"
+msgstr "QRを表示"
+
+#: popup-rows.c:152
+msgid "No saved password"
+msgstr "保存されたパスワードなし"
+
+#: popup-rows.c:172
+msgid "QR error"
+msgstr "QRエラー"
+
+#: popup-rows.c:191
+msgid "Hide QR"
+msgstr "QRを隠す"
+
+#: popup-rows.c:422
+msgid "Disconnecting…"
+msgstr "切断中…"
+
+#: popup-rows.c:571 popup-rows.c:1398
+msgid "Retry with saved password"
+msgstr "保存済みパスワードで再試行"
+
+#: popup-rows.c:582 popup-rows.c:977 popup-rows.c:1033
+msgid "Connecting…"
+msgstr "接続中…"
+
+#: popup-rows.c:1024 popup-rows.c:1078 popup-sections.c:507
+#, c-format
 msgid "Signal %d%%"
 msgstr "信号 %d%%"
 
+#: popup-rows.c:1076 popup-sections.c:506
+#, c-format
 msgid "Saved network · Signal %d%%"
 msgstr "保存済みネットワーク · 信号 %d%%"
+
+#: popup-rows.c:1096
+msgid "Last connection attempt failed"
+msgstr "前回の接続試行が失敗しました"
+
+#: popup-rows.c:1106 popup-rows.c:1153
+msgid "Connect automatically"
+msgstr "自動的に接続"
+
+#: popup-rows.c:1119 popup-rows.c:1178
+msgid "Forget"
+msgstr "忘れる"
+
+#: popup-rows.c:1127
+msgid "Enterprise network (802.1X) — use Advanced settings"
+msgstr "会社ネットワーク (802.1X) — 詳細設定を使用してください"
+
+#: popup-rows.c:1138
+msgid "Password"
+msgstr "パスワード"
+
+#: popup-rows.c:1231
+msgid "Details"
+msgstr "詳細"
+
+#: popup-rows.c:1268
+msgid "IP:"
+msgstr "IP:"
+
+#: popup-rows.c:1269
+msgid "Gateway:"
+msgstr "ゲートウェイ:"
+
+#: popup-rows.c:1270
+msgid "DNS:"
+msgstr "DNS:"
+
+#: popup-rows.c:1271
+msgid "IPv6:"
+msgstr "IPv6:"
+
+#: popup-rows.c:1279
+msgid "Open"
+msgstr "オープン"
+
+#: popup-rows.c:1286
+msgid "Encrypted"
+msgstr "暗号化済み"
+
+#: popup-rows.c:1291
+msgid "Frequency:"
+msgstr "周波数:"
+
+#: popup-rows.c:1300
+msgid "Channel:"
+msgstr "チャンネル:"
+
+#: popup-rows.c:1305
+msgid "BSSID:"
+msgstr "BSSID:"
+
+#: popup-rows.c:1321
+#, c-format
+msgid "Forget network \"%s\"?"
+msgstr "ネットワーク \"%s\" を忘れますか？"
+
+#: popup-rows.c:1331
+msgid "Confirm"
+msgstr "確認"
+
+#: popup-rows.c:1405
+msgid "Try a different password"
+msgstr "別のパスワードを試す"
+
+#: popup-rows.c:1428
+msgid "Rewrite password"
+msgstr "パスワードを再入力"
+
+#: popup-rows.c:1445
+msgid "Back"
+msgstr "戻る"
+
+#: popup-sections.c:401
+#, c-format
+msgid "Connected to <b>%s</b>"
+msgstr "<b>%s</b> に接続済み"
+
+#: popup-sections.c:405
+msgid "Disabled"
+msgstr "無効"
+
+#: popup-sections.c:408
+#, c-format
+msgid "Connecting to <b>%s</b>…"
+msgstr "<b>%s</b> に接続中…"
+
+#: popup-sections.c:412
+msgid "Enabled – not connected"
+msgstr "有効 – 未接続"
+
+#~ msgid "Saved network"
+#~ msgstr "保存済みネットワーク"
+
+#~ msgid "Connection failed"
+#~ msgstr "接続失敗"

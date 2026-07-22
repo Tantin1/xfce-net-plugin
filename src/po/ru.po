@@ -1,230 +1,317 @@
 # Russian translation of xfce-net-plugin
 msgid ""
 msgstr ""
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-06-12 12:00+0000\n"
+"Language: ru\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Language: ru\n"
 
+#: plugin.c:369
 msgid "Properties — Network"
 msgstr "Свойства — Сеть"
 
+#: plugin.c:372
 msgid "Close"
 msgstr "Закрыть"
 
+#: plugin.c:379
 msgid "Appearance"
 msgstr "Внешний вид"
 
+#: plugin.c:388
 msgid "Square button"
 msgstr "Квадратная кнопка"
 
+#: plugin.c:394
 msgid "Plugin size:"
 msgstr "Размер плагина:"
 
+#: plugin.c:410
 msgid "Use panel size"
 msgstr "Использовать размер панели"
 
+#: plugin.c:416
 msgid "Icon size:"
 msgstr "Размер значка:"
 
-msgid "Not connected"
-msgstr "Не подключено"
-
-msgid "Connected to %s (%s)"
-msgstr "Подключено к %s (%s)"
-
-msgid " · VPN active"
-msgstr " · VPN активен"
-
-msgid "VPN active"
-msgstr "VPN активен"
-
-msgid "Networks"
-msgstr "Сети"
-
-msgid "Forget network \"%s\"?"
-msgstr "Забыть сеть \"%s\"?"
-
-msgid "Confirm"
-msgstr "Подтвердить"
-
-msgid "Connect"
-msgstr "Подключить"
-
-msgid "Incorrect password"
-msgstr "Неверный пароль"
-
-msgid "Connected"
-msgstr "Подключено"
-
-msgid "Disconnect"
-msgstr "Отключить"
-
-msgid "Saved network"
-msgstr "Сохранённая сеть"
-
-msgid "Connect automatically"
-msgstr "Подключаться автоматически"
-
-msgid "Forget"
-msgstr "Забыть"
-
-msgid "Password"
-msgstr "Пароль"
-
-msgid "Advanced settings…"
-msgstr "Дополнительные параметры…"
-
-msgid "Connect to hidden network…"
-msgstr "Подключиться к скрытой сети…"
-
-msgid "Refresh"
-msgstr "Обновить"
-
-
-msgid "Updating…"
-msgstr "Обновление…"
-
+#: plugin.c:432
 msgid "Popup width:"
 msgstr "Ширина попапа:"
 
+#: plugin.c:441
 msgid "Popup height:"
 msgstr "Высота попапа:"
 
-msgid "Wi-Fi"
-msgstr "Wi-Fi"
-
-msgid "Connected to <b>%s</b>"
-msgstr "Подключено к <b>%s</b>"
-
-msgid "Connect to hidden network"
-msgstr "Подключиться к скрытой сети"
-
-msgid "Cancel"
-msgstr "Отмена"
-
-msgid "Network name:"
-msgstr "Имя сети:"
-
-msgid "Security:"
-msgstr "Безопасность:"
-
-msgid "None"
-msgstr "Нет"
-
-msgid "Password:"
-msgstr "Пароль:"
-
-msgid "Disabled"
-msgstr "Отключено"
-
-msgid "Enabled – not connected"
-msgstr "Включено – не подключено"
-
-msgid "Disconnecting…"
-msgstr "Отключение…"
-
-msgid "Connecting…"
-msgstr "Подключение…"
-
-msgid "Connection failed"
-msgstr "Ошибка подключения"
-
+#: plugin.c:456
 msgid "Show separators"
 msgstr "Показывать разделители"
 
-msgid "Connected to %s"
-msgstr "Подключено к %s"
-
-msgid "Disconnected"
-msgstr "Отключено"
-
-msgid "Ethernet"
-msgstr "Ethernet"
-
-msgid "Cable connected"
-msgstr "Кабель подключён"
-
-msgid "Cable disconnected"
-msgstr "Кабель отключён"
-
-msgid "VPN"
-msgstr "VPN"
-
-msgid "Show notifications"
-msgstr "Показывать уведомления"
-
-msgid "If the popup and the notification overlap, the notification will partially cover the popup."
-msgstr "Если popup и уведомление перекрываются, уведомление частично закроет popup."
-
-
-msgid "Connecting to <b>%s</b>…"
-msgstr "Подключение к <b>%s</b>…"
-
-msgid "Last connection attempt failed"
-msgstr "Последняя попытка подключения не удалась"
-
-msgid "Retry with saved password"
-msgstr "Повторить с сохранённым паролем"
-
-msgid "Rewrite password"
-msgstr "Ввести пароль заново"
-
-msgid "Try a different password"
-msgstr "Попробовать другой пароль"
-
-msgid "Back"
-msgstr "Назад"
-
-msgid "Network manager plugin for the XFCE panel"
-msgstr "Плагин управления сетью для панели XFCE"
-
-msgid "Details"
-msgstr "Подробности"
-
-msgid "Show QR"
-msgstr "Показать QR"
-
-msgid "Hide QR"
-msgstr "Скрыть QR"
-
-msgid "BSSID:"
-msgstr "BSSID:"
-
-msgid "Channel:"
-msgstr "Канал:"
-
-msgid "DNS:"
-msgstr "DNS:"
-
-msgid "Frequency:"
-msgstr "Частота:"
-
-msgid "Gateway:"
-msgstr "Шлюз:"
-
-msgid "IP:"
-msgstr "IP:"
-
-msgid "IPv6:"
-msgstr "IPv6:"
-
-msgid "Encrypted"
-msgstr "Зашифровано"
-
-msgid "Open"
-msgstr "Открытая"
-
-msgid "QR error"
-msgstr "Ошибка QR"
-
-msgid "No saved password"
-msgstr "Нет сохранённого пароля"
-
+#: plugin.c:462
 msgid "Show Forget button on active networks"
 msgstr "Показывать кнопку «Забыть» для активных сетей"
 
+#: plugin.c:469
+msgid "Show notifications"
+msgstr "Показывать уведомления"
+
+#: plugin.c:475
+msgid ""
+"If the popup and the notification overlap, the notification will partially "
+"cover the popup."
+msgstr ""
+"Если popup и уведомление перекрываются, уведомление частично закроет popup."
+
+#: plugin.c:585 plugin.c:620
+#, c-format
+msgid "Connected to %s"
+msgstr "Подключено к %s"
+
+#: plugin.c:586 plugin.c:590 plugin.c:621 popup-sections.c:959
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+#: plugin.c:590 plugin.c:606
+msgid "Disconnected"
+msgstr "Отключено"
+
+#: plugin.c:593 plugin.c:596 plugin.c:624
+msgid "Ethernet"
+msgstr "Ethernet"
+
+#: plugin.c:593 plugin.c:624
+msgid "Cable connected"
+msgstr "Кабель подключён"
+
+#: plugin.c:596
+msgid "Cable disconnected"
+msgstr "Кабель отключён"
+
+#: plugin.c:601 plugin.c:606 plugin.c:631
+msgid "VPN"
+msgstr "VPN"
+
+#: plugin.c:601 plugin.c:631 popup-rows.c:963 popup-sections.c:276
+msgid "Connected"
+msgstr "Подключено"
+
+#: plugin.c:644
+msgid "Not connected"
+msgstr "Не подключено"
+
+#: plugin.c:646
+#, c-format
+msgid "Connected to %s (%s)"
+msgstr "Подключено к %s (%s)"
+
+#: plugin.c:653
+msgid " · VPN active"
+msgstr " · VPN активен"
+
+#: plugin.c:655
+msgid "VPN active"
+msgstr "VPN активен"
+
+#: plugin.c:740
+msgid "Networks"
+msgstr "Сети"
+
+#: plugin.c:794
+msgid "Network manager plugin for the XFCE panel"
+msgstr "Плагин управления сетью для панели XFCE"
+
+#: popup.c:222 popup.c:792 popup-rows.c:575 popup-rows.c:577 popup-rows.c:1038
+#: popup-rows.c:1165 popup-rows.c:1449
+msgid "Connect"
+msgstr "Подключить"
+
+#: popup.c:222 popup-rows.c:1021
+msgid "Disconnect"
+msgstr "Отключить"
+
+#: popup.c:237
+msgid "Incorrect password"
+msgstr "Неверный пароль"
+
+#: popup.c:720 popup-sections.c:942
+msgid "Refresh"
+msgstr "Обновить"
+
+#: popup.c:733 popup-sections.c:942
+msgid "Updating…"
+msgstr "Обновление…"
+
+#: popup.c:788
+msgid "Connect to hidden network"
+msgstr "Подключиться к скрытой сети"
+
+#: popup.c:791 popup-rows.c:1330
+msgid "Cancel"
+msgstr "Отмена"
+
+#: popup.c:805
+msgid "Network name:"
+msgstr "Имя сети:"
+
+#: popup.c:812 popup-rows.c:1287
+msgid "Security:"
+msgstr "Безопасность:"
+
+#: popup.c:815
+msgid "None"
+msgstr "Нет"
+
+#: popup.c:821
+msgid "Password:"
+msgstr "Пароль:"
+
+#: popup.c:1005
+msgid "Advanced settings…"
+msgstr "Дополнительные параметры…"
+
+#: popup.c:1015
+msgid "Connect to hidden network…"
+msgstr "Подключиться к скрытой сети…"
+
+#: popup-rows.c:134 popup-rows.c:791 popup-rows.c:1215
+msgid "Show QR"
+msgstr "Показать QR"
+
+#: popup-rows.c:152
+msgid "No saved password"
+msgstr "Нет сохранённого пароля"
+
+#: popup-rows.c:172
+msgid "QR error"
+msgstr "Ошибка QR"
+
+#: popup-rows.c:191
+msgid "Hide QR"
+msgstr "Скрыть QR"
+
+#: popup-rows.c:422
+msgid "Disconnecting…"
+msgstr "Отключение…"
+
+#: popup-rows.c:571 popup-rows.c:1398
+msgid "Retry with saved password"
+msgstr "Повторить с сохранённым паролем"
+
+#: popup-rows.c:582 popup-rows.c:977 popup-rows.c:1033
+msgid "Connecting…"
+msgstr "Подключение…"
+
+#: popup-rows.c:1024 popup-rows.c:1078 popup-sections.c:507
+#, c-format
 msgid "Signal %d%%"
 msgstr "Сигнал %d%%"
 
+#: popup-rows.c:1076 popup-sections.c:506
+#, c-format
 msgid "Saved network · Signal %d%%"
 msgstr "Сохранённая сеть · Сигнал %d%%"
+
+#: popup-rows.c:1096
+msgid "Last connection attempt failed"
+msgstr "Последняя попытка подключения не удалась"
+
+#: popup-rows.c:1106 popup-rows.c:1153
+msgid "Connect automatically"
+msgstr "Подключаться автоматически"
+
+#: popup-rows.c:1119 popup-rows.c:1178
+msgid "Forget"
+msgstr "Забыть"
+
+#: popup-rows.c:1127
+msgid "Enterprise network (802.1X) — use Advanced settings"
+msgstr "Корпоративная сеть (802.1X) — используйте Расширенные настройки"
+
+#: popup-rows.c:1138
+msgid "Password"
+msgstr "Пароль"
+
+#: popup-rows.c:1231
+msgid "Details"
+msgstr "Подробности"
+
+#: popup-rows.c:1268
+msgid "IP:"
+msgstr "IP:"
+
+#: popup-rows.c:1269
+msgid "Gateway:"
+msgstr "Шлюз:"
+
+#: popup-rows.c:1270
+msgid "DNS:"
+msgstr "DNS:"
+
+#: popup-rows.c:1271
+msgid "IPv6:"
+msgstr "IPv6:"
+
+#: popup-rows.c:1279
+msgid "Open"
+msgstr "Открытая"
+
+#: popup-rows.c:1286
+msgid "Encrypted"
+msgstr "Зашифровано"
+
+#: popup-rows.c:1291
+msgid "Frequency:"
+msgstr "Частота:"
+
+#: popup-rows.c:1300
+msgid "Channel:"
+msgstr "Канал:"
+
+#: popup-rows.c:1305
+msgid "BSSID:"
+msgstr "BSSID:"
+
+#: popup-rows.c:1321
+#, c-format
+msgid "Forget network \"%s\"?"
+msgstr "Забыть сеть \"%s\"?"
+
+#: popup-rows.c:1331
+msgid "Confirm"
+msgstr "Подтвердить"
+
+#: popup-rows.c:1405
+msgid "Try a different password"
+msgstr "Попробовать другой пароль"
+
+#: popup-rows.c:1428
+msgid "Rewrite password"
+msgstr "Ввести пароль заново"
+
+#: popup-rows.c:1445
+msgid "Back"
+msgstr "Назад"
+
+#: popup-sections.c:401
+#, c-format
+msgid "Connected to <b>%s</b>"
+msgstr "Подключено к <b>%s</b>"
+
+#: popup-sections.c:405
+msgid "Disabled"
+msgstr "Отключено"
+
+#: popup-sections.c:408
+#, c-format
+msgid "Connecting to <b>%s</b>…"
+msgstr "Подключение к <b>%s</b>…"
+
+#: popup-sections.c:412
+msgid "Enabled – not connected"
+msgstr "Включено – не подключено"
+
+#~ msgid "Saved network"
+#~ msgstr "Сохранённая сеть"
+
+#~ msgid "Connection failed"
+#~ msgstr "Ошибка подключения"

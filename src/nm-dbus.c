@@ -13,6 +13,153 @@
 
 #define NM_DEVICE_TYPE_WIFI 2
 
+/* Quita sufijos corporativos del vendor ("Corporation", "Inc.", etc.)
+ * Modifica el string in-place. */
+static void
+simplify_vendor (gchar *vendor)
+{
+    static const gchar *suffixes[] = {
+        " Corporation", " Corp.", " Corp", " Incorporated",
+        " Inc.", " Inc", " Ltd.", " Ltd", " Co.", " Co",
+        " GmbH", " S.A.", " Systems", NULL
+    };
+    if (!vendor) return;
+    gsize vlen = strlen (vendor);
+    for (gint i = 0; suffixes[i]; i++) {
+        gsize slen = strlen (suffixes[i]);
+        if (vlen > slen && g_str_has_suffix (vendor, suffixes[i])) {
+            vendor[vlen - slen] = '\0';
+            break;
+        }
+    }
+}
+
+/* Replica la lógica de nm_device_get_description() de libnm usando
+ * los datos de udev en /run/udev/data/n<ifindex>. Sin dependencias nuevas.
+ * Liberar con g_free(). */
+gchar *
+nm_get_device_description (const gchar *iface)
+{
+    gchar *ifindex_path = g_strdup_printf ("/sys/class/net/%s/ifindex", iface);
+    gchar *ifindex_str  = NULL;
+    if (!g_file_get_contents (ifindex_path, &ifindex_str, NULL, NULL)) {
+        g_free (ifindex_path);
+        return NULL;
+    }
+    g_free (ifindex_path);
+    g_strstrip (ifindex_str);
+
+    gchar *udev_path = g_strdup_printf ("/run/udev/data/n%s", ifindex_str);
+    g_free (ifindex_str);
+    gchar *udev_data = NULL;
+    if (!g_file_get_contents (udev_path, &udev_data, NULL, NULL)) {
+        g_free (udev_path);
+        return NULL;
+    }
+    g_free (udev_path);
+
+    gchar *model_from_db  = NULL;
+    gchar *model          = NULL;
+    gchar *vendor_from_db = NULL;
+    gchar *vendor         = NULL;
+
+    gchar **lines = g_strsplit (udev_data, "\n", -1);
+    g_free (udev_data);
+
+    for (gint i = 0; lines[i]; i++) {
+        const gchar *line = lines[i];
+        if (g_str_has_prefix (line, "E:ID_MODEL_FROM_DATABASE=") && !model_from_db)
+            model_from_db = g_strdup (line + strlen ("E:ID_MODEL_FROM_DATABASE="));
+        else if (g_str_has_prefix (line, "E:ID_MODEL=") && !model)
+            model = g_strdup (line + strlen ("E:ID_MODEL="));
+        else if (g_str_has_prefix (line, "E:ID_VENDOR_FROM_DATABASE=") && !vendor_from_db)
+            vendor_from_db = g_strdup (line + strlen ("E:ID_VENDOR_FROM_DATABASE="));
+        else if (g_str_has_prefix (line, "E:ID_VENDOR=") && !vendor)
+            vendor = g_strdup (line + strlen ("E:ID_VENDOR="));
+    }
+    g_strfreev (lines);
+
+    /* Elegir vendor y product más informativos */
+    gchar *v = g_strdup (vendor_from_db ? vendor_from_db : vendor);
+    gchar *p = g_strdup (model_from_db  ? model_from_db  : model);
+
+    g_free (model_from_db);
+    g_free (model);
+    g_free (vendor_from_db);
+    g_free (vendor);
+
+    if (!v && !p)
+        return NULL;
+
+    /* Simplificar vendor: quitar sufijos corporativos */
+    if (v)
+        simplify_vendor (v);
+
+    gchar *desc = NULL;
+
+    if (p) {
+        /* Quitar contenido entre corchetes, ej: " [Stone Peak]" */
+        gchar *bracket = strchr (p, '[');
+        if (bracket) {
+            while (bracket > p && *(bracket - 1) == ' ')
+                bracket--;
+            *bracket = '\0';
+        }
+        g_strstrip (p);
+
+        /* Quitar prefijo vendor del product si coincide */
+        if (v) {
+            for (gint pass = 0; pass < 2; pass++) {
+                /* pass 0: vendor simplificado, pass 1: vendor original (ya simplificado) */
+                if (g_ascii_strncasecmp (p, v, strlen (v)) == 0) {
+                    gchar *tmp = g_strdup (g_strstrip (p + strlen (v)));
+                    g_free (p);
+                    p = tmp;
+                    break;
+                }
+            }
+        }
+
+        /* Quitar prefijos genéricos de ancho de banda */
+        static const gchar *band_prefixes[] = {
+            "Dual Band ", "Dual-Band ", "Single Band ", NULL
+        };
+        for (gint i = 0; band_prefixes[i]; i++) {
+            if (g_str_has_prefix (p, band_prefixes[i])) {
+                gchar *tmp = g_strdup (p + strlen (band_prefixes[i]));
+                g_free (p);
+                p = tmp;
+                break;
+            }
+        }
+
+        /* Products genéricos → reemplazar con "Wi-Fi" */
+        if (g_regex_match_simple ("^802\\.11\\w*( NIC)?$", p, G_REGEX_CASELESS, 0) ||
+            g_strcmp0 (p, "NIC") == 0 ||
+            g_strcmp0 (p, "Wireless NIC") == 0 ||
+            g_strcmp0 (p, "WLAN") == 0) {
+            g_free (p);
+            p = g_strdup ("Wi-Fi");
+        }
+    }
+
+    /* Combinar: si vendor ya está en p, usar solo p */
+    if (v && p) {
+        if (g_strstr_len (p, -1, v))
+            desc = g_strdup (p);
+        else
+            desc = g_strconcat (v, " ", p, NULL);
+    } else if (p) {
+        desc = g_strdup (p);
+    } else {
+        desc = g_strdup (v);
+    }
+
+    g_free (v);
+    g_free (p);
+    return desc;
+}
+
 GDBusConnection *
 nm_dbus_connect (void)
 {
@@ -25,6 +172,83 @@ nm_dbus_connect (void)
     return conn;
 }
 
+/* ---------- caché de instantánea (ObjectManager) ----------
+ *
+ * El gestor de red expone el estándar "ObjectManager": una sola llamada al
+ * bus (GetManagedObjects) devuelve TODOS sus objetos (dispositivos, puntos
+ * de acceso, conexiones activas) con TODAS sus propiedades.
+ *
+ * nm_cache_begin() toma esa instantánea; mientras esté activa, get_property
+ * y get_all_properties resuelven desde memoria, con cero llamadas al bus.
+ * nm_cache_end() la libera. Anidable (contador); si la llamada inicial
+ * falla, todo sigue funcionando con llamadas sueltas como antes.
+ *
+ * OJO: la instantánea es una foto. Solo usarla en bloques cortos de lectura
+ * (armar la UI); nunca mantenerla abierta esperando que cambie. */
+
+static GVariant *om_snapshot = NULL;   /* tipo a{oa{sa{sv}}} */
+static gint      om_depth    = 0;
+
+void
+nm_cache_begin (GDBusConnection *conn)
+{
+    om_depth++;
+    if (om_depth > 1)
+        return;
+
+    GError   *err = NULL;
+    GVariant *result = g_dbus_connection_call_sync (
+        conn, NM_BUS_NAME, "/org/freedesktop",
+        "org.freedesktop.DBus.ObjectManager", "GetManagedObjects",
+        NULL, G_VARIANT_TYPE ("(a{oa{sa{sv}}})"),
+        G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
+
+    if (result) {
+        om_snapshot = g_variant_get_child_value (result, 0);
+        g_variant_unref (result);
+    } else {
+        g_warning ("nm-dbus: GetManagedObjects: %s "
+                   "(sin instantánea; se sigue con llamadas sueltas)",
+                   err->message);
+        g_error_free (err);
+        om_snapshot = NULL;
+    }
+}
+
+void
+nm_cache_end (void)
+{
+    if (om_depth <= 0) {
+        g_warning ("nm-dbus: nm_cache_end sin nm_cache_begin");
+        return;
+    }
+    om_depth--;
+    if (om_depth == 0 && om_snapshot) {
+        g_variant_unref (om_snapshot);
+        om_snapshot = NULL;
+    }
+}
+
+/* Busca en la instantánea el diccionario de propiedades de una interfaz de
+ * un objeto. Devuelve una referencia nueva, o NULL si no hay instantánea o
+ * el objeto/interfaz no figura. */
+static GVariant *
+snapshot_get_props (const gchar *object_path, const gchar *iface)
+{
+    if (!om_snapshot)
+        return NULL;
+
+    GVariant *ifaces = g_variant_lookup_value (om_snapshot, object_path,
+                                               G_VARIANT_TYPE ("a{sa{sv}}"));
+    if (!ifaces)
+        return NULL;
+
+    GVariant *props = g_variant_lookup_value (ifaces, iface,
+                                              G_VARIANT_TYPE ("a{sv}"));
+    g_variant_unref (ifaces);
+    return props;
+}
+
 static GVariant *
 get_property (GDBusConnection *conn,
               const gchar     *object_path,
@@ -33,6 +257,16 @@ get_property (GDBusConnection *conn,
 {
     GVariant *result, *value = NULL;
     GError   *err = NULL;
+
+    /* Primero la instantánea, si hay una activa: cero llamadas al bus. */
+    GVariant *props = snapshot_get_props (object_path, iface);
+    if (props) {
+        value = g_variant_lookup_value (props, prop, NULL);
+        g_variant_unref (props);
+        if (value)
+            return value;
+        /* Propiedad ausente en la instantánea: caer a la llamada directa. */
+    }
 
     result = g_dbus_connection_call_sync (
         conn, NM_BUS_NAME, object_path,
@@ -50,6 +284,40 @@ get_property (GDBusConnection *conn,
         g_error_free (err);
     }
     return value;
+}
+
+/* Trae TODAS las propiedades de una interfaz en una sola llamada al bus
+ * (método GetAll), en vez de una llamada por propiedad. Devuelve un
+ * diccionario {s,v} a liberar con g_variant_unref(), o NULL si falló. */
+static GVariant *
+get_all_properties (GDBusConnection *conn,
+                    const gchar     *object_path,
+                    const gchar     *iface)
+{
+    GError   *err = NULL;
+
+    /* Primero la instantánea, si hay una activa: cero llamadas al bus. */
+    GVariant *props = snapshot_get_props (object_path, iface);
+    if (props)
+        return props;
+
+    GVariant *result = g_dbus_connection_call_sync (
+        conn, NM_BUS_NAME, object_path,
+        "org.freedesktop.DBus.Properties", "GetAll",
+        g_variant_new ("(s)", iface),
+        G_VARIANT_TYPE ("(a{sv})"),
+        G_DBUS_CALL_FLAGS_NONE, 2000, NULL, &err);
+
+    if (!result) {
+        g_warning ("nm-dbus: GetAll %s en %s: %s",
+                   iface, object_path, err->message);
+        g_error_free (err);
+        return NULL;
+    }
+
+    GVariant *dict = g_variant_get_child_value (result, 0);
+    g_variant_unref (result);
+    return dict;
 }
 
 /* Callback genérico para llamadas async: solo loggea el error si hubo.
@@ -74,50 +342,44 @@ on_async_done (GObject *src, GAsyncResult *res, gpointer user_data)
 GSList *
 nm_get_wifi_devices (GDBusConnection *conn)
 {
-    GVariant    *result, *paths_v;
-    GError      *err = NULL;
+    GVariant    *paths_v;
     GSList      *list = NULL;
     gsize        n, i;
     const gchar **paths;
 
-    result = g_dbus_connection_call_sync (
-        conn, NM_BUS_NAME, NM_OBJECT_PATH, NM_IFACE,
-        "GetDevices", NULL, G_VARIANT_TYPE ("(ao)"),
-        G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
-
-    if (!result) {
-        g_warning ("nm-dbus: GetDevices: %s", err->message);
-        g_error_free (err);
+    /* Propiedad "Devices" en vez del método GetDevices: mismo contenido,
+     * pero al ser propiedad se resuelve gratis desde la instantánea. */
+    paths_v = get_property (conn, NM_OBJECT_PATH, NM_IFACE, "Devices");
+    if (!paths_v)
         return NULL;
-    }
-
-    g_variant_get (result, "(@ao)", &paths_v);
     paths = g_variant_get_objv (paths_v, &n);
 
     for (i = 0; i < n; i++) {
-        GVariant *type_v, *iface_v;
-        guint32   dev_type;
+        /* Una sola llamada GetAll por dispositivo en vez de un Get por propiedad. */
+        GVariant *props = get_all_properties (conn, paths[i], NM_DEVICE_IFACE);
+        if (!props) continue;
 
-        type_v = get_property (conn, paths[i], NM_DEVICE_IFACE, "DeviceType");
-        if (!type_v) continue;
-        dev_type = g_variant_get_uint32 (type_v);
-        g_variant_unref (type_v);
-        if (dev_type != NM_DEVICE_TYPE_WIFI) continue;
+        guint32      dev_type = 0;
+        const gchar *iface    = NULL;
+        g_variant_lookup (props, "DeviceType", "u",  &dev_type);
+        g_variant_lookup (props, "Interface",  "&s", &iface);
 
-        iface_v = get_property (conn, paths[i], NM_DEVICE_IFACE, "Interface");
-        if (!iface_v) continue;
+        if (dev_type != NM_DEVICE_TYPE_WIFI || !iface) {
+            g_variant_unref (props);
+            continue;
+        }
 
         NmDevice *dev    = g_new0 (NmDevice, 1);
-        dev->iface       = g_strdup (g_variant_get_string (iface_v, NULL));
+        dev->iface       = g_strdup (iface);
         dev->object_path = g_strdup (paths[i]);
-        g_variant_unref (iface_v);
+        dev->description = nm_get_device_description (dev->iface);
+        g_variant_unref (props);
 
         list = g_slist_append (list, dev);
     }
 
     g_free (paths);
     g_variant_unref (paths_v);
-    g_variant_unref (result);
     return list;
 }
 
@@ -129,6 +391,7 @@ nm_device_list_free (GSList *list)
         NmDevice *dev = l->data;
         g_free (dev->iface);
         g_free (dev->object_path);
+        g_free (dev->description);
         g_free (dev);
     }
     g_slist_free (list);
@@ -166,40 +429,40 @@ nm_get_active_ap_info (GDBusConnection *conn)
         if (!ap_path)
             continue;
 
-        GVariant *strength_v = get_property (conn, ap_path, NM_AP_IFACE, "Strength");
-        GVariant *wpa_v      = get_property (conn, ap_path, NM_AP_IFACE, "WpaFlags");
-        GVariant *rsn_v      = get_property (conn, ap_path, NM_AP_IFACE, "RsnFlags");
-        GVariant *freq_v     = get_property (conn, ap_path, NM_AP_IFACE, "Frequency");
-        GVariant *ssid_v     = get_property (conn, ap_path, NM_AP_IFACE, "Ssid");
+        /* Una sola llamada GetAll en vez de cinco Get. */
+        GVariant *props = get_all_properties (conn, ap_path, NM_AP_IFACE);
 
         info->connected = TRUE;
-        info->strength  = strength_v ? (gint) g_variant_get_byte (strength_v) : 0;
-        guint32 wpa     = wpa_v ? g_variant_get_uint32 (wpa_v) : 0;
-        guint32 rsn     = rsn_v ? g_variant_get_uint32 (rsn_v) : 0;
-        info->secure    = (wpa | rsn) != 0;
 
-        if (freq_v) {
-            guint32 freq = g_variant_get_uint32 (freq_v);
+        if (props) {
+            guchar  strength = 0;
+            guint32 wpa = 0, rsn = 0, freq = 0;
+            g_variant_lookup (props, "Strength",  "y", &strength);
+            g_variant_lookup (props, "WpaFlags",  "u", &wpa);
+            g_variant_lookup (props, "RsnFlags",  "u", &rsn);
+            g_variant_lookup (props, "Frequency", "u", &freq);
+
+            info->strength = (gint) strength;
+            info->secure   = (wpa | rsn) != 0;
+
             if (freq >= 5925)      info->band = g_strdup ("6G");
             else if (freq >= 5000) info->band = g_strdup ("5G");
-            else                   info->band = g_strdup ("2.4G");
-        }
+            else if (freq > 0)     info->band = g_strdup ("2.4G");
 
-        if (ssid_v) {
-            GVariantIter *iter = g_variant_iter_new (ssid_v);
-            GString      *s    = g_string_new (NULL);
-            guchar        c;
-            while (g_variant_iter_next (iter, "y", &c))
-                g_string_append_c (s, (gchar) c);
-            g_variant_iter_free (iter);
-            info->ssid = g_string_free (s, FALSE);
+            GVariant *ssid_v = g_variant_lookup_value (props, "Ssid",
+                                                       G_VARIANT_TYPE ("ay"));
+            if (ssid_v) {
+                gsize         len;
+                const guchar *bytes = g_variant_get_fixed_array (ssid_v, &len, 1);
+                gchar        *raw   = g_strndup ((const gchar *) bytes, len);
+                /* SSIDs son bytes sin codificación garantizada: forzar UTF-8
+                 * válido para que el dibujado de etiquetas nunca se rompa. */
+                info->ssid = g_utf8_make_valid (raw, -1);
+                g_free (raw);
+                g_variant_unref (ssid_v);
+            }
+            g_variant_unref (props);
         }
-
-        if (strength_v) g_variant_unref (strength_v);
-        if (wpa_v)      g_variant_unref (wpa_v);
-        if (rsn_v)      g_variant_unref (rsn_v);
-        if (freq_v)     g_variant_unref (freq_v);
-        if (ssid_v)     g_variant_unref (ssid_v);
         g_free (ap_path);
     }
 
@@ -216,11 +479,63 @@ nm_active_ap_info_free (NmActiveApInfo *info)
     g_free (info);
 }
 
+/* Banda a partir de la frecuencia, para agrupar duplicados. */
+static gint
+ap_band_of (guint frequency)
+{
+    if (frequency >= 5925) return 6;
+    if (frequency >= 5000) return 5;
+    return 2;
+}
+
+/* Agrupa puntos de acceso repetidos (mismo SSID y misma banda: repetidores,
+ * redes en malla). Conserva el activo si lo hay; si no, el de mejor señal.
+ * Libera los descartados y devuelve la lista nueva. */
+static GSList *
+ap_list_dedupe (GSList *list)
+{
+    GSList *out = NULL;
+
+    for (GSList *l = list; l; l = l->next) {
+        NmAccessPoint *ap   = l->data;
+        GSList        *node = NULL;
+
+        for (GSList *o = out; o; o = o->next) {
+            NmAccessPoint *cand = o->data;
+            if (g_strcmp0 (cand->ssid, ap->ssid) == 0 &&
+                ap_band_of (cand->frequency) == ap_band_of (ap->frequency)) {
+                node = o;
+                break;
+            }
+        }
+
+        if (!node) {
+            out = g_slist_append (out, ap);
+            continue;
+        }
+
+        NmAccessPoint *kept    = node->data;
+        gboolean       replace = (ap->active && !kept->active) ||
+                                 (ap->active == kept->active &&
+                                  ap->strength > kept->strength);
+        NmAccessPoint *loser   = replace ? kept : ap;
+        if (replace)
+            node->data = ap;
+
+        g_free (loser->ssid);
+        g_free (loser->object_path);
+        g_free (loser->bssid);
+        g_free (loser);
+    }
+
+    g_slist_free (list);
+    return out;
+}
+
 GSList *
 nm_get_access_points (GDBusConnection *conn, const gchar *device_path)
 {
-    GVariant    *result, *paths_v;
-    GError      *err = NULL;
+    GVariant    *paths_v;
     GSList      *list = NULL;
     gsize        n, i;
     const gchar **paths;
@@ -228,69 +543,65 @@ nm_get_access_points (GDBusConnection *conn, const gchar *device_path)
 
     active_path = get_active_ap_path (conn, device_path);
 
-    result = g_dbus_connection_call_sync (
-        conn, NM_BUS_NAME, device_path, NM_WIFI_IFACE,
-        "GetAllAccessPoints", NULL, G_VARIANT_TYPE ("(ao)"),
-        G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
-
-    if (!result) {
-        g_warning ("nm-dbus: GetAllAccessPoints en %s: %s",
-                   device_path, err->message);
-        g_error_free (err);
+    /* Propiedad "AccessPoints" en vez del método GetAllAccessPoints: mismo
+     * contenido útil (los AP ocultos traen SSID vacío y se saltean igual),
+     * pero al ser propiedad se resuelve gratis desde la instantánea. */
+    paths_v = get_property (conn, device_path, NM_WIFI_IFACE, "AccessPoints");
+    if (!paths_v) {
         g_free (active_path);
         return NULL;
     }
-
-    g_variant_get (result, "(@ao)", &paths_v);
     paths = g_variant_get_objv (paths_v, &n);
 
     for (i = 0; i < n; i++) {
-        GVariant     *ssid_v, *strength_v, *flags_v;
-        GVariantIter *iter;
-        guchar        c;
-        GString      *ssid_str;
-        guint32       flags;
+        /* Una sola llamada GetAll por AP en vez de seis Get por propiedad. */
+        GVariant *props = get_all_properties (conn, paths[i], NM_AP_IFACE);
+        if (!props) continue;
 
-        ssid_v = get_property (conn, paths[i], NM_AP_IFACE, "Ssid");
-        if (!ssid_v) continue;
-
-        ssid_str = g_string_new (NULL);
-        iter = g_variant_iter_new (ssid_v);
-        while (g_variant_iter_next (iter, "y", &c))
-            g_string_append_c (ssid_str, (gchar) c);
-        g_variant_iter_free (iter);
-        g_variant_unref (ssid_v);
-
-        if (ssid_str->len == 0) {
-            g_string_free (ssid_str, TRUE);
+        GVariant *ssid_v = g_variant_lookup_value (props, "Ssid",
+                                                   G_VARIANT_TYPE ("ay"));
+        if (!ssid_v) {
+            g_variant_unref (props);
             continue;
         }
 
-        strength_v = get_property (conn, paths[i], NM_AP_IFACE, "Strength");
-        flags_v    = get_property (conn, paths[i], NM_AP_IFACE, "WpaFlags");
-        GVariant *rsn_v   = get_property (conn, paths[i], NM_AP_IFACE, "RsnFlags");
-        GVariant *freq_v  = get_property (conn, paths[i], NM_AP_IFACE, "Frequency");
-        GVariant *bssid_v = get_property (conn, paths[i], NM_AP_IFACE, "HwAddress");
+        gsize         len;
+        const guchar *bytes = g_variant_get_fixed_array (ssid_v, &len, 1);
+        gchar        *raw   = g_strndup ((const gchar *) bytes, len);
+        g_variant_unref (ssid_v);
+
+        if (!raw || !*raw) {
+            g_free (raw);
+            g_variant_unref (props);
+            continue;
+        }
+
+        /* SSIDs son bytes sin codificación garantizada: forzar UTF-8 válido
+         * para que el dibujado de etiquetas nunca se rompa. */
+        gchar *ssid = g_utf8_make_valid (raw, -1);
+        g_free (raw);
+
+        guchar       strength = 0;
+        guint32      wpa = 0, rsn = 0, freq = 0;
+        const gchar *bssid = NULL;
+        g_variant_lookup (props, "Strength",  "y",  &strength);
+        g_variant_lookup (props, "WpaFlags",  "u",  &wpa);
+        g_variant_lookup (props, "RsnFlags",  "u",  &rsn);
+        g_variant_lookup (props, "Frequency", "u",  &freq);
+        g_variant_lookup (props, "HwAddress", "&s", &bssid);
 
         NmAccessPoint *ap = g_new0 (NmAccessPoint, 1);
-        ap->ssid        = g_string_free (ssid_str, FALSE);
+        ap->ssid        = ssid;
         ap->object_path = g_strdup (paths[i]);
-        ap->bssid       = bssid_v
-                          ? g_strdup (g_variant_get_string (bssid_v, NULL)) : NULL;
-        ap->strength    = strength_v
-                          ? (gint) g_variant_get_byte (strength_v) : 0;
-        ap->frequency   = freq_v ? g_variant_get_uint32 (freq_v) : 0;
-        ap->wpa_flags   = flags_v ? g_variant_get_uint32 (flags_v) : 0;
-        ap->rsn_flags   = rsn_v   ? g_variant_get_uint32 (rsn_v)  : 0;
-        flags      = ap->wpa_flags | ap->rsn_flags;
-        ap->secure = (flags != 0);
-        ap->active = (active_path && strcmp (paths[i], active_path) == 0);
+        ap->bssid       = g_strdup (bssid);
+        ap->strength    = (gint) strength;
+        ap->frequency   = freq;
+        ap->wpa_flags   = wpa;
+        ap->rsn_flags   = rsn;
+        ap->secure      = ((wpa | rsn) != 0);
+        ap->active      = (active_path && strcmp (paths[i], active_path) == 0);
 
-        if (strength_v) g_variant_unref (strength_v);
-        if (flags_v)    g_variant_unref (flags_v);
-        if (rsn_v)      g_variant_unref (rsn_v);
-        if (freq_v)     g_variant_unref (freq_v);
-        if (bssid_v)    g_variant_unref (bssid_v);
+        g_variant_unref (props);
 
         list = g_slist_append (list, ap);
     }
@@ -298,8 +609,9 @@ nm_get_access_points (GDBusConnection *conn, const gchar *device_path)
     g_free (active_path);
     g_free (paths);
     g_variant_unref (paths_v);
-    g_variant_unref (result);
-    return list;
+
+    /* Agrupar repetidores: una sola fila por SSID+banda. */
+    return ap_list_dedupe (list);
 }
 
 void
@@ -482,7 +794,9 @@ find_connection_path_by_ssid (GDBusConnection *conn, const gchar *ssid)
             if (ssid_v) {
                 gsize         len;
                 const guchar *bytes = g_variant_get_fixed_array (ssid_v, &len, 1);
-                gchar        *conn_ssid = g_strndup ((const gchar *) bytes, len);
+                gchar        *raw       = g_strndup ((const gchar *) bytes, len);
+                gchar        *conn_ssid = g_utf8_make_valid (raw, -1);
+                g_free (raw);
                 if (g_strcmp0 (conn_ssid, ssid) == 0)
                     found = g_strdup (paths[i]);
                 g_free (conn_ssid);
@@ -508,6 +822,58 @@ nm_has_saved_connection (GDBusConnection *conn, const gchar *ssid)
     gboolean  found = (path != NULL);
     g_free (path);
     return found;
+}
+
+GHashTable *
+nm_get_saved_wifi_ssids (GDBusConnection *conn)
+{
+    GHashTable   *set = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                               g_free, NULL);
+    GVariant     *result, *paths_v;
+    const gchar **paths;
+    gsize         n, i;
+
+    result = g_dbus_connection_call_sync (
+        conn, NM_BUS_NAME, NM_SETTINGS_PATH, NM_SETTINGS_IFACE,
+        "ListConnections", NULL, G_VARIANT_TYPE ("(ao)"),
+        G_DBUS_CALL_FLAGS_NONE, 5000, NULL, NULL);
+    if (!result) return set;
+
+    g_variant_get (result, "(@ao)", &paths_v);
+    paths = g_variant_get_objv (paths_v, &n);
+
+    for (i = 0; i < n; i++) {
+        GVariant *settings = g_dbus_connection_call_sync (
+            conn, NM_BUS_NAME, paths[i], NM_CONN_IFACE,
+            "GetSettings", NULL, G_VARIANT_TYPE ("(a{sa{sv}})"),
+            G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
+        if (!settings) continue;
+
+        GVariant *outer     = g_variant_get_child_value (settings, 0);
+        GVariant *wifi_dict = NULL;
+        g_variant_lookup (outer, "802-11-wireless", "@a{sv}", &wifi_dict);
+
+        if (wifi_dict) {
+            GVariant *ssid_v = NULL;
+            g_variant_lookup (wifi_dict, "ssid", "@ay", &ssid_v);
+            if (ssid_v) {
+                gsize         len;
+                const guchar *bytes = g_variant_get_fixed_array (ssid_v, &len, 1);
+                gchar        *raw   = g_strndup ((const gchar *) bytes, len);
+                g_hash_table_add (set, g_utf8_make_valid (raw, -1));
+                g_free (raw);
+                g_variant_unref (ssid_v);
+            }
+            g_variant_unref (wifi_dict);
+        }
+        g_variant_unref (outer);
+        g_variant_unref (settings);
+    }
+
+    g_free (paths);
+    g_variant_unref (paths_v);
+    g_variant_unref (result);
+    return set;
 }
 
 gboolean
@@ -552,7 +918,9 @@ nm_forget_connection (GDBusConnection *conn, const gchar *ssid)
             if (ssid_v) {
                 gsize         len;
                 const guchar *bytes = g_variant_get_fixed_array (ssid_v, &len, 1);
-                gchar        *conn_ssid = g_strndup ((const gchar *) bytes, len);
+                gchar        *raw       = g_strndup ((const gchar *) bytes, len);
+                gchar        *conn_ssid = g_utf8_make_valid (raw, -1);
+                g_free (raw);
                 if (g_strcmp0 (conn_ssid, ssid) == 0)
                     match = TRUE;
                 g_free (conn_ssid);
@@ -623,7 +991,9 @@ list_connection_paths_by_ssid (GDBusConnection *conn, const gchar *ssid)
             if (ssid_v) {
                 gsize         len;
                 const guchar *bytes = g_variant_get_fixed_array (ssid_v, &len, 1);
-                gchar        *conn_ssid = g_strndup ((const gchar *) bytes, len);
+                gchar        *raw       = g_strndup ((const gchar *) bytes, len);
+                gchar        *conn_ssid = g_utf8_make_valid (raw, -1);
+                g_free (raw);
                 if (g_strcmp0 (conn_ssid, ssid) == 0)
                     matches = g_slist_prepend (matches, g_strdup (paths[i]));
                 g_free (conn_ssid);
@@ -807,6 +1177,7 @@ nm_add_and_activate_connection_async (GDBusConnection *conn,
                                       const gchar     *ap_path,
                                       const gchar     *ssid,
                                       const gchar     *password,
+                                      const gchar     *key_mgmt,
                                       gboolean         autoconnect)
 {
     GVariantBuilder conn_builder, wifi_builder, ipv4_builder, ipv6_builder,
@@ -848,10 +1219,13 @@ nm_add_and_activate_connection_async (GDBusConnection *conn,
     g_variant_builder_add (&conn_builder, "{sa{sv}}", "ipv6", &ipv6_builder);
 
     if (password && *password) {
+        /* "wpa-psk" sirve para WPA2 y para redes mixtas WPA2/WPA3; "sae" es
+         * obligatorio en redes WPA3 puro (con wpa-psk fallarían siempre). */
+        const gchar *km = (key_mgmt && *key_mgmt) ? key_mgmt : "wpa-psk";
         GVariantBuilder sec_builder;
         g_variant_builder_init (&sec_builder, G_VARIANT_TYPE ("a{sv}"));
         g_variant_builder_add (&sec_builder, "{sv}", "key-mgmt",
-                               g_variant_new_string ("wpa-psk"));
+                               g_variant_new_string (km));
         g_variant_builder_add (&sec_builder, "{sv}", "psk",
                                g_variant_new_string (password));
         g_variant_builder_add (&conn_builder, "{sa{sv}}",
@@ -959,60 +1333,72 @@ nm_set_device_enabled_async (GDBusConnection *conn, const gchar *device_path,
 
 #define NM_DEVICE_TYPE_ETHERNET   1
 #define NM_DEVICE_STATE_ACTIVATED 100
+#define NM_DEVICE_STATE_UNMANAGED 10
+#define NM_WIRED_IFACE            "org.freedesktop.NetworkManager.Device.Wired"
 
 GSList *
 nm_get_ethernet_devices (GDBusConnection *conn)
 {
-    GVariant    *result, *paths_v;
-    GError      *err = NULL;
+    GVariant    *paths_v;
     GSList      *list = NULL;
     gsize        n, i;
     const gchar **paths;
 
-    result = g_dbus_connection_call_sync (
-        conn, NM_BUS_NAME, NM_OBJECT_PATH, NM_IFACE,
-        "GetDevices", NULL, G_VARIANT_TYPE ("(ao)"),
-        G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
-
-    if (!result) {
-        g_warning ("nm-dbus: GetDevices (eth): %s", err->message);
-        g_error_free (err);
+    /* Propiedad "Devices" en vez del método GetDevices: mismo contenido,
+     * pero al ser propiedad se resuelve gratis desde la instantánea. */
+    paths_v = get_property (conn, NM_OBJECT_PATH, NM_IFACE, "Devices");
+    if (!paths_v)
         return NULL;
-    }
-
-    g_variant_get (result, "(@ao)", &paths_v);
     paths = g_variant_get_objv (paths_v, &n);
 
     for (i = 0; i < n; i++) {
-        GVariant *type_v, *state_v, *iface_v;
-        guint32   dev_type, state;
+        /* Una sola llamada GetAll por dispositivo (DeviceType, State e
+         * Interface juntos) en vez de un Get por propiedad. */
+        GVariant *props = get_all_properties (conn, paths[i], NM_DEVICE_IFACE);
+        if (!props) continue;
 
-        type_v = get_property (conn, paths[i], NM_DEVICE_IFACE, "DeviceType");
-        if (!type_v) continue;
-        dev_type = g_variant_get_uint32 (type_v);
-        g_variant_unref (type_v);
-        if (dev_type != NM_DEVICE_TYPE_ETHERNET) continue;
+        guint32      dev_type = 0, state = 0;
+        const gchar *iface    = NULL;
+        g_variant_lookup (props, "DeviceType", "u",  &dev_type);
+        g_variant_lookup (props, "State",      "u",  &state);
+        g_variant_lookup (props, "Interface",  "&s", &iface);
 
-        state_v = get_property (conn, paths[i], NM_DEVICE_IFACE, "State");
-        if (!state_v) continue;
-        state = g_variant_get_uint32 (state_v);
-        g_variant_unref (state_v);
-        if (state != NM_DEVICE_STATE_ACTIVATED) continue;
+        if (dev_type != NM_DEVICE_TYPE_ETHERNET || !iface) {
+            g_variant_unref (props);
+            continue;
+        }
 
-        iface_v = get_property (conn, paths[i], NM_DEVICE_IFACE, "Interface");
-        if (!iface_v) continue;
+        /* Mostrar la sección si: está conectado (state 100), o el usuario lo
+         * apagó (state 10 = no gestionado) para que el switch siga visible y
+         * se pueda reactivar, o hay cable enchufado (propiedad Carrier de la
+         * interfaz Wired) aunque todavía no esté conectado. Si está gestionado
+         * pero sin cable (state 20), se oculta como antes. */
+        gboolean show = (state == NM_DEVICE_STATE_ACTIVATED ||
+                         state == NM_DEVICE_STATE_UNMANAGED);
+        if (!show) {
+            GVariant *carrier_v = get_property (conn, paths[i],
+                                                NM_WIRED_IFACE, "Carrier");
+            if (carrier_v) {
+                show = g_variant_get_boolean (carrier_v);
+                g_variant_unref (carrier_v);
+            }
+        }
+        if (!show) {
+            g_variant_unref (props);
+            continue;
+        }
 
         NmDevice *dev    = g_new0 (NmDevice, 1);
-        dev->iface       = g_strdup (g_variant_get_string (iface_v, NULL));
+        dev->iface       = g_strdup (iface);
         dev->object_path = g_strdup (paths[i]);
-        g_variant_unref (iface_v);
+        dev->description = nm_get_device_description (dev->iface);
+        g_variant_unref (props);
 
         list = g_slist_append (list, dev);
     }
 
     g_free (paths);
     g_variant_unref (paths_v);
-    g_variant_unref (result);
     return list;
 }
 

@@ -1,230 +1,318 @@
 # Polish translation of xfce-net-plugin
 msgid ""
 msgstr ""
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-06-12 12:00+0000\n"
+"Language: pl\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Language: pl\n"
 
+#: plugin.c:369
 msgid "Properties — Network"
 msgstr "Właściwości — Sieć"
 
+#: plugin.c:372
 msgid "Close"
 msgstr "Zamknij"
 
+#: plugin.c:379
 msgid "Appearance"
 msgstr "Wygląd"
 
+#: plugin.c:388
 msgid "Square button"
 msgstr "Kwadratowy przycisk"
 
+#: plugin.c:394
 msgid "Plugin size:"
 msgstr "Rozmiar wtyczki:"
 
+#: plugin.c:410
 msgid "Use panel size"
 msgstr "Użyj rozmiaru panelu"
 
+#: plugin.c:416
 msgid "Icon size:"
 msgstr "Rozmiar ikony:"
 
-msgid "Not connected"
-msgstr "Nie połączono"
-
-msgid "Connected to %s (%s)"
-msgstr "Połączono z %s (%s)"
-
-msgid " · VPN active"
-msgstr " · VPN aktywny"
-
-msgid "VPN active"
-msgstr "VPN aktywny"
-
-msgid "Networks"
-msgstr "Sieci"
-
-msgid "Forget network \"%s\"?"
-msgstr "Zapomnieć sieć \"%s\"?"
-
-msgid "Confirm"
-msgstr "Potwierdź"
-
-msgid "Connect"
-msgstr "Połącz"
-
-msgid "Incorrect password"
-msgstr "Nieprawidłowe hasło"
-
-msgid "Connected"
-msgstr "Połączono"
-
-msgid "Disconnect"
-msgstr "Rozłącz"
-
-msgid "Saved network"
-msgstr "Zapisana sieć"
-
-msgid "Connect automatically"
-msgstr "Połącz automatycznie"
-
-msgid "Forget"
-msgstr "Zapomnij"
-
-msgid "Password"
-msgstr "Hasło"
-
-msgid "Advanced settings…"
-msgstr "Zaawansowane ustawienia…"
-
-msgid "Connect to hidden network…"
-msgstr "Połącz z ukrytą siecią…"
-
-msgid "Refresh"
-msgstr "Odśwież"
-
-
-msgid "Updating…"
-msgstr "Aktualizowanie…"
-
+#: plugin.c:432
 msgid "Popup width:"
 msgstr "Szerokość okienka:"
 
+#: plugin.c:441
 msgid "Popup height:"
 msgstr "Wysokość okienka:"
 
-msgid "Wi-Fi"
-msgstr "Wi-Fi"
-
-msgid "Connected to <b>%s</b>"
-msgstr "Połączono z <b>%s</b>"
-
-msgid "Connect to hidden network"
-msgstr "Połącz z ukrytą siecią"
-
-msgid "Cancel"
-msgstr "Anuluj"
-
-msgid "Network name:"
-msgstr "Nazwa sieci:"
-
-msgid "Security:"
-msgstr "Zabezpieczenia:"
-
-msgid "None"
-msgstr "Brak"
-
-msgid "Password:"
-msgstr "Hasło:"
-
-msgid "Disabled"
-msgstr "Wyłączono"
-
-msgid "Enabled – not connected"
-msgstr "Włączono – niepodłączono"
-
-msgid "Disconnecting…"
-msgstr "Rozłączanie…"
-
-msgid "Connecting…"
-msgstr "Łączenie…"
-
-msgid "Connection failed"
-msgstr "Błąd połączenia"
-
+#: plugin.c:456
 msgid "Show separators"
 msgstr "Pokaż separatory"
 
-msgid "Connected to %s"
-msgstr "Połączono z %s"
-
-msgid "Disconnected"
-msgstr "Rozłączono"
-
-msgid "Ethernet"
-msgstr "Ethernet"
-
-msgid "Cable connected"
-msgstr "Kabel podłączony"
-
-msgid "Cable disconnected"
-msgstr "Kabel odłączony"
-
-msgid "VPN"
-msgstr "VPN"
-
-msgid "Show notifications"
-msgstr "Pokaż powiadomienia"
-
-msgid "If the popup and the notification overlap, the notification will partially cover the popup."
-msgstr "Jeśli popup i powiadomienie nakładają się, powiadomienie częściowo zasłoni popup."
-
-
-msgid "Connecting to <b>%s</b>…"
-msgstr "Łączenie z <b>%s</b>…"
-
-msgid "Last connection attempt failed"
-msgstr "Ostatnia próba połączenia nie powiodła się"
-
-msgid "Retry with saved password"
-msgstr "Ponów z zapisanym hasłem"
-
-msgid "Rewrite password"
-msgstr "Przepisz hasło"
-
-msgid "Try a different password"
-msgstr "Spróbuj innego hasła"
-
-msgid "Back"
-msgstr "Wstecz"
-
-msgid "Network manager plugin for the XFCE panel"
-msgstr "Wtyczka zarządzania siecią dla panelu XFCE"
-
-msgid "Details"
-msgstr "Szczegóły"
-
-msgid "Show QR"
-msgstr "Pokaż QR"
-
-msgid "Hide QR"
-msgstr "Ukryj QR"
-
-msgid "BSSID:"
-msgstr "BSSID:"
-
-msgid "Channel:"
-msgstr "Kanał:"
-
-msgid "DNS:"
-msgstr "DNS:"
-
-msgid "Frequency:"
-msgstr "Częstotliwość:"
-
-msgid "Gateway:"
-msgstr "Brama:"
-
-msgid "IP:"
-msgstr "IP:"
-
-msgid "IPv6:"
-msgstr "IPv6:"
-
-msgid "Encrypted"
-msgstr "Zaszyfrowana"
-
-msgid "Open"
-msgstr "Otwarta"
-
-msgid "QR error"
-msgstr "Błąd QR"
-
-msgid "No saved password"
-msgstr "Brak zapisanego hasła"
-
+#: plugin.c:462
 msgid "Show Forget button on active networks"
 msgstr "Pokaż przycisk Zapomnij dla aktywnych sieci"
 
+#: plugin.c:469
+msgid "Show notifications"
+msgstr "Pokaż powiadomienia"
+
+#: plugin.c:475
+msgid ""
+"If the popup and the notification overlap, the notification will partially "
+"cover the popup."
+msgstr ""
+"Jeśli popup i powiadomienie nakładają się, powiadomienie częściowo zasłoni "
+"popup."
+
+#: plugin.c:585 plugin.c:620
+#, c-format
+msgid "Connected to %s"
+msgstr "Połączono z %s"
+
+#: plugin.c:586 plugin.c:590 plugin.c:621 popup-sections.c:959
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+#: plugin.c:590 plugin.c:606
+msgid "Disconnected"
+msgstr "Rozłączono"
+
+#: plugin.c:593 plugin.c:596 plugin.c:624
+msgid "Ethernet"
+msgstr "Ethernet"
+
+#: plugin.c:593 plugin.c:624
+msgid "Cable connected"
+msgstr "Kabel podłączony"
+
+#: plugin.c:596
+msgid "Cable disconnected"
+msgstr "Kabel odłączony"
+
+#: plugin.c:601 plugin.c:606 plugin.c:631
+msgid "VPN"
+msgstr "VPN"
+
+#: plugin.c:601 plugin.c:631 popup-rows.c:963 popup-sections.c:276
+msgid "Connected"
+msgstr "Połączono"
+
+#: plugin.c:644
+msgid "Not connected"
+msgstr "Nie połączono"
+
+#: plugin.c:646
+#, c-format
+msgid "Connected to %s (%s)"
+msgstr "Połączono z %s (%s)"
+
+#: plugin.c:653
+msgid " · VPN active"
+msgstr " · VPN aktywny"
+
+#: plugin.c:655
+msgid "VPN active"
+msgstr "VPN aktywny"
+
+#: plugin.c:740
+msgid "Networks"
+msgstr "Sieci"
+
+#: plugin.c:794
+msgid "Network manager plugin for the XFCE panel"
+msgstr "Wtyczka zarządzania siecią dla panelu XFCE"
+
+#: popup.c:222 popup.c:792 popup-rows.c:575 popup-rows.c:577 popup-rows.c:1038
+#: popup-rows.c:1165 popup-rows.c:1449
+msgid "Connect"
+msgstr "Połącz"
+
+#: popup.c:222 popup-rows.c:1021
+msgid "Disconnect"
+msgstr "Rozłącz"
+
+#: popup.c:237
+msgid "Incorrect password"
+msgstr "Nieprawidłowe hasło"
+
+#: popup.c:720 popup-sections.c:942
+msgid "Refresh"
+msgstr "Odśwież"
+
+#: popup.c:733 popup-sections.c:942
+msgid "Updating…"
+msgstr "Aktualizowanie…"
+
+#: popup.c:788
+msgid "Connect to hidden network"
+msgstr "Połącz z ukrytą siecią"
+
+#: popup.c:791 popup-rows.c:1330
+msgid "Cancel"
+msgstr "Anuluj"
+
+#: popup.c:805
+msgid "Network name:"
+msgstr "Nazwa sieci:"
+
+#: popup.c:812 popup-rows.c:1287
+msgid "Security:"
+msgstr "Zabezpieczenia:"
+
+#: popup.c:815
+msgid "None"
+msgstr "Brak"
+
+#: popup.c:821
+msgid "Password:"
+msgstr "Hasło:"
+
+#: popup.c:1005
+msgid "Advanced settings…"
+msgstr "Zaawansowane ustawienia…"
+
+#: popup.c:1015
+msgid "Connect to hidden network…"
+msgstr "Połącz z ukrytą siecią…"
+
+#: popup-rows.c:134 popup-rows.c:791 popup-rows.c:1215
+msgid "Show QR"
+msgstr "Pokaż QR"
+
+#: popup-rows.c:152
+msgid "No saved password"
+msgstr "Brak zapisanego hasła"
+
+#: popup-rows.c:172
+msgid "QR error"
+msgstr "Błąd QR"
+
+#: popup-rows.c:191
+msgid "Hide QR"
+msgstr "Ukryj QR"
+
+#: popup-rows.c:422
+msgid "Disconnecting…"
+msgstr "Rozłączanie…"
+
+#: popup-rows.c:571 popup-rows.c:1398
+msgid "Retry with saved password"
+msgstr "Ponów z zapisanym hasłem"
+
+#: popup-rows.c:582 popup-rows.c:977 popup-rows.c:1033
+msgid "Connecting…"
+msgstr "Łączenie…"
+
+#: popup-rows.c:1024 popup-rows.c:1078 popup-sections.c:507
+#, c-format
 msgid "Signal %d%%"
 msgstr "Sygnał %d%%"
 
+#: popup-rows.c:1076 popup-sections.c:506
+#, c-format
 msgid "Saved network · Signal %d%%"
 msgstr "Zapisana sieć · Sygnał %d%%"
+
+#: popup-rows.c:1096
+msgid "Last connection attempt failed"
+msgstr "Ostatnia próba połączenia nie powiodła się"
+
+#: popup-rows.c:1106 popup-rows.c:1153
+msgid "Connect automatically"
+msgstr "Połącz automatycznie"
+
+#: popup-rows.c:1119 popup-rows.c:1178
+msgid "Forget"
+msgstr "Zapomnij"
+
+#: popup-rows.c:1127
+msgid "Enterprise network (802.1X) — use Advanced settings"
+msgstr "Sieć firmowa (802.1X) — użyj Zaawansowanych ustawień"
+
+#: popup-rows.c:1138
+msgid "Password"
+msgstr "Hasło"
+
+#: popup-rows.c:1231
+msgid "Details"
+msgstr "Szczegóły"
+
+#: popup-rows.c:1268
+msgid "IP:"
+msgstr "IP:"
+
+#: popup-rows.c:1269
+msgid "Gateway:"
+msgstr "Brama:"
+
+#: popup-rows.c:1270
+msgid "DNS:"
+msgstr "DNS:"
+
+#: popup-rows.c:1271
+msgid "IPv6:"
+msgstr "IPv6:"
+
+#: popup-rows.c:1279
+msgid "Open"
+msgstr "Otwarta"
+
+#: popup-rows.c:1286
+msgid "Encrypted"
+msgstr "Zaszyfrowana"
+
+#: popup-rows.c:1291
+msgid "Frequency:"
+msgstr "Częstotliwość:"
+
+#: popup-rows.c:1300
+msgid "Channel:"
+msgstr "Kanał:"
+
+#: popup-rows.c:1305
+msgid "BSSID:"
+msgstr "BSSID:"
+
+#: popup-rows.c:1321
+#, c-format
+msgid "Forget network \"%s\"?"
+msgstr "Zapomnieć sieć \"%s\"?"
+
+#: popup-rows.c:1331
+msgid "Confirm"
+msgstr "Potwierdź"
+
+#: popup-rows.c:1405
+msgid "Try a different password"
+msgstr "Spróbuj innego hasła"
+
+#: popup-rows.c:1428
+msgid "Rewrite password"
+msgstr "Przepisz hasło"
+
+#: popup-rows.c:1445
+msgid "Back"
+msgstr "Wstecz"
+
+#: popup-sections.c:401
+#, c-format
+msgid "Connected to <b>%s</b>"
+msgstr "Połączono z <b>%s</b>"
+
+#: popup-sections.c:405
+msgid "Disabled"
+msgstr "Wyłączono"
+
+#: popup-sections.c:408
+#, c-format
+msgid "Connecting to <b>%s</b>…"
+msgstr "Łączenie z <b>%s</b>…"
+
+#: popup-sections.c:412
+msgid "Enabled – not connected"
+msgstr "Włączono – niepodłączono"
+
+#~ msgid "Saved network"
+#~ msgstr "Zapisana sieć"
+
+#~ msgid "Connection failed"
+#~ msgstr "Błąd połączenia"

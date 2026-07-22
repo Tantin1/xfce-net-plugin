@@ -6,6 +6,7 @@
 typedef struct {
     gchar    *iface;
     gchar    *object_path;
+    gchar    *description;  /* Nombre legible del hardware (puede ser NULL). Liberar con g_free(). */
 } NmDevice;
 
 typedef struct {
@@ -21,6 +22,7 @@ typedef struct {
 } NmAccessPoint;
 
 GSList *nm_get_wifi_devices  (GDBusConnection *conn);
+gchar  *nm_get_device_description (const gchar *iface);  /* Lee /run/udev/data/ sin DBus. Liberar con g_free(). */
 void    nm_device_list_free  (GSList *list);
 
 GSList *nm_get_access_points (GDBusConnection *conn, const gchar *device_path);
@@ -40,8 +42,22 @@ void            nm_active_ap_info_free (NmActiveApInfo  *info);
 
 
 GDBusConnection *nm_dbus_connect         (void);
+
+/* Instantánea (ObjectManager): nm_cache_begin trae TODOS los objetos del
+ * gestor de red en una sola llamada al bus; mientras está activa, las
+ * funciones de consulta de este módulo resuelven desde memoria sin tocar
+ * el bus. nm_cache_end la libera. Anidable. Usar solo alrededor de bloques
+ * cortos de lectura (armar/refrescar la UI). */
+void nm_cache_begin (GDBusConnection *conn);
+void nm_cache_end   (void);
+
 gboolean         nm_has_saved_connection (GDBusConnection *conn, const gchar *ssid);
 gboolean         nm_forget_connection    (GDBusConnection *conn, const gchar *ssid);
+
+/* Devuelve un set (tabla hash) con las SSIDs de todos los perfiles Wi-Fi
+ * guardados. Una sola enumeración de perfiles, pensada para consultar muchas
+ * SSIDs sin repetir la enumeración. Liberar con g_hash_table_destroy(). */
+GHashTable *nm_get_saved_wifi_ssids (GDBusConnection *conn);
 
 /* Migra perfiles viejos con `connection.interface-name` fijado:
  *   - Si hay varios perfiles con la misma SSID, deja uno y borra los demás.
@@ -94,11 +110,14 @@ void nm_activate_connection_async (GDBusConnection *conn,
                                    const gchar     *ap_path,
                                    const gchar     *ssid);
 
+/* key_mgmt: "wpa-psk" (WPA2 / mixto WPA2-WPA3), "sae" (WPA3 puro) o NULL
+ * (equivale a "wpa-psk"). Solo se usa si hay contraseña. */
 void nm_add_and_activate_connection_async (GDBusConnection *conn,
                                            const gchar     *device_path,
                                            const gchar     *ap_path,
                                            const gchar     *ssid,
                                            const gchar     *password,
+                                           const gchar     *key_mgmt,
                                            gboolean         autoconnect);
 
 void nm_set_device_enabled_async (GDBusConnection *conn,
@@ -137,12 +156,9 @@ gboolean nm_set_autoconnect_by_ssid (GDBusConnection *conn,
                                      const gchar     *ssid,
                                      gboolean         autoconnect);
 
-/* Cambia el valor de autoconexión del perfil guardado para un SSID. */
+/* Devuelve el valor de autoconexión del perfil guardado para un SSID. */
 gboolean nm_get_autoconnect_by_ssid (GDBusConnection *conn,
                                      const gchar     *ssid);
-gboolean nm_set_autoconnect_by_ssid (GDBusConnection *conn,
-                                     const gchar     *ssid,
-                                     gboolean         autoconnect);
 
 /* Solicita un escaneo Wi-Fi activo al adaptador. */
 void nm_request_scan (GDBusConnection *conn, const gchar *device_path);

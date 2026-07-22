@@ -36,6 +36,8 @@ endif()
 add_library(xfce-net-plugin MODULE
     plugin.c
     popup.c
+    popup-rows.c
+    popup-sections.c
     nm-dbus.c
     ${CMAKE_BINARY_DIR}/lock-icons-resource.c
 )
