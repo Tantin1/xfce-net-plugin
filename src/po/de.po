@@ -311,6 +311,47 @@ msgstr "Verbinde mit <b>%s</b>…"
 msgid "Enabled – not connected"
 msgstr "Aktiviert – nicht verbunden"
 
+#: popup-rows.c
+msgid "Enterprise (802.1X)"
+msgstr "Unternehmen (802.1X)"
+
+#: popup-sections.c
+msgid "This network requires you to sign in"
+msgstr "Dieses Netzwerk erfordert eine Anmeldung"
+
+#: popup-sections.c
+msgid "Sign in"
+msgstr "Anmelden"
+
+#: plugin.c
+msgid " · Sign-in required"
+msgstr " · Anmeldung erforderlich"
+
+#: secret-agent.c
+msgid "Network authentication required"
+msgstr "Netzwerkauthentifizierung erforderlich"
+
+#: secret-agent.c
+#, c-format
+msgid "A password is required to connect to the Wi-Fi network \"%s\"."
+msgstr "Für die Verbindung mit dem WLAN-Netzwerk \"%s\" ist ein Passwort erforderlich."
+
+#: secret-agent.c
+msgid "The previous password was not accepted."
+msgstr "Das vorherige Passwort wurde nicht akzeptiert."
+
+#: plugin.c
+msgid "Network"
+msgstr "Netzwerk"
+
+#: plugin.c
+msgid "Respond to password requests"
+msgstr "Auf Passwortanfragen antworten"
+
+#: plugin.c
+msgid "Turn this off if another network applet (such as nm-applet) is also running."
+msgstr "Deaktivieren, wenn gleichzeitig ein anderes Netzwerk-Applet (z. B. nm-applet) läuft."
+
 #~ msgid "Saved network"
 #~ msgstr "Gespeichertes Netzwerk"
 

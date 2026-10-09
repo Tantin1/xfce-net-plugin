@@ -1,7 +1,8 @@
 [Xfce Panel]
 Type=X-XFCE-PanelPlugin
 Name=Net Plugin
-Comment=Gestión de redes Wi-Fi y Ethernet
+Comment=Manage Wi-Fi and Ethernet networks
+Comment[es]=Gestión de redes Wi-Fi y Ethernet
 Icon=network-wireless
 X-XFCE-Module=xfce-net-plugin
 X-XFCE-Module-Path=@plugin_dir@

@@ -1,0 +1,70 @@
+# Compilación automática: cada vez que subís cambios a GitHub (o abrís un
+# pull request), el plugin se compila en limpio en Debian 12, Debian 13 y
+# Arch Linux, con meson y con CMake. Si algo se rompe en alguna distro, el
+# commit aparece con una cruz roja y el detalle queda en la pestaña "Actions".
+# También se puede lanzar a mano desde esa pestaña ("Run workflow").
+
+name: Compilación
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  compilar:
+    name: ${{ matrix.distro }}
+    runs-on: ubuntu-latest
+    container: ${{ matrix.imagen }}
+    strategy:
+      # Que una distro falle no corta las demás: se ven todos los resultados.
+      fail-fast: false
+      matrix:
+        include:
+          - distro: Debian 12
+            imagen: debian:12
+          - distro: Debian 13
+            imagen: debian:13
+          - distro: Arch Linux
+            imagen: archlinux:latest
+
+    steps:
+      - name: Instalar dependencias (Debian)
+        if: startsWith(matrix.imagen, 'debian')
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential meson ninja-build cmake pkg-config gettext \
+            libglib2.0-dev-bin libgtk-3-dev libxfce4panel-2.0-dev \
+            libnotify-dev libqrencode-dev
+
+      - name: Instalar dependencias (Arch)
+        if: startsWith(matrix.imagen, 'archlinux')
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel meson ninja cmake pkgconf gettext \
+            gtk3 xfce4-panel libnotify qrencode
+
+      - name: Bajar el código
+        uses: actions/checkout@v4
+
+      - name: Compilar con meson
+        run: |
+          meson setup _meson src
+          meson compile -C _meson 2>&1 | tee meson.log
+
+      - name: Compilar con CMake
+        run: |
+          cmake -S src -B _cmake
+          cmake --build _cmake 2>&1 | tee cmake.log
+
+      - name: Resumen de avisos del compilador
+        if: always()
+        run: |
+          n=$(cat meson.log cmake.log 2>/dev/null | grep -c "warning:" || true)
+          echo "### ${{ matrix.distro }}: $n avisos del compilador" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$n" -gt 0 ]; then
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat meson.log cmake.log | grep "warning:" | sort -u >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi

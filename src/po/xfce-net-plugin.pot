@@ -314,3 +314,48 @@ msgstr ""
 #: src/popup.c:2925
 msgid "Connect to hidden network…"
 msgstr ""
+
+#: src/popup-rows.c
+msgid "Enterprise network (802.1X) — use Advanced settings"
+msgstr ""
+
+#: src/popup-rows.c
+msgid "Enterprise (802.1X)"
+msgstr ""
+
+#: src/popup-sections.c
+msgid "This network requires you to sign in"
+msgstr ""
+
+#: src/popup-sections.c
+msgid "Sign in"
+msgstr ""
+
+#: src/plugin.c
+msgid " · Sign-in required"
+msgstr ""
+
+#: src/secret-agent.c
+msgid "Network authentication required"
+msgstr ""
+
+#: src/secret-agent.c
+#, c-format
+msgid "A password is required to connect to the Wi-Fi network \"%s\"."
+msgstr ""
+
+#: src/secret-agent.c
+msgid "The previous password was not accepted."
+msgstr ""
+
+#: src/plugin.c
+msgid "Network"
+msgstr ""
+
+#: src/plugin.c
+msgid "Respond to password requests"
+msgstr ""
+
+#: src/plugin.c
+msgid "Turn this off if another network applet (such as nm-applet) is also running."
+msgstr ""

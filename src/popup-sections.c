@@ -4,6 +4,7 @@
  * Separado de popup.c sin cambios de lógica. */
 
 #include "popup-private.h"
+#include <string.h>
 
 /* ---------- sección por adaptador ---------- */
 
@@ -139,19 +140,95 @@ on_vpn_switch_toggled (GtkSwitch *sw, gboolean state, gpointer user_data)
     return FALSE;
 }
 
+/* ---------- secciones fijas: actualización en el lugar ----------
+ *
+ * Ethernet y VPN se arman de nuevo SOLO si cambia qué filas tienen (otro
+ * adaptador, otro perfil de VPN, separadores prendidos/apagados). Si solo
+ * cambia el estado (conectado, encendido), se actualizan los interruptores y
+ * la etiqueta "Conectado" sin destruir nada: no hay parpadeo, no se pierde el
+ * foco del teclado y un interruptor recién tocado no se reemplaza a mitad de
+ * camino. Para eso cada sección guarda su "huella" (section-fp) y una tabla
+ * ruta → interruptor (section-switches). */
+
+static void
+section_clear (GtkWidget *section)
+{
+    GList *kids = gtk_container_get_children (GTK_CONTAINER (section));
+    for (GList *w = kids; w; w = w->next) gtk_widget_destroy (GTK_WIDGET (w->data));
+    g_list_free (kids);
+    g_object_set_data (G_OBJECT (section), "section-fp", NULL);
+    g_object_set_data (G_OBJECT (section), "section-switches", NULL);
+}
+
+/* ¿La huella guardada coincide con la nueva? (no libera nada) */
+static gboolean
+section_fp_matches (GtkWidget *section, const gchar *fp)
+{
+    const gchar *old = g_object_get_data (G_OBJECT (section), "section-fp");
+    return old && g_strcmp0 (old, fp) == 0;
+}
+
+/* Guarda la huella y una tabla nueva de interruptores, que devuelve. */
+static GHashTable *
+section_start (GtkWidget *section, gchar *fp_owned)
+{
+    GHashTable *sws = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+    g_object_set_data_full (G_OBJECT (section), "section-fp", fp_owned, g_free);
+    g_object_set_data_full (G_OBJECT (section), "section-switches", sws,
+                            (GDestroyNotify) g_hash_table_destroy);
+    return sws;
+}
+
+/* Pone un interruptor en `on` sin disparar su manejador (no es el usuario
+ * quien lo cambia, es el reflejo del estado real). */
+static void
+switch_sync (GtkWidget *sw, GCallback handler, gpointer data, gboolean on)
+{
+    if (gtk_switch_get_active (GTK_SWITCH (sw)) == on &&
+        gtk_switch_get_state  (GTK_SWITCH (sw)) == on)
+        return;
+    g_signal_handlers_block_by_func (sw, handler, data);
+    gtk_switch_set_active (GTK_SWITCH (sw), on);
+    gtk_switch_set_state  (GTK_SWITCH (sw), on);
+    g_signal_handlers_unblock_by_func (sw, handler, data);
+}
+
 static void
 fill_vpn_section (NetPopup *popup)
 {
-    /* Vacía y rellena popup->vpn_section. */
-    GList *kids = gtk_container_get_children (GTK_CONTAINER (popup->vpn_section));
-    g_list_foreach (kids, (GFunc) gtk_widget_destroy, NULL);
-    g_list_free (kids);
-
     GSList *vpns = nm_get_vpn_connections (popup->conn);
     if (!vpns) {
+        section_clear (popup->vpn_section);
         gtk_widget_hide (popup->vpn_section);
         return;
     }
+
+    /* Huella: separadores + qué perfiles (ruta y nombre), sin su estado. */
+    GString *fp = g_string_new (popup->show_separators ? "s" : "-");
+    for (GSList *l = vpns; l; l = l->next) {
+        NmVpnConnection *vpn = l->data;
+        g_string_append_printf (fp, "|%s=%s", vpn->conn_path, vpn->name);
+    }
+
+    if (section_fp_matches (popup->vpn_section, fp->str)) {
+        GHashTable *sws = g_object_get_data (G_OBJECT (popup->vpn_section),
+                                             "section-switches");
+        for (GSList *l = vpns; l; l = l->next) {
+            NmVpnConnection *vpn = l->data;
+            GtkWidget *sw = sws ? g_hash_table_lookup (sws, vpn->conn_path) : NULL;
+            if (sw)
+                switch_sync (sw, G_CALLBACK (on_vpn_switch_toggled),
+                             g_object_get_data (G_OBJECT (sw), "vpn-switch-data"),
+                             vpn->active);
+        }
+        g_string_free (fp, TRUE);
+        nm_vpn_list_free (vpns);
+        return;
+    }
+
+    /* Cambió qué filas hay: armar de nuevo. */
+    section_clear (popup->vpn_section);
+    GHashTable *sws = section_start (popup->vpn_section, g_string_free (fp, FALSE));
 
     if (popup->show_separators) {
         GtkWidget *sep = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
@@ -202,6 +279,7 @@ fill_vpn_section (NetPopup *popup)
         g_signal_connect (sw, "state-set",
                           G_CALLBACK (on_vpn_switch_toggled), d);
         gtk_box_pack_end (GTK_BOX (row), sw, FALSE, FALSE, 0);
+        g_hash_table_replace (sws, g_strdup (vpn->conn_path), sw);
 
         gtk_box_pack_start (GTK_BOX (popup->vpn_section), row, FALSE, FALSE, 0);
     }
@@ -215,15 +293,43 @@ fill_vpn_section (NetPopup *popup)
 static void
 fill_eth_section (NetPopup *popup)
 {
-    GList *kids = gtk_container_get_children (GTK_CONTAINER (popup->eth_section));
-    g_list_foreach (kids, (GFunc) gtk_widget_destroy, NULL);
-    g_list_free (kids);
-
     GSList *eth_devices = nm_get_ethernet_devices (popup->conn);
     if (!eth_devices) {
+        section_clear (popup->eth_section);
         gtk_widget_hide (popup->eth_section);
         return;
     }
+
+    /* Huella: separadores + qué adaptadores, sin su estado. */
+    GString *fp = g_string_new (popup->show_separators ? "s" : "-");
+    for (GSList *d = eth_devices; d; d = d->next) {
+        NmDevice *dev = d->data;
+        g_string_append_printf (fp, "|%s=%s", dev->object_path, dev->iface);
+    }
+
+    if (section_fp_matches (popup->eth_section, fp->str)) {
+        GHashTable *sws = g_object_get_data (G_OBJECT (popup->eth_section),
+                                             "section-switches");
+        for (GSList *d = eth_devices; d; d = d->next) {
+            NmDevice  *dev = d->data;
+            GtkWidget *sw  = sws ? g_hash_table_lookup (sws, dev->object_path) : NULL;
+            if (!sw) continue;
+            switch_sync (sw, G_CALLBACK (on_device_switch_toggled),
+                         g_object_get_data (G_OBJECT (sw), "switch-data"),
+                         nm_get_device_enabled (popup->conn, dev->object_path));
+            GtkWidget *status = g_object_get_data (G_OBJECT (sw), "status-label");
+            if (status)
+                gtk_widget_set_visible (status,
+                    device_is_activated (popup->conn, dev->object_path));
+        }
+        g_string_free (fp, TRUE);
+        nm_device_list_free (eth_devices);
+        return;
+    }
+
+    /* Cambió qué adaptadores hay: armar de nuevo. */
+    section_clear (popup->eth_section);
+    GHashTable *sws = section_start (popup->eth_section, g_string_free (fp, FALSE));
 
     for (GSList *d = eth_devices; d; d = d->next) {
         NmDevice *dev = d->data;
@@ -269,15 +375,18 @@ fill_eth_section (NetPopup *popup)
                           G_CALLBACK (on_device_switch_toggled), dsd);
         gtk_box_pack_end (GTK_BOX (eth_row), eth_switch, FALSE, FALSE, 0);
 
-        /* "Connected" solo si el estado es 100 (activado de verdad). Antes se
-         * usaba eth_enabled (estado > 20), que incluye "cable enchufado pero
-         * sin conexión" y mostraba la etiqueta erróneamente. */
-        if (device_is_activated (popup->conn, dev->object_path)) {
-            GtkWidget *eth_status = gtk_label_new (_("Connected"));
-            gtk_style_context_add_class (gtk_widget_get_style_context (eth_status),
-                                         "dim-label");
-            gtk_box_pack_end (GTK_BOX (eth_row), eth_status, FALSE, FALSE, 6);
-        }
+        /* "Connected" solo si el estado es 100 (activado de verdad). La
+         * etiqueta se crea siempre y se muestra u oculta, así el refresco en
+         * el lugar puede cambiarla sin rearmar la fila. */
+        GtkWidget *eth_status = gtk_label_new (_("Connected"));
+        gtk_style_context_add_class (gtk_widget_get_style_context (eth_status),
+                                     "dim-label");
+        gtk_box_pack_end (GTK_BOX (eth_row), eth_status, FALSE, FALSE, 6);
+        gtk_widget_set_no_show_all (eth_status, TRUE);
+        gtk_widget_set_visible (eth_status,
+                                device_is_activated (popup->conn, dev->object_path));
+        g_object_set_data (G_OBJECT (eth_switch), "status-label", eth_status);
+        g_hash_table_replace (sws, g_strdup (dev->object_path), eth_switch);
 
         gtk_box_pack_start (GTK_BOX (popup->eth_section), eth_row, FALSE, FALSE, 0);
     }
@@ -323,7 +432,7 @@ update_top_status (NetPopup *popup)
             gint64  age = (g_get_monotonic_time () - *ts) / 1000;
             if (age < OP_TIMEOUT_MS) {
                 const gchar *k   = key;
-                const gchar *sep = g_strstr_len (k, -1, "|");
+                const gchar *sep = strrchr (k, '|');
                 if (sep) {
                     gchar *pending_ssid = g_strndup (k, sep - k);
                     if (g_strcmp0 (pending_ssid, primary_ssid) == 0) {
@@ -365,7 +474,7 @@ update_top_status (NetPopup *popup)
             if (age < OP_TIMEOUT_MS) {
                 /* La clave es "ssid|device_path" — extraer ssid. */
                 const gchar *k   = key;
-                const gchar *sep = g_strstr_len (k, -1, "|");
+                const gchar *sep = strrchr (k, '|');
                 if (sep) {
                     connecting_ssid_pending = g_strndup (k, sep - k);
                     connecting_ssid = connecting_ssid_pending;
@@ -415,6 +524,11 @@ update_top_status (NetPopup *popup)
     g_free (connecting_ssid_pending);
 
     g_free (primary_ssid);
+
+    /* Portal cautivo: NM detectó que hay que iniciar sesión para navegar. */
+    if (popup->portal_row)
+        gtk_widget_set_visible (popup->portal_row,
+            nm_get_connectivity (popup->conn) == NM_CONN_STATE_PORTAL);
 
     /* Switch global: sincronizar sin disparar handler */
     g_signal_handler_block (popup->wifi_switch, popup->wifi_switch_handler);
@@ -725,6 +839,14 @@ update_devices_section (NetPopup *popup)
      * EXCEPCIÓN: si el expand actual es "pasivo" (solo muestra "Conectando…"
      * sin botones ni entry), no hay nada que el usuario esté tocando, así
      * que sí reconstruimos y después reabrimos esa misma fila. */
+    /* Menú contextual abierto: sus opciones apuntan a los datos de una fila,
+     * así que no se reconstruye nada hasta que se cierre (al cerrarse se
+     * agenda un refresco). */
+    if (popup->ctx_menu) {
+        check_ops_progress (popup);
+        return;
+    }
+
     gchar    *passive_ssid = NULL;
     gchar    *passive_dev  = NULL;
     gboolean  passive      = FALSE;
@@ -822,7 +944,7 @@ static gboolean
 refresh_ui_cb (gpointer user_data)
 {
     NetPopup *popup = user_data;
-    g_object_set_data (G_OBJECT (popup->window), "refresh-pending", NULL);
+    popup->refresh_idle_id = 0;
 
     if (!popup->ui_built) return G_SOURCE_REMOVE;
     if (!gtk_widget_get_visible (popup->window)) return G_SOURCE_REMOVE;
@@ -854,12 +976,11 @@ schedule_refresh_ui (NetPopup *popup)
 {
     if (!popup) return;
     if (!gtk_widget_get_visible (popup->window)) return;
-    /* Coalescer: si ya hay un refresh pendiente, no encolar otro. */
-    if (g_object_get_data (G_OBJECT (popup->window), "refresh-pending"))
+    /* Coalescer: si ya hay un refresh pendiente, no encolar otro. El número
+     * queda en refresh_idle_id para poder cancelarlo al ocultar o destruir. */
+    if (popup->refresh_idle_id)
         return;
-    g_object_set_data (G_OBJECT (popup->window), "refresh-pending",
-                       GINT_TO_POINTER (1));
-    g_idle_add (refresh_ui_cb, popup);
+    popup->refresh_idle_id = g_idle_add (refresh_ui_cb, popup);
 }
 
 /* Callback que NM dispara: agendamos refresh idle (coalescido). */
@@ -872,15 +993,6 @@ on_nm_signal_popup (gpointer user_data)
 
 /* ---------- construcción inicial de la UI ---------- */
 
-/* ---------- callback botón Hotspot ---------- */
-
-/* ---------- sección Hotspot ---------- */
-
-
-
-
-
-
 void
 rebuild_ui (NetPopup *popup)
 {
@@ -891,11 +1003,11 @@ rebuild_ui (NetPopup *popup)
 
     /* Limpiar zonas (por si rebuild_ui se llama dos veces) */
     GList *children = gtk_container_get_children (GTK_CONTAINER (popup->content_box));
-    g_list_foreach (children, (GFunc) gtk_widget_destroy, NULL);
+    for (GList *w = children; w; w = w->next) gtk_widget_destroy (GTK_WIDGET (w->data));
     g_list_free (children);
 
     GList *top_children = gtk_container_get_children (GTK_CONTAINER (popup->top_box));
-    g_list_foreach (top_children, (GFunc) gtk_widget_destroy, NULL);
+    for (GList *w = top_children; w; w = w->next) gtk_widget_destroy (GTK_WIDGET (w->data));
     g_list_free (top_children);
 
     g_slist_free (popup->device_switches);
@@ -976,6 +1088,35 @@ rebuild_ui (NetPopup *popup)
     gtk_box_pack_start (GTK_BOX (center_box), popup->status_label, FALSE, FALSE, 0);
 
     gtk_box_pack_start (GTK_BOX (popup->top_box), top_row, FALSE, FALSE, 0);
+
+    /* Franja de portal cautivo (oculta hasta que NM lo informe). */
+    {
+        GtkWidget *prow = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+        gtk_widget_set_margin_start  (prow, 12);
+        gtk_widget_set_margin_end    (prow, 12);
+        gtk_widget_set_margin_bottom (prow, 8);
+
+        GtkWidget *picon = gtk_image_new_from_icon_name ("dialog-warning-symbolic",
+                                                         GTK_ICON_SIZE_MENU);
+        gtk_box_pack_start (GTK_BOX (prow), picon, FALSE, FALSE, 0);
+
+        GtkWidget *plabel = gtk_label_new (_("This network requires you to sign in"));
+        gtk_label_set_xalign (GTK_LABEL (plabel), 0.0);
+        gtk_label_set_line_wrap (GTK_LABEL (plabel), TRUE);
+        gtk_box_pack_start (GTK_BOX (prow), plabel, TRUE, TRUE, 0);
+
+        GtkWidget *pbtn = gtk_button_new_with_label (_("Sign in"));
+        gtk_widget_set_valign (pbtn, GTK_ALIGN_CENTER);
+        g_signal_connect (pbtn, "clicked",
+                          G_CALLBACK (on_portal_signin_clicked), popup);
+        gtk_box_pack_end (GTK_BOX (prow), pbtn, FALSE, FALSE, 0);
+
+        gtk_box_pack_start (GTK_BOX (popup->top_box), prow, FALSE, FALSE, 0);
+        gtk_widget_show_all (prow);
+        gtk_widget_set_no_show_all (prow, TRUE);
+        gtk_widget_hide (prow);
+        popup->portal_row = prow;
+    }
 
 
     /* Contenedor sección Ethernet (en content_box, se llena en update_eth_section). */

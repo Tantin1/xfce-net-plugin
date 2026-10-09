@@ -309,6 +309,47 @@ msgstr "<b>%s</b> に接続中…"
 msgid "Enabled – not connected"
 msgstr "有効 – 未接続"
 
+#: popup-rows.c
+msgid "Enterprise (802.1X)"
+msgstr "エンタープライズ (802.1X)"
+
+#: popup-sections.c
+msgid "This network requires you to sign in"
+msgstr "このネットワークではサインインが必要です"
+
+#: popup-sections.c
+msgid "Sign in"
+msgstr "サインイン"
+
+#: plugin.c
+msgid " · Sign-in required"
+msgstr " · サインインが必要"
+
+#: secret-agent.c
+msgid "Network authentication required"
+msgstr "ネットワーク認証が必要です"
+
+#: secret-agent.c
+#, c-format
+msgid "A password is required to connect to the Wi-Fi network \"%s\"."
+msgstr "Wi-Fi ネットワーク \"%s\" に接続するにはパスワードが必要です。"
+
+#: secret-agent.c
+msgid "The previous password was not accepted."
+msgstr "前回のパスワードは受け付けられませんでした。"
+
+#: plugin.c
+msgid "Network"
+msgstr "ネットワーク"
+
+#: plugin.c
+msgid "Respond to password requests"
+msgstr "パスワード要求に応答する"
+
+#: plugin.c
+msgid "Turn this off if another network applet (such as nm-applet) is also running."
+msgstr "nm-applet など別のネットワークアプレットも動作している場合は、オフにしてください。"
+
 #~ msgid "Saved network"
 #~ msgstr "保存済みネットワーク"
 

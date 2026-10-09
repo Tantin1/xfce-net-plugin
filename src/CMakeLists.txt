@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 project(xfce-net-plugin C)
 
+# Versión: única fuente en el archivo VERSION (también lo lee meson.build).
+file(STRINGS "${CMAKE_SOURCE_DIR}/VERSION" PLUGIN_VERSION LIMIT_COUNT 1)
+
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH "Install prefix" FORCE)
 endif()
@@ -19,6 +22,7 @@ set(LOCALE_DIR "${CMAKE_INSTALL_PREFIX}/share/locale")
 add_definitions(
     -DGETTEXT_PACKAGE="${GETTEXT_PACKAGE}"
     -DLOCALEDIR="${LOCALE_DIR}"
+    -DPACKAGE_VERSION="${PLUGIN_VERSION}"
 )
 if(LIBNOTIFY_FOUND)
     add_definitions(-DHAVE_LIBNOTIFY)
@@ -39,6 +43,7 @@ add_library(xfce-net-plugin MODULE
     popup-rows.c
     popup-sections.c
     nm-dbus.c
+    secret-agent.c
     ${CMAKE_BINARY_DIR}/lock-icons-resource.c
 )
 
@@ -77,11 +82,22 @@ target_link_libraries(xfce-net-plugin PRIVATE
     ${LIBQRENCODE_LIBRARIES}
 )
 
+# Ruta de instalación del plugin (misma lógica que meson.build):
+#   1. <libdir del panel>/xfce4/panel/plugins, según pkg-config (sirve en
+#      cualquier arquitectura, con o sin carpetas por arquitectura);
+#   2. /usr/lib/xfce4/panel/plugins si existe;
+#   3. si ninguna existe todavía, la del punto 1.
+# Forzar con -DXFCE_PLUGIN_DIR=<ruta> (necesario para Loc OS 23 desde chroot).
 if(NOT XFCE_PLUGIN_DIR)
-    if(EXISTS "/usr/lib/x86_64-linux-gnu/xfce4/panel/plugins")
-        set(XFCE_PLUGIN_DIR "/usr/lib/x86_64-linux-gnu/xfce4/panel/plugins")
-    else()
+    pkg_get_variable(XFCE4PANEL_LIBDIR libxfce4panel-2.0 libdir)
+    if(XFCE4PANEL_LIBDIR AND EXISTS "${XFCE4PANEL_LIBDIR}/xfce4/panel/plugins")
+        set(XFCE_PLUGIN_DIR "${XFCE4PANEL_LIBDIR}/xfce4/panel/plugins")
+    elseif(EXISTS "/usr/lib/xfce4/panel/plugins")
         set(XFCE_PLUGIN_DIR "/usr/lib/xfce4/panel/plugins")
+    elseif(XFCE4PANEL_LIBDIR)
+        set(XFCE_PLUGIN_DIR "${XFCE4PANEL_LIBDIR}/xfce4/panel/plugins")
+    else()
+        set(XFCE_PLUGIN_DIR "${CMAKE_INSTALL_PREFIX}/lib/xfce4/panel/plugins")
     endif()
 endif()
 message(STATUS "Plugin install dir: ${XFCE_PLUGIN_DIR}")
@@ -110,6 +126,8 @@ foreach(LANG ${LANGS})
 endforeach()
 add_custom_target(translations ALL DEPENDS ${MO_FILES})
 
+# El .desktop usa @plugin_dir@ (mismo nombre que en meson).
+set(plugin_dir "${XFCE_PLUGIN_DIR}")
 configure_file(
     "${CMAKE_SOURCE_DIR}/xfce-net-plugin.desktop.in"
     "${CMAKE_BINARY_DIR}/xfce-net-plugin.desktop"

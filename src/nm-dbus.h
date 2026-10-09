@@ -59,6 +59,32 @@ gboolean         nm_forget_connection    (GDBusConnection *conn, const gchar *ss
  * SSIDs sin repetir la enumeración. Liberar con g_hash_table_destroy(). */
 GHashTable *nm_get_saved_wifi_ssids (GDBusConnection *conn);
 
+/* ---------- Perfiles por identificador ----------
+ * Un mismo nombre de red puede tener varios perfiles guardados (por ejemplo,
+ * uno WPA2 viejo y uno WPA3 nuevo, o un hotspot propio con el mismo nombre).
+ * Estas funciones trabajan sobre UN perfil concreto, identificado por su ruta
+ * en el bus (profile_path), en vez de "el primero con ese nombre". */
+
+/* El perfil guardado que corresponde a este punto de acceso: misma red, modo
+ * cliente (no hotspot) y seguridad compatible con las banderas del AP. Si
+ * ninguno es compatible, el primero con ese nombre. NULL si no hay.
+ * Liberar con g_free(). */
+gchar   *nm_find_profile_for_ap       (GDBusConnection *conn, const gchar *ssid,
+                                       guint32 wpa_flags, guint32 rsn_flags);
+/* El perfil que el adaptador tiene activo ahora (o NULL). Liberar con g_free(). */
+gchar   *nm_get_device_active_profile (GDBusConnection *conn, const gchar *device_path);
+gboolean nm_delete_profile            (GDBusConnection *conn, const gchar *profile_path);
+gchar   *nm_get_profile_password      (GDBusConnection *conn, const gchar *profile_path);
+gboolean nm_get_profile_autoconnect   (GDBusConnection *conn, const gchar *profile_path);
+gboolean nm_set_profile_autoconnect   (GDBusConnection *conn, const gchar *profile_path,
+                                       gboolean autoconnect);
+void     nm_activate_profile_async    (GDBusConnection *conn, const gchar *profile_path,
+                                       const gchar *device_path, const gchar *ap_path);
+/* Migración: borra duplicados de verdad del perfil (misma red y MISMA
+ * seguridad; otro perfil de la misma red con otra seguridad se respeta) y le
+ * saca interface-name si lo tiene. Devuelve TRUE si cambió algo. */
+gboolean nm_profile_cleanup           (GDBusConnection *conn, const gchar *profile_path);
+
 /* Migra perfiles viejos con `connection.interface-name` fijado:
  *   - Si hay varios perfiles con la misma SSID, deja uno y borra los demás.
  *   - Al perfil que queda, le saca el binding de interface-name (lo vacía),
@@ -73,8 +99,21 @@ void     nm_set_wifi_enabled    (GDBusConnection *conn, gboolean enabled);
 /* Estado del adaptador individual */
 gboolean nm_get_device_enabled  (GDBusConnection *conn, const gchar *device_path);
 
-/* Devuelve lista de NmDevice Ethernet con cable conectado (State == 100) */
+/* Estado crudo del adaptador (10 = no gestionado, 20 = no disponible,
+ * 30 = desconectado, 40-90 = conectando, 100 = activado, 110 = desactivando,
+ * 120 = falló). Devuelve 0 si no se pudo leer. Usa la instantánea si hay
+ * una activa. */
+guint32  nm_get_device_state    (GDBusConnection *conn, const gchar *device_path);
+
+/* Devuelve lista de NmDevice Ethernet para mostrar en el popup: los
+ * conectados (estado 100), los apagados por el usuario (estado 10, para que
+ * su interruptor siga visible) y los que tienen cable enchufado aunque
+ * todavía no estén conectados. NO sirve para saber si hay conexión por cable:
+ * para eso usar nm_any_ethernet_activated. */
 GSList *nm_get_ethernet_devices (GDBusConnection *conn);
+
+/* TRUE solo si algún adaptador Ethernet está conectado de verdad (estado 100). */
+gboolean nm_any_ethernet_activated (GDBusConnection *conn);
 
 /* Devuelve la contraseña del perfil guardado para un SSID, o NULL. Liberar con g_free(). */
 gchar *nm_get_saved_password (GDBusConnection *conn, const gchar *ssid);
@@ -111,14 +150,17 @@ void nm_activate_connection_async (GDBusConnection *conn,
                                    const gchar     *ssid);
 
 /* key_mgmt: "wpa-psk" (WPA2 / mixto WPA2-WPA3), "sae" (WPA3 puro) o NULL
- * (equivale a "wpa-psk"). Solo se usa si hay contraseña. */
+ * (equivale a "wpa-psk"). Solo se usa si hay contraseña.
+ * hidden: TRUE para redes ocultas (que no anuncian su nombre). Marca el
+ * perfil como oculto para que NM salga a buscarla activamente. */
 void nm_add_and_activate_connection_async (GDBusConnection *conn,
                                            const gchar     *device_path,
                                            const gchar     *ap_path,
                                            const gchar     *ssid,
                                            const gchar     *password,
                                            const gchar     *key_mgmt,
-                                           gboolean         autoconnect);
+                                           gboolean         autoconnect,
+                                           gboolean         hidden);
 
 void nm_set_device_enabled_async (GDBusConnection *conn,
                                   const gchar     *device_path,
@@ -128,7 +170,11 @@ void nm_activate_vpn_async   (GDBusConnection *conn, const gchar *conn_path);
 void nm_deactivate_vpn_async (GDBusConnection *conn, const gchar *conn_path);
 
 /* Suscripción a señales DBus de NetworkManager.
- * Llama a callback(user_data) cada vez que algo relevante cambia.
+ * Llama a callback(user_data) cada vez que algo relevante cambia, incluidos
+ * los perfiles guardados (alta, baja o modificación, hecha por este plugin
+ * o por nmcli / el editor de conexiones).
+ * Mientras haya al menos una suscripción activa, la lista de perfiles
+ * guardados se mantiene en memoria y se descarta sola cuando cambia.
  * Devuelve un array de IDs de suscripción terminado en 0; liberar con nm_unsubscribe_signals(). */
 typedef void (*NmSignalCallback) (gpointer user_data);
 
@@ -165,6 +211,23 @@ void nm_request_scan (GDBusConnection *conn, const gchar *device_path);
 
 /* Devuelve TRUE si algún adaptador Wi-Fi está en proceso de conectar (estados 40-90). */
 gboolean nm_any_wifi_device_connecting (GDBusConnection *conn);
+
+/* ---------- Conectividad (portal cautivo) ----------
+ * Lo que NM averiguó sobre la salida a Internet. Requiere que la
+ * comprobación de conectividad esté activada en la configuración de NM (en
+ * Debian viene en el paquete network-manager-config-connectivity-debian);
+ * si no, el valor queda en DESCONOCIDA y no se muestra nada. */
+#define NM_CONN_STATE_UNKNOWN  0   /* desconocida / comprobación apagada */
+#define NM_CONN_STATE_NONE     1   /* sin red */
+#define NM_CONN_STATE_PORTAL   2   /* hay que iniciar sesión (bar, hotel...) */
+#define NM_CONN_STATE_LIMITED  3   /* red sin salida a Internet */
+#define NM_CONN_STATE_FULL     4   /* Internet completo */
+
+guint32 nm_get_connectivity           (GDBusConnection *conn);
+/* Dirección que usa NM para comprobar (o NULL). Liberar con g_free(). */
+gchar  *nm_get_connectivity_check_uri (GDBusConnection *conn);
+/* Pide a NM que vuelva a comprobar ya (el resultado llega por señal). */
+void    nm_check_connectivity_async   (GDBusConnection *conn);
 
 
 #endif /* NM_DBUS_H */

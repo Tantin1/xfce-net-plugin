@@ -310,6 +310,47 @@ msgstr "Подключение к <b>%s</b>…"
 msgid "Enabled – not connected"
 msgstr "Включено – не подключено"
 
+#: popup-rows.c
+msgid "Enterprise (802.1X)"
+msgstr "Корпоративная (802.1X)"
+
+#: popup-sections.c
+msgid "This network requires you to sign in"
+msgstr "Эта сеть требует входа"
+
+#: popup-sections.c
+msgid "Sign in"
+msgstr "Войти"
+
+#: plugin.c
+msgid " · Sign-in required"
+msgstr " · Требуется вход"
+
+#: secret-agent.c
+msgid "Network authentication required"
+msgstr "Требуется аутентификация в сети"
+
+#: secret-agent.c
+#, c-format
+msgid "A password is required to connect to the Wi-Fi network \"%s\"."
+msgstr "Для подключения к сети Wi-Fi \"%s\" требуется пароль."
+
+#: secret-agent.c
+msgid "The previous password was not accepted."
+msgstr "Предыдущий пароль не был принят."
+
+#: plugin.c
+msgid "Network"
+msgstr "Сеть"
+
+#: plugin.c
+msgid "Respond to password requests"
+msgstr "Отвечать на запросы пароля"
+
+#: plugin.c
+msgid "Turn this off if another network applet (such as nm-applet) is also running."
+msgstr "Отключите, если также запущен другой сетевой апплет (например, nm-applet)."
+
 #~ msgid "Saved network"
 #~ msgstr "Сохранённая сеть"
 

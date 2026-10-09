@@ -1,2 +1,6 @@
 plugin.c
 popup.c
+popup-rows.c
+popup-sections.c
+nm-dbus.c
+secret-agent.c

@@ -77,6 +77,7 @@ typedef struct {
     gboolean         saved;
     const gchar     *key_mgmt;       /* "wpa-psk" o "sae" según el AP. Cadena estática, no liberar. */
     gchar           *device_path;
+    gchar           *profile_path;   /* Perfil guardado que usa esta fila (ruta en el bus), o NULL. */
     GtkWidget       *pass_entry;
     GtkWidget       *autoconnect_check;
 
@@ -102,13 +103,11 @@ typedef struct {
 
 /* ---- popup.c (núcleo: ventana, operaciones, helpers) ---- */
 void      secure_wipe_free          (gchar *s);
-gboolean  deferred_refresh_cb       (gpointer user_data);
 gchar    *get_primary_ssid          (GDBusConnection *conn);
 gboolean  op_timeout_cb             (gpointer user_data);
 gboolean  device_is_activated      (GDBusConnection *conn, const gchar *device_path);
 gboolean  device_is_disconnected   (GDBusConnection *conn, const gchar *device_path);
 gboolean  device_is_connecting     (GDBusConnection *conn, const gchar *device_path);
-gboolean  is_ssid_connected_anywhere (GDBusConnection *conn, const gchar *ssid);
 void      process_pending_attempts (NetPopup *popup);
 void      check_ops_progress       (NetPopup *popup);
 gboolean  on_wifi_switch_toggled   (GtkSwitch *sw, gboolean state, gpointer user_data);
@@ -118,6 +117,12 @@ void      on_refresh_clicked       (GtkWidget *btn, NetPopup *popup);
 void      on_eye_clicked           (GtkWidget *btn, GtkEntry *entry);
 void      on_hidden_network_clicked (GtkWidget *btn, NetPopup *popup);
 void      on_advanced_clicked      (GtkWidget *btn, gpointer user_data);
+/* Llamar cuando se cierra el menú contextual de una fila: destruye el menú
+ * (diferido), devuelve la captura al popup y agenda el refresco postergado. */
+void      popup_menu_closed        (NetPopup *popup);
+/* Botón "Iniciar sesión" del portal cautivo: cierra el popup y abre el
+ * navegador en la dirección de comprobación de NM. */
+void      on_portal_signin_clicked (GtkWidget *btn, NetPopup *popup);
 
 /* ---- popup-rows.c (fila de red, expand y sus callbacks) ---- */
 gchar    *row_fingerprint (NetPopup *popup, NmAccessPoint *ap,

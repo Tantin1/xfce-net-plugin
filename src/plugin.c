@@ -6,6 +6,7 @@
 #endif
 #include "popup.h"
 #include "nm-dbus.h"
+#include "secret-agent.h"
 
 #define DEFAULT_SQUARE_BUTTON   FALSE
 #define DEFAULT_PLUGIN_SIZE     24
@@ -16,6 +17,7 @@
 #define DEFAULT_SHOW_SEPARATORS    TRUE
 #define DEFAULT_SHOW_NOTIFICATIONS FALSE
 #define DEFAULT_SHOW_FORGET_ACTIVE  FALSE
+#define DEFAULT_SECRET_AGENT        TRUE
 
 /* Declaración forward: el cuerpo vive en popup.c y arma el candado con
  * fallback nm-vpn-active-lock → nm-secure-lock → recurso embebido en el .so.
@@ -27,6 +29,11 @@ GtkWidget *make_lock_overlay_image (gint icon_size);
  * Lo registramos en net_plugin_construct para que gtk_image_new_from_resource
  * pueda cargar el SVG del candado sin depender de archivos del sistema. */
 GResource *lock_icons_get_resource (void);
+
+/* Versión: la define el sistema de compilación desde el archivo VERSION. */
+#ifndef PACKAGE_VERSION
+#define PACKAGE_VERSION "dev"
+#endif
 
 
 typedef struct {
@@ -49,17 +56,25 @@ typedef struct {
     GtkCssProvider *button_css;
 
     guint *signal_ids;
+    guint  refresh_timeout_id;   /* refresco agendado del ícono (100 ms) */
 
     gboolean        connecting;
     gboolean        notif_ready;
     gboolean        show_notifications;
     gboolean        show_forget_active;
 
+    /* Agente de secretos: responde cuando NM pide una contraseña.
+     * NULL si está apagado en Propiedades o no se pudo publicar. */
+    gboolean        secret_agent_enabled;
+    NetSecretAgent *agent;
+
     gint     last_strength;
     gboolean last_secure;
     gboolean last_connected;
     gboolean last_vpn;
     gboolean last_wired;
+    gchar   *last_ssid;     /* red Wi-Fi del último refresco (para avisar cambios) */
+    gboolean last_portal;   /* el último refresco vio un portal cautivo */
 } NetPlugin;
 
 /* ---------- actualizar ícono del botón del panel ---------- */
@@ -80,7 +95,7 @@ update_panel_icon (NetPlugin *np,
     np->last_wired     = wired;
 
     GList *kids = gtk_container_get_children (GTK_CONTAINER (np->icon_box));
-    g_list_foreach (kids, (GFunc) gtk_widget_destroy, NULL);
+    for (GList *w = kids; w; w = w->next) gtk_widget_destroy (GTK_WIDGET (w->data));
     g_list_free (kids);
 
     GtkWidget *new_icon;
@@ -199,6 +214,7 @@ load_config (NetPlugin *np)
     np->show_separators    = DEFAULT_SHOW_SEPARATORS;
     np->show_notifications = DEFAULT_SHOW_NOTIFICATIONS;
     np->show_forget_active = DEFAULT_SHOW_FORGET_ACTIVE;
+    np->secret_agent_enabled = DEFAULT_SECRET_AGENT;
 
     if (!g_key_file_load_from_file (kf, path, G_KEY_FILE_NONE, &err)) {
         g_clear_error (&err);
@@ -220,6 +236,9 @@ load_config (NetPlugin *np)
     np->show_forget_active = g_key_file_get_boolean (kf, "appearance", "show_forget_active", NULL);
     if (!g_key_file_has_key (kf, "appearance", "show_forget_active", NULL))
         np->show_forget_active = DEFAULT_SHOW_FORGET_ACTIVE;
+    if (g_key_file_has_key (kf, "network", "secret_agent", NULL))
+        np->secret_agent_enabled = g_key_file_get_boolean (kf, "network",
+                                                           "secret_agent", NULL);
 
     if (np->plugin_size  == 0) np->plugin_size  = DEFAULT_PLUGIN_SIZE;
     if (np->icon_size    == 0) np->icon_size    = DEFAULT_ICON_SIZE;
@@ -250,6 +269,7 @@ save_config (NetPlugin *np)
     g_key_file_set_boolean  (kf, "appearance", "show_separators",    np->show_separators);
     g_key_file_set_boolean  (kf, "appearance", "show_notifications", np->show_notifications);
     g_key_file_set_boolean  (kf, "appearance", "show_forget_active",  np->show_forget_active);
+    g_key_file_set_boolean  (kf, "network",    "secret_agent",        np->secret_agent_enabled);
 
     if (!g_key_file_save_to_file (kf, path, &err)) {
         g_warning ("xfce-net-plugin: no se pudo guardar config: %s", err->message);
@@ -274,6 +294,7 @@ typedef struct {
     GtkWidget   *popup_height_spin;
     GtkWidget   *separators_check;
     GtkWidget   *notifications_check;
+    GtkWidget   *agent_check;
 } PropsDialog;
 
 static void
@@ -348,6 +369,38 @@ on_forget_active_toggled (GtkToggleButton *btn, PropsDialog *pd)
     pd->np->show_forget_active = gtk_toggle_button_get_active (btn);
     save_config (pd->np);
     pd->np->popup->ui_built = FALSE;
+}
+
+/* ---------- agente de secretos ---------- */
+
+/* Antes de mostrar el diálogo de contraseña se cierra el popup: tiene
+ * capturado el teclado y el diálogo no recibiría lo que se tipea. */
+static void
+on_agent_prompt (gpointer user_data)
+{
+    NetPlugin *np = user_data;
+    if (np->popup && gtk_widget_get_visible (np->popup->window))
+        popup_hide (np->popup);
+}
+
+/* Prende o apaga el agente según la preferencia. */
+static void
+secret_agent_apply (NetPlugin *np)
+{
+    if (np->secret_agent_enabled && !np->agent && np->conn)
+        np->agent = net_secret_agent_new (np->conn, on_agent_prompt, np);
+    else if (!np->secret_agent_enabled && np->agent) {
+        net_secret_agent_free (np->agent);
+        np->agent = NULL;
+    }
+}
+
+static void
+on_agent_toggled (GtkToggleButton *btn, PropsDialog *pd)
+{
+    pd->np->secret_agent_enabled = gtk_toggle_button_get_active (btn);
+    save_config (pd->np);
+    secret_agent_apply (pd->np);
 }
 
 static void
@@ -483,6 +536,31 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
 
     gtk_box_pack_start (GTK_BOX (content), frame, FALSE, FALSE, 0);
 
+    /* Sección "Red": comportamiento, no apariencia. */
+    GtkWidget *net_frame = gtk_frame_new (_("Network"));
+    GtkWidget *net_grid  = gtk_grid_new ();
+    gtk_grid_set_row_spacing (GTK_GRID (net_grid), 6);
+    gtk_container_set_border_width (GTK_CONTAINER (net_grid), 8);
+    gtk_container_add (GTK_CONTAINER (net_frame), net_grid);
+    gtk_widget_set_margin_top (net_frame, 8);
+
+    pd->agent_check = gtk_check_button_new_with_label (_("Respond to password requests"));
+    gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (pd->agent_check),
+                                  np->secret_agent_enabled);
+    gtk_grid_attach (GTK_GRID (net_grid), pd->agent_check, 0, 0, 1, 1);
+
+    GtkWidget *agent_hint = gtk_label_new (_("Turn this off if another network applet (such as nm-applet) is also running."));
+    gtk_label_set_xalign (GTK_LABEL (agent_hint), 0.0);
+    gtk_label_set_line_wrap (GTK_LABEL (agent_hint), TRUE);
+    gtk_label_set_max_width_chars (GTK_LABEL (agent_hint), 35);
+    gtk_widget_set_margin_start (agent_hint, 24);
+    gtk_style_context_add_class (gtk_widget_get_style_context (agent_hint), "dim-label");
+    gtk_grid_attach (GTK_GRID (net_grid), agent_hint, 0, 1, 1, 1);
+
+    gtk_box_pack_start (GTK_BOX (content), net_frame, FALSE, FALSE, 0);
+    g_signal_connect (pd->agent_check, "toggled",
+                      G_CALLBACK (on_agent_toggled), pd);
+
     g_signal_connect (pd->square_check,     "toggled",
                       G_CALLBACK (on_square_toggled),      pd);
     g_signal_connect (pd->plugin_spin,      "value-changed",
@@ -539,9 +617,13 @@ static gboolean
 on_nm_changed_cb (gpointer user_data)
 {
     NetPlugin *np = user_data;
+    np->refresh_timeout_id = 0;
     if (!np->conn)
         return G_SOURCE_REMOVE;
-    g_object_set_data (G_OBJECT (np->button), "nm-refresh-pending", NULL);
+
+    /* Instantánea: todas las lecturas de este refresco salen de una sola
+     * foto del bus en vez de decenas de llamadas sueltas. */
+    nm_cache_begin (np->conn);
 
     /* Una sola lectura del AP activo: ícono, tooltip y notificaciones
      * reusan este resultado sin repetir la enumeración completa. */
@@ -550,13 +632,18 @@ on_nm_changed_cb (gpointer user_data)
     gint     strength  = ai->strength;
     gboolean secure    = ai->secure;
 
-    gboolean vpn   = nm_get_vpn_active (np->conn);
-    gboolean wired = FALSE;
-    if (!connected) {
-        GSList *eths = nm_get_ethernet_devices (np->conn);
-        wired = (eths != NULL);
-        nm_device_list_free (eths);
-    }
+    gboolean vpn = nm_get_vpn_active (np->conn);
+    /* "Hay cable" = algún Ethernet conectado de verdad (estado 100).
+     * Antes se usaba la lista de la sección Ethernet del popup, que también
+     * incluye el adaptador apagado y el cable enchufado sin conexión: con
+     * Ethernet apagado el panel mostraba el ícono de cable y avisaba "Cable
+     * conectado". Además solo se calculaba sin Wi-Fi, así que desenchufar
+     * el cable con Wi-Fi activo no avisaba nada. Ahora se calcula siempre;
+     * el ícono sigue mostrando Wi-Fi primero (ver update_panel_icon). */
+    gboolean wired = nm_any_ethernet_activated (np->conn);
+    /* Portal cautivo: hay red, pero hay que iniciar sesión para navegar. */
+    gboolean portal = (connected || wired) &&
+                      nm_get_connectivity (np->conn) == NM_CONN_STATE_PORTAL;
 
 #ifdef HAVE_LIBNOTIFY
     gboolean prev_connected = np->last_connected;
@@ -578,7 +665,11 @@ on_nm_changed_cb (gpointer user_data)
 #ifdef HAVE_LIBNOTIFY
     /* Notificaciones: solo si ya hubo un estado previo (evita notif al arrancar) */
     if (np->notif_ready && np->show_notifications) {
-        NotifyNotification *notif = NULL;
+        /* Wi-Fi y Ethernet se evalúan por separado: antes iban en una sola
+         * cadena de "si no, si no" y un cambio de Wi-Fi tapaba uno de cable
+         * que ocurriera al mismo tiempo. */
+        NotifyNotification *notif  = NULL;
+        NotifyNotification *enotif = NULL;
 
         if (connected && !prev_connected) {
             /* Wi-Fi conectado */
@@ -588,12 +679,25 @@ on_nm_changed_cb (gpointer user_data)
         } else if (!connected && prev_connected) {
             /* Wi-Fi desconectado */
             notif = notify_notification_new (_("Wi-Fi"), _("Disconnected"), "network-wireless-disconnected-symbolic");
-        } else if (wired && !prev_wired) {
+        } else if (connected && prev_connected && ai->ssid &&
+                   np->last_ssid && g_strcmp0 (ai->ssid, np->last_ssid) != 0) {
+            /* Pasó de una red Wi-Fi a otra sin quedar desconectado en el
+             * medio: antes no se avisaba nada. */
+            gchar *body = g_strdup_printf (_("Connected to %s"), ai->ssid);
+            notif = notify_notification_new (_("Wi-Fi"), body, "network-wireless-symbolic");
+            g_free (body);
+        }
+
+        if (wired && !prev_wired) {
             /* Ethernet conectado */
-            notif = notify_notification_new (_("Ethernet"), _("Cable connected"), "network-wired-symbolic");
+            enotif = notify_notification_new (_("Ethernet"), _("Cable connected"), "network-wired-symbolic");
         } else if (!wired && prev_wired) {
             /* Ethernet desconectado */
-            notif = notify_notification_new (_("Ethernet"), _("Cable disconnected"), "network-wired-disconnected-symbolic");
+            enotif = notify_notification_new (_("Ethernet"), _("Cable disconnected"), "network-wired-disconnected-symbolic");
+        }
+        if (enotif) {
+            notify_notification_show (enotif, NULL);
+            g_object_unref (enotif);
         }
 
         if (vpn && !prev_vpn) {
@@ -612,6 +716,15 @@ on_nm_changed_cb (gpointer user_data)
             notify_notification_show (notif, NULL);
             g_object_unref (notif);
         }
+
+        if (portal && !np->last_portal) {
+            NotifyNotification *pnotif = notify_notification_new (
+                connected ? _("Wi-Fi") : _("Ethernet"),
+                _("This network requires you to sign in"),
+                "dialog-warning-symbolic");
+            notify_notification_show (pnotif, NULL);
+            g_object_unref (pnotif);
+        }
     }
     if (!np->notif_ready && np->show_notifications) {
         /* Notificación de estado inicial al arrancar */
@@ -620,10 +733,11 @@ on_nm_changed_cb (gpointer user_data)
             gchar *body = g_strdup_printf (_("Connected to %s"), ai->ssid ? ai->ssid : "Wi-Fi");
             inotif = notify_notification_new (_("Wi-Fi"), body, "network-wireless-symbolic");
             g_free (body);
-        } else if (wired) {
-            inotif = notify_notification_new (_("Ethernet"), _("Cable connected"), "network-wired-symbolic");
+            notify_notification_show (inotif, NULL);
+            g_object_unref (inotif);
         }
-        if (inotif) {
+        if (wired) {
+            inotif = notify_notification_new (_("Ethernet"), _("Cable connected"), "network-wired-symbolic");
             notify_notification_show (inotif, NULL);
             g_object_unref (inotif);
         }
@@ -654,12 +768,21 @@ on_nm_changed_cb (gpointer user_data)
             else
                 g_string_append (tip, _("VPN active"));
         }
+        if (portal)
+            g_string_append (tip, _(" · Sign-in required"));
 
         gtk_widget_set_tooltip_text (np->button, tip->str);
         g_string_free (tip, TRUE);
     }
 
+    np->last_portal = portal;
+
+    /* Recordar la red actual para detectar el próximo cambio de red. */
+    g_free (np->last_ssid);
+    np->last_ssid = (connected && ai->ssid) ? g_strdup (ai->ssid) : NULL;
+
     nm_active_ap_info_free (ai);
+    nm_cache_end ();
 
     /* IMPORTANTE: ya no reconstruimos el popup desde acá. El popup tiene su
      * propia suscripción a señales DBus mientras está abierto. Esta función
@@ -671,11 +794,11 @@ static void
 on_nm_changed (gpointer user_data)
 {
     NetPlugin *np = user_data;
-    if (g_object_get_data (G_OBJECT (np->button), "nm-refresh-pending"))
+    /* Agrupar ráfagas de señales en un solo refresco. El número queda
+     * guardado para cancelarlo si el plugin se quita del panel. */
+    if (np->refresh_timeout_id)
         return;
-    g_object_set_data (G_OBJECT (np->button), "nm-refresh-pending",
-                       GINT_TO_POINTER (1));
-    g_timeout_add (100, on_nm_changed_cb, np);
+    np->refresh_timeout_id = g_timeout_add (100, on_nm_changed_cb, np);
 }
 
 /* ---------- callbacks del panel ---------- */
@@ -767,6 +890,7 @@ net_plugin_new (XfcePanelPlugin *plugin)
                       G_CALLBACK (on_button_toggled), np);
 
     np->signal_ids = nm_subscribe_signals (np->conn, on_nm_changed, np);
+    secret_agent_apply (np);
     g_signal_connect (np->popup->window, "hide",
                       G_CALLBACK (on_popup_hidden), np);
 
@@ -790,7 +914,7 @@ net_plugin_about (XfcePanelPlugin *plugin, NetPlugin *np)
                           48, 0, NULL);
     gtk_show_about_dialog (NULL,
         "program-name", "xfce-net-plugin",
-        "version",      "1.0.1-dev",
+        "version",      PACKAGE_VERSION,
         "comments",     _("Network manager plugin for the XFCE panel"),
         "authors",      authors,
         "license-type", GTK_LICENSE_GPL_2_0,
@@ -805,13 +929,22 @@ static void
 net_plugin_free (XfcePanelPlugin *plugin, NetPlugin *np)
 {
     (void) plugin;
+    if (np->refresh_timeout_id) {
+        g_source_remove (np->refresh_timeout_id);
+        np->refresh_timeout_id = 0;
+    }
     if (np->signal_ids)
         nm_unsubscribe_signals (np->conn, np->signal_ids);
+    if (np->agent) {
+        net_secret_agent_free (np->agent);
+        np->agent = NULL;
+    }
     popup_destroy (np->popup);
     if (np->conn)
         g_object_unref (np->conn);
     if (np->button_css)
         g_object_unref (np->button_css);
+    g_free (np->last_ssid);
     g_free (np);
 }
 

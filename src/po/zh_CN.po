@@ -309,6 +309,47 @@ msgstr "正在连接到 <b>%s</b>…"
 msgid "Enabled – not connected"
 msgstr "已启用 – 未连接"
 
+#: popup-rows.c
+msgid "Enterprise (802.1X)"
+msgstr "企业 (802.1X)"
+
+#: popup-sections.c
+msgid "This network requires you to sign in"
+msgstr "此网络需要登录"
+
+#: popup-sections.c
+msgid "Sign in"
+msgstr "登录"
+
+#: plugin.c
+msgid " · Sign-in required"
+msgstr " · 需要登录"
+
+#: secret-agent.c
+msgid "Network authentication required"
+msgstr "需要网络身份验证"
+
+#: secret-agent.c
+#, c-format
+msgid "A password is required to connect to the Wi-Fi network \"%s\"."
+msgstr "连接到 Wi-Fi 网络\"%s\"需要密码。"
+
+#: secret-agent.c
+msgid "The previous password was not accepted."
+msgstr "之前的密码未被接受。"
+
+#: plugin.c
+msgid "Network"
+msgstr "网络"
+
+#: plugin.c
+msgid "Respond to password requests"
+msgstr "响应密码请求"
+
+#: plugin.c
+msgid "Turn this off if another network applet (such as nm-applet) is also running."
+msgstr "如果同时运行了其他网络小程序（如 nm-applet），请关闭此项。"
+
 #~ msgid "Saved network"
 #~ msgstr "已保存的网络"
 

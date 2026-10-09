@@ -1,5 +1,5 @@
 option('plugin_dir',
   type        : 'string',
   value       : '',
-  description : 'Ruta de instalación del .so del plugin. Vacío = autodetectar (multilib si existe, /usr/lib/xfce4/panel/plugins si no).',
+  description : 'Ruta de instalación del .so del plugin. Vacío = autodetectar (carpeta de plugins según la biblioteca del panel; si no existe, /usr/lib/xfce4/panel/plugins).',
 )

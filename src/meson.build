@@ -1,5 +1,7 @@
 project('xfce-net-plugin', 'c',
-  version : '0.1.0',
+  # Versión: única fuente en el archivo VERSION (también lo lee CMakeLists.txt
+  # y llega al diálogo "Acerca de" como PACKAGE_VERSION).
+  version : files('VERSION'),
   license : 'GPL-2.0-or-later',
   default_options : [
     'c_std=c11',
@@ -19,17 +21,31 @@ intl       = dependency('intl')
 libnotify  = dependency('libnotify',         version : '>= 0.7', required : false)
 libqrencode = dependency('libqrencode',                                required : false)
 
-# Ruta de instalación del plugin
-# Auto: si existe el directorio multilib de Debian/Loc OS, lo usa. Si no, /usr/lib/xfce4/panel/plugins.
-# Override: meson setup build src -Dplugin_dir=/ruta/forzada
+# Ruta de instalación del plugin.
+# Auto, en este orden:
+#   1. <libdir del panel>/xfce4/panel/plugins, donde libdir lo informa la propia
+#      biblioteca del panel (pkg-config). Sirve en cualquier arquitectura
+#      (x86_64, ARM, etc.) y en distros con o sin carpetas por arquitectura.
+#   2. /usr/lib/xfce4/panel/plugins si existe.
+#   3. Si ninguna carpeta existe todavía, la del punto 1 (o prefix/lib).
+# El panel encuentra el plugin por la ruta escrita en el .desktop, que se
+# completa con esta misma ruta, así que cualquiera de las tres funciona.
+# Forzar: meson setup build src -Dplugin_dir=/ruta/forzada
 plugin_dir = get_option('plugin_dir')
 if plugin_dir == ''
-  multilib = '/usr/lib/x86_64-linux-gnu/xfce4/panel/plugins'
-  test_multilib = run_command('test', '-d', multilib, check : false)
-  if test_multilib.returncode() == 0
-    plugin_dir = multilib
-  else
-    plugin_dir = get_option('prefix') / 'lib/xfce4/panel/plugins'
+  panel_libdir = xfce4panel.get_variable(pkgconfig : 'libdir', default_value : '')
+  candidates = []
+  if panel_libdir != ''
+    candidates += panel_libdir / 'xfce4/panel/plugins'
+  endif
+  candidates += '/usr/lib/xfce4/panel/plugins'
+  foreach c : candidates
+    if plugin_dir == '' and run_command('test', '-d', c, check : false).returncode() == 0
+      plugin_dir = c
+    endif
+  endforeach
+  if plugin_dir == ''
+    plugin_dir = panel_libdir != '' ? panel_libdir / 'xfce4/panel/plugins' : get_option('prefix') / 'lib/xfce4/panel/plugins'
   endif
 endif
 message('Plugin install dir: ' + plugin_dir)
@@ -41,6 +57,7 @@ locale_dir = get_option('prefix') / 'share/locale'
 add_project_arguments(
   '-DGETTEXT_PACKAGE="' + gettext_package + '"',
   '-DLOCALEDIR="' + locale_dir + '"',
+  '-DPACKAGE_VERSION="' + meson.project_version() + '"',
   language : 'c',
 )
 
@@ -78,6 +95,7 @@ shared_module('xfce-net-plugin',
     'popup-rows.c',
     'popup-sections.c',
     'nm-dbus.c',
+    'secret-agent.c',
     lock_icons_resource,
   ],
   name_prefix     : 'lib',
