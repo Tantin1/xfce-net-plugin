@@ -350,6 +350,30 @@ msgstr "响应密码请求"
 msgid "Turn this off if another network applet (such as nm-applet) is also running."
 msgstr "如果同时运行了其他网络小程序（如 nm-applet），请关闭此项。"
 
+#: plugin.c
+msgid "Remember disabled adapters"
+msgstr "记住已禁用的适配器"
+
+#: plugin.c
+msgid "Adapters you turn off stay off after restarting."
+msgstr "您关闭的适配器在重启后仍保持关闭。"
+
+#: popup.c popup-sections.c
+msgid "Search networks"
+msgstr "搜索网络"
+
+#: popup.c popup-sections.c
+msgid "No matching networks"
+msgstr "没有匹配的网络"
+
+#: plugin.c
+msgid "Prefer nm-applet icons"
+msgstr "优先使用 nm-applet 图标"
+
+#: plugin.c
+msgid "Use the icons your theme provides for nm-applet, if any, instead of the standard network icons."
+msgstr "如果主题提供了 nm-applet 图标，则使用它们代替标准网络图标。"
+
 #~ msgid "Saved network"
 #~ msgstr "已保存的网络"
 

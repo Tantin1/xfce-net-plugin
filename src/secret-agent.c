@@ -20,7 +20,11 @@
 
 #include "secret-agent.h"
 #include <gtk/gtk.h>
-#include <glib/gi18n.h>
+/* gi18n-lib: _() busca siempre en NUESTRO dominio de traducción
+ * (GETTEXT_PACKAGE). En Wayland todos los plugins corren dentro del
+ * proceso del panel y comparten el dominio "por defecto": con gi18n.h
+ * nuestros textos se buscaban en el de otro y salían en inglés. */
+#include <glib/gi18n-lib.h>
 #include <string.h>
 
 #define NM_BUS_NAME            "org.freedesktop.NetworkManager"

@@ -6,7 +6,11 @@
 
 #include "popup.h"
 #include <gdk/gdkkeysyms.h>
-#include <glib/gi18n.h>
+/* gi18n-lib: _() busca siempre en NUESTRO dominio de traducción
+ * (GETTEXT_PACKAGE). En Wayland todos los plugins corren dentro del
+ * proceso del panel y comparten el dominio "por defecto": con gi18n.h
+ * nuestros textos se buscaban en el de otro y salían en inglés. */
+#include <glib/gi18n-lib.h>
 
 #define NM_BUS_NAME    "org.freedesktop.NetworkManager"
 #define NM_OBJECT_PATH "/org/freedesktop/NetworkManager"
@@ -64,6 +68,8 @@ typedef struct {
 typedef struct {
     GDBusConnection *conn;
     gchar           *device_path;
+    gchar           *iface;      /* nombre de la interfaz (para recordar si quedó apagado) */
+    NetPopup        *popup;
 } DeviceSwitchData;
 
 typedef struct {
@@ -123,6 +129,11 @@ void      popup_menu_closed        (NetPopup *popup);
 /* Botón "Iniciar sesión" del portal cautivo: cierra el popup y abre el
  * navegador en la dirección de comprobación de NM. */
 void      on_portal_signin_clicked (GtkWidget *btn, NetPopup *popup);
+/* Botón de la lupa: abre la búsqueda, o la cierra si ya estaba abierta. */
+void      on_search_button_clicked (GtkWidget *btn, NetPopup *popup);
+/* Ajusta el alto de la lista para que la franja de búsqueda (y su aviso)
+ * no agranden el popup: el alto total queda siempre igual. */
+void      search_sync_height       (NetPopup *popup);
 
 /* ---- popup-rows.c (fila de red, expand y sus callbacks) ---- */
 gchar    *row_fingerprint (NetPopup *popup, NmAccessPoint *ap,
@@ -141,5 +152,8 @@ void      update_vpn_section     (NetPopup *popup);
 void      update_devices_section (NetPopup *popup);
 void      schedule_refresh_ui    (NetPopup *popup);
 void      on_nm_signal_popup     (gpointer user_data);
+/* Búsqueda: oculta las filas Wi-Fi cuyo nombre no contiene el texto del
+ * campo de búsqueda. Se llama al escribir y al final de cada refresco. */
+void      apply_search_filter    (NetPopup *popup);
 
 #endif /* POPUP_PRIVATE_H */

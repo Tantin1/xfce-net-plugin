@@ -339,6 +339,26 @@ on_async_done (GObject *src, GAsyncResult *res, gpointer user_data)
     }
 }
 
+/* Lee la dirección física de fábrica (PermHwAddress) de un adaptador, desde
+ * la interfaz propia de su tipo (Wireless o Wired). Devuelve NULL si no hay
+ * una válida: vacía o todo ceros (pasa con algunos adaptadores baratos).
+ * Se resuelve desde la instantánea si hay una activa. Liberar con g_free(). */
+static gchar *
+read_perm_hw (GDBusConnection *conn, const gchar *path, const gchar *type_iface)
+{
+    GVariant *v = get_property (conn, path, type_iface, "PermHwAddress");
+    if (!v)
+        return NULL;
+    gchar *hw = NULL;
+    if (g_variant_is_of_type (v, G_VARIANT_TYPE_STRING)) {
+        const gchar *s = g_variant_get_string (v, NULL);
+        if (s && *s && g_strcmp0 (s, "00:00:00:00:00:00") != 0)
+            hw = g_ascii_strup (s, -1);
+    }
+    g_variant_unref (v);
+    return hw;
+}
+
 GSList *
 nm_get_wifi_devices (GDBusConnection *conn)
 {
@@ -373,6 +393,7 @@ nm_get_wifi_devices (GDBusConnection *conn)
         dev->iface       = g_strdup (iface);
         dev->object_path = g_strdup (paths[i]);
         dev->description = nm_get_device_description (dev->iface);
+        dev->perm_hw     = read_perm_hw (conn, paths[i], NM_WIFI_IFACE);
         g_variant_unref (props);
 
         list = g_slist_append (list, dev);
@@ -392,6 +413,7 @@ nm_device_list_free (GSList *list)
         g_free (dev->iface);
         g_free (dev->object_path);
         g_free (dev->description);
+        g_free (dev->perm_hw);
         g_free (dev);
     }
     g_slist_free (list);
@@ -1501,6 +1523,7 @@ nm_get_ethernet_devices (GDBusConnection *conn)
         dev->iface       = g_strdup (iface);
         dev->object_path = g_strdup (paths[i]);
         dev->description = nm_get_device_description (dev->iface);
+        dev->perm_hw     = read_perm_hw (conn, paths[i], NM_WIRED_IFACE);
         g_variant_unref (props);
 
         list = g_slist_append (list, dev);

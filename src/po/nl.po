@@ -352,6 +352,30 @@ msgstr "Wachtwoordverzoeken beantwoorden"
 msgid "Turn this off if another network applet (such as nm-applet) is also running."
 msgstr "Schakel dit uit als er ook een andere netwerkapplet (zoals nm-applet) actief is."
 
+#: plugin.c
+msgid "Remember disabled adapters"
+msgstr "Uitgeschakelde adapters onthouden"
+
+#: plugin.c
+msgid "Adapters you turn off stay off after restarting."
+msgstr "Adapters die u uitschakelt blijven na een herstart uitgeschakeld."
+
+#: popup.c popup-sections.c
+msgid "Search networks"
+msgstr "Netwerken zoeken"
+
+#: popup.c popup-sections.c
+msgid "No matching networks"
+msgstr "Geen overeenkomende netwerken"
+
+#: plugin.c
+msgid "Prefer nm-applet icons"
+msgstr "nm-applet-pictogrammen verkiezen"
+
+#: plugin.c
+msgid "Use the icons your theme provides for nm-applet, if any, instead of the standard network icons."
+msgstr "De pictogrammen die je thema voor nm-applet levert gebruiken, indien aanwezig, in plaats van de standaard netwerkpictogrammen."
+
 #~ msgid "Saved network"
 #~ msgstr "Opgeslagen netwerk"
 

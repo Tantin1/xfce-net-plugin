@@ -359,3 +359,27 @@ msgstr ""
 #: src/plugin.c
 msgid "Turn this off if another network applet (such as nm-applet) is also running."
 msgstr ""
+
+#: src/plugin.c
+msgid "Remember disabled adapters"
+msgstr ""
+
+#: src/plugin.c
+msgid "Adapters you turn off stay off after restarting."
+msgstr ""
+
+#: src/popup.c src/popup-sections.c
+msgid "Search networks"
+msgstr ""
+
+#: src/popup.c src/popup-sections.c
+msgid "No matching networks"
+msgstr ""
+
+#: src/plugin.c
+msgid "Prefer nm-applet icons"
+msgstr ""
+
+#: src/plugin.c
+msgid "Use the icons your theme provides for nm-applet, if any, instead of the standard network icons."
+msgstr ""

@@ -1,6 +1,10 @@
 #include <libxfce4panel/libxfce4panel.h>
 #include <gtk/gtk.h>
-#include <glib/gi18n.h>
+/* gi18n-lib: _() busca siempre en NUESTRO dominio de traducción
+ * (GETTEXT_PACKAGE). En Wayland todos los plugins corren dentro del
+ * proceso del panel y comparten el dominio "por defecto": con gi18n.h
+ * nuestros textos se buscaban en el de otro y salían en inglés. */
+#include <glib/gi18n-lib.h>
 #ifdef HAVE_LIBNOTIFY
 #include <libnotify/notify.h>
 #endif
@@ -18,6 +22,8 @@
 #define DEFAULT_SHOW_NOTIFICATIONS FALSE
 #define DEFAULT_SHOW_FORGET_ACTIVE  FALSE
 #define DEFAULT_SECRET_AGENT        TRUE
+#define DEFAULT_REMEMBER_DISABLED   FALSE
+#define DEFAULT_PREFER_NM_ICONS     FALSE
 
 /* Declaración forward: el cuerpo vive en popup.c y arma el candado con
  * fallback nm-vpn-active-lock → nm-secure-lock → recurso embebido en el .so.
@@ -62,11 +68,17 @@ typedef struct {
     gboolean        notif_ready;
     gboolean        show_notifications;
     gboolean        show_forget_active;
+    gboolean        prefer_nm_icons;   /* íconos de nm-applet antes que los estándar */
 
     /* Agente de secretos: responde cuando NM pide una contraseña.
      * NULL si está apagado en Propiedades o no se pudo publicar. */
     gboolean        secret_agent_enabled;
     NetSecretAgent *agent;
+
+    /* Adaptadores apagados a mano: si remember_disabled está activo, se
+     * guardan (por nombre de interfaz) y se vuelven a apagar al iniciar. */
+    gboolean        remember_disabled;
+    GHashTable     *disabled_ifaces;   /* conjunto de nombres de interfaz */
 
     gint     last_strength;
     gboolean last_secure;
@@ -104,8 +116,7 @@ update_panel_icon (NetPlugin *np,
         if (wired) {
             if (vpn) {
                 GtkWidget *overlay  = gtk_overlay_new ();
-                const gchar *wired_icon_names[] = { "network-wired-symbolic", "nm-device-wired", NULL };
-                GIcon     *wired_gicon = g_themed_icon_new_from_names ((gchar **) wired_icon_names, -1);
+                GIcon     *wired_gicon = net_themed_icon_new ("network-wired-symbolic", "nm-device-wired");
                 GtkWidget *base_img    = gtk_image_new_from_gicon (wired_gicon, GTK_ICON_SIZE_BUTTON);
                 g_object_unref (wired_gicon);
                 gtk_image_set_pixel_size (GTK_IMAGE (base_img), icon_px);
@@ -120,8 +131,7 @@ update_panel_icon (NetPlugin *np,
                 new_icon = overlay;
             } else {
                 {
-                    const gchar *wired_icon_names[] = { "network-wired-symbolic", "nm-device-wired", NULL };
-                    GIcon *wired_gicon = g_themed_icon_new_from_names ((gchar **) wired_icon_names, -1);
+                    GIcon *wired_gicon = net_themed_icon_new ("network-wired-symbolic", "nm-device-wired");
                     new_icon = gtk_image_new_from_gicon (wired_gicon, GTK_ICON_SIZE_BUTTON);
                     g_object_unref (wired_gicon);
                 }
@@ -129,8 +139,7 @@ update_panel_icon (NetPlugin *np,
             }
         } else {
             {
-                const gchar *disc_names[] = { "network-wireless-disconnected-symbolic", "nm-no-connection", NULL };
-                GIcon *disc_gicon = g_themed_icon_new_from_names ((gchar **) disc_names, -1);
+                GIcon *disc_gicon = net_themed_icon_new ("network-wireless-disconnected-symbolic", "nm-no-connection");
                 new_icon = gtk_image_new_from_gicon (disc_gicon, GTK_ICON_SIZE_BUTTON);
                 g_object_unref (disc_gicon);
             }
@@ -215,6 +224,12 @@ load_config (NetPlugin *np)
     np->show_notifications = DEFAULT_SHOW_NOTIFICATIONS;
     np->show_forget_active = DEFAULT_SHOW_FORGET_ACTIVE;
     np->secret_agent_enabled = DEFAULT_SECRET_AGENT;
+    np->remember_disabled    = DEFAULT_REMEMBER_DISABLED;
+    np->prefer_nm_icons      = DEFAULT_PREFER_NM_ICONS;
+    if (!np->disabled_ifaces)
+        np->disabled_ifaces = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                                     g_free, NULL);
+    g_hash_table_remove_all (np->disabled_ifaces);
 
     if (!g_key_file_load_from_file (kf, path, G_KEY_FILE_NONE, &err)) {
         g_clear_error (&err);
@@ -236,9 +251,24 @@ load_config (NetPlugin *np)
     np->show_forget_active = g_key_file_get_boolean (kf, "appearance", "show_forget_active", NULL);
     if (!g_key_file_has_key (kf, "appearance", "show_forget_active", NULL))
         np->show_forget_active = DEFAULT_SHOW_FORGET_ACTIVE;
+    if (g_key_file_has_key (kf, "appearance", "prefer_nm_icons", NULL))
+        np->prefer_nm_icons = g_key_file_get_boolean (kf, "appearance",
+                                                      "prefer_nm_icons", NULL);
     if (g_key_file_has_key (kf, "network", "secret_agent", NULL))
         np->secret_agent_enabled = g_key_file_get_boolean (kf, "network",
                                                            "secret_agent", NULL);
+    if (g_key_file_has_key (kf, "network", "remember_disabled", NULL))
+        np->remember_disabled = g_key_file_get_boolean (kf, "network",
+                                                        "remember_disabled", NULL);
+    {
+        gsize  n = 0;
+        gchar **names = g_key_file_get_string_list (kf, "network",
+                                                    "disabled_devices", &n, NULL);
+        for (gsize i = 0; names && i < n; i++)
+            if (names[i] && *names[i])
+                g_hash_table_add (np->disabled_ifaces, g_strdup (names[i]));
+        g_strfreev (names);
+    }
 
     if (np->plugin_size  == 0) np->plugin_size  = DEFAULT_PLUGIN_SIZE;
     if (np->icon_size    == 0) np->icon_size    = DEFAULT_ICON_SIZE;
@@ -269,7 +299,20 @@ save_config (NetPlugin *np)
     g_key_file_set_boolean  (kf, "appearance", "show_separators",    np->show_separators);
     g_key_file_set_boolean  (kf, "appearance", "show_notifications", np->show_notifications);
     g_key_file_set_boolean  (kf, "appearance", "show_forget_active",  np->show_forget_active);
+    g_key_file_set_boolean  (kf, "appearance", "prefer_nm_icons",     np->prefer_nm_icons);
     g_key_file_set_boolean  (kf, "network",    "secret_agent",        np->secret_agent_enabled);
+    g_key_file_set_boolean  (kf, "network",    "remember_disabled",   np->remember_disabled);
+    if (np->disabled_ifaces && g_hash_table_size (np->disabled_ifaces) > 0) {
+        GPtrArray *arr = g_ptr_array_new ();
+        GHashTableIter it;
+        gpointer key;
+        g_hash_table_iter_init (&it, np->disabled_ifaces);
+        while (g_hash_table_iter_next (&it, &key, NULL))
+            g_ptr_array_add (arr, key);
+        g_key_file_set_string_list (kf, "network", "disabled_devices",
+                                    (const gchar * const *) arr->pdata, arr->len);
+        g_ptr_array_free (arr, TRUE);
+    }
 
     if (!g_key_file_save_to_file (kf, path, &err)) {
         g_warning ("xfce-net-plugin: no se pudo guardar config: %s", err->message);
@@ -287,6 +330,7 @@ typedef struct {
     NetPlugin   *np;
     GtkWidget   *square_check;
     GtkWidget   *forget_active_check;
+    GtkWidget   *nm_icons_check;
     GtkWidget   *plugin_spin;
     GtkWidget   *panel_icon_check;
     GtkWidget   *icon_spin;
@@ -295,6 +339,7 @@ typedef struct {
     GtkWidget   *separators_check;
     GtkWidget   *notifications_check;
     GtkWidget   *agent_check;
+    GtkWidget   *remember_check;
 } PropsDialog;
 
 static void
@@ -371,6 +416,16 @@ on_forget_active_toggled (GtkToggleButton *btn, PropsDialog *pd)
     pd->np->popup->ui_built = FALSE;
 }
 
+static void
+on_nm_icons_toggled (GtkToggleButton *btn, PropsDialog *pd)
+{
+    pd->np->prefer_nm_icons = gtk_toggle_button_get_active (btn);
+    popup_set_prefer_nm_icons (pd->np->prefer_nm_icons);
+    save_config (pd->np);
+    apply_config (pd->np);              /* redibuja el ícono del panel */
+    pd->np->popup->ui_built = FALSE;    /* el popup se rearma al abrirse */
+}
+
 /* ---------- agente de secretos ---------- */
 
 /* Antes de mostrar el diálogo de contraseña se cierra el popup: tiene
@@ -393,6 +448,136 @@ secret_agent_apply (NetPlugin *np)
         net_secret_agent_free (np->agent);
         np->agent = NULL;
     }
+}
+
+/* ---------- recordar adaptadores apagados ---------- */
+
+/* Cada vez que se arma una lista de adaptadores hay que liberar los dos
+ * tipos; esto junta Wi-Fi y Ethernet en una sola lista de NmDevice. */
+static GSList *
+all_switchable_devices (GDBusConnection *conn)
+{
+    GSList *wifi = nm_get_wifi_devices (conn);
+    GSList *eth  = nm_get_ethernet_devices (conn);
+    return g_slist_concat (wifi, eth);
+}
+
+/* Cómo se identifica un adaptador en la lista de apagados.
+ *
+ * El nombre (wlan0, wlan1…) lo reparte el núcleo según el orden en que
+ * encuentra los adaptadores al arrancar, y con adaptadores USB ese orden
+ * puede cambiar entre reinicios: el plugin terminaba apagando el adaptador
+ * equivocado. Por eso se guarda la dirección física de fábrica, que no
+ * cambia. Solo si el adaptador no informa una se usa el nombre, como antes.
+ * Una dirección física siempre tiene ':' y un nombre de interfaz no, así se
+ * distinguen al leer el .ini. */
+static const gchar *
+device_key (NmDevice *dev)
+{
+    return dev->perm_hw ? dev->perm_hw : dev->iface;
+}
+
+/* ¿Este adaptador está en la lista de apagados? Si figura con el nombre
+ * viejo y ahora tiene dirección física, se pasa la entrada a la dirección
+ * (migración de configuraciones anteriores). *migrated queda en TRUE si
+ * hubo que guardar el cambio. */
+static gboolean
+device_is_listed (NetPlugin *np, NmDevice *dev, gboolean *migrated)
+{
+    if (g_hash_table_contains (np->disabled_ifaces, device_key (dev)))
+        return TRUE;
+    if (dev->perm_hw && g_hash_table_contains (np->disabled_ifaces, dev->iface)) {
+        g_hash_table_remove (np->disabled_ifaces, dev->iface);
+        g_hash_table_add (np->disabled_ifaces, g_strdup (dev->perm_hw));
+        if (migrated)
+            *migrated = TRUE;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+/* Vuelve a apagar los adaptadores guardados que NetworkManager haya
+ * vuelto a gestionar (por ejemplo, tras reiniciar la PC). */
+static void
+disabled_devices_apply (NetPlugin *np)
+{
+    if (!np->remember_disabled || !np->conn || !np->disabled_ifaces ||
+        g_hash_table_size (np->disabled_ifaces) == 0)
+        return;
+
+    gboolean migrated = FALSE;
+    GSList *devs = all_switchable_devices (np->conn);
+    for (GSList *l = devs; l; l = l->next) {
+        NmDevice *dev = l->data;
+        if (!device_is_listed (np, dev, &migrated))
+            continue;
+        guint32 state = nm_get_device_state (np->conn, dev->object_path);
+        /* 0 = desconocido, 10 = ya está apagado (no gestionado) */
+        if (state == 0 || state == 10)
+            continue;
+        nm_set_device_enabled_async (np->conn, dev->object_path, FALSE);
+    }
+    nm_device_list_free (devs);
+    if (migrated)
+        save_config (np);
+}
+
+/* Al activar la opción: guarda como "apagados" los adaptadores que lo estén ahora. */
+static void
+disabled_devices_snapshot (NetPlugin *np)
+{
+    if (!np->conn)
+        return;
+    g_hash_table_remove_all (np->disabled_ifaces);
+    GSList *devs = all_switchable_devices (np->conn);
+    for (GSList *l = devs; l; l = l->next) {
+        NmDevice *dev = l->data;
+        if (nm_get_device_state (np->conn, dev->object_path) == 10)
+            g_hash_table_add (np->disabled_ifaces, g_strdup (device_key (dev)));
+    }
+    nm_device_list_free (devs);
+}
+
+/* El popup avisa con el nombre de la interfaz (dentro de una misma sesión el
+ * nombre no cambia); acá se busca el adaptador para guardar su dirección. */
+void
+net_plugin_device_toggled (gpointer np_ptr, const gchar *iface, gboolean enabled)
+{
+    NetPlugin *np = np_ptr;
+    if (!np || !iface || !np->disabled_ifaces)
+        return;
+
+    gchar  *hw   = NULL;
+    GSList *devs = np->conn ? all_switchable_devices (np->conn) : NULL;
+    for (GSList *l = devs; l; l = l->next) {
+        NmDevice *dev = l->data;
+        if (g_strcmp0 (dev->iface, iface) == 0) {
+            hw = g_strdup (dev->perm_hw);
+            break;
+        }
+    }
+    nm_device_list_free (devs);
+
+    if (enabled) {
+        /* Borrar las dos formas: la dirección y un nombre viejo que quedara. */
+        if (hw)
+            g_hash_table_remove (np->disabled_ifaces, hw);
+        g_hash_table_remove (np->disabled_ifaces, iface);
+    } else {
+        g_hash_table_remove (np->disabled_ifaces, iface);
+        g_hash_table_add (np->disabled_ifaces, g_strdup (hw ? hw : iface));
+    }
+    g_free (hw);
+    save_config (np);
+}
+
+static void
+on_remember_toggled (GtkToggleButton *btn, PropsDialog *pd)
+{
+    pd->np->remember_disabled = gtk_toggle_button_get_active (btn);
+    if (pd->np->remember_disabled)
+        disabled_devices_snapshot (pd->np);
+    save_config (pd->np);
 }
 
 static void
@@ -429,12 +614,14 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
     GtkWidget *content = gtk_dialog_get_content_area (GTK_DIALOG (dialog));
     gtk_container_set_border_width (GTK_CONTAINER (content), 12);
 
-    GtkWidget *frame = gtk_frame_new (_("Appearance"));
+    /* Dos pestañas (Apariencia y Red) en vez de dos marcos apilados: la
+     * ventana queda más baja y entra en pantallas chicas. */
+    GtkWidget *notebook = gtk_notebook_new ();
+
     GtkWidget *grid  = gtk_grid_new ();
     gtk_grid_set_row_spacing    (GTK_GRID (grid), 6);
     gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
-    gtk_container_set_border_width (GTK_CONTAINER (grid), 8);
-    gtk_container_add (GTK_CONTAINER (frame), grid);
+    gtk_container_set_border_width (GTK_CONTAINER (grid), 12);
 
     gint row = 0;
 
@@ -518,6 +705,14 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
     gtk_grid_attach (GTK_GRID (grid), pd->forget_active_check, 0, row, 2, 1);
     row++;
 
+    pd->nm_icons_check = gtk_check_button_new_with_label (_("Prefer nm-applet icons"));
+    gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (pd->nm_icons_check),
+                                  np->prefer_nm_icons);
+    gtk_widget_set_tooltip_text (pd->nm_icons_check,
+        _("Use the icons your theme provides for nm-applet, if any, instead of the standard network icons."));
+    gtk_grid_attach (GTK_GRID (grid), pd->nm_icons_check, 0, row, 2, 1);
+    row++;
+
 #ifdef HAVE_LIBNOTIFY
     pd->notifications_check = gtk_check_button_new_with_label (_("Show notifications"));
     gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (pd->notifications_check),
@@ -534,15 +729,13 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
     gtk_grid_attach (GTK_GRID (grid), notif_hint, 0, row, 2, 1);
 #endif
 
-    gtk_box_pack_start (GTK_BOX (content), frame, FALSE, FALSE, 0);
+    gtk_notebook_append_page (GTK_NOTEBOOK (notebook), grid,
+                              gtk_label_new (_("Appearance")));
 
-    /* Sección "Red": comportamiento, no apariencia. */
-    GtkWidget *net_frame = gtk_frame_new (_("Network"));
+    /* Pestaña "Red": comportamiento, no apariencia. */
     GtkWidget *net_grid  = gtk_grid_new ();
     gtk_grid_set_row_spacing (GTK_GRID (net_grid), 6);
-    gtk_container_set_border_width (GTK_CONTAINER (net_grid), 8);
-    gtk_container_add (GTK_CONTAINER (net_frame), net_grid);
-    gtk_widget_set_margin_top (net_frame, 8);
+    gtk_container_set_border_width (GTK_CONTAINER (net_grid), 12);
 
     pd->agent_check = gtk_check_button_new_with_label (_("Respond to password requests"));
     gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (pd->agent_check),
@@ -557,9 +750,27 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
     gtk_style_context_add_class (gtk_widget_get_style_context (agent_hint), "dim-label");
     gtk_grid_attach (GTK_GRID (net_grid), agent_hint, 0, 1, 1, 1);
 
-    gtk_box_pack_start (GTK_BOX (content), net_frame, FALSE, FALSE, 0);
+    pd->remember_check = gtk_check_button_new_with_label (_("Remember disabled adapters"));
+    gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (pd->remember_check),
+                                  np->remember_disabled);
+    gtk_widget_set_margin_top (pd->remember_check, 6);
+    gtk_grid_attach (GTK_GRID (net_grid), pd->remember_check, 0, 2, 1, 1);
+
+    GtkWidget *remember_hint = gtk_label_new (_("Adapters you turn off stay off after restarting."));
+    gtk_label_set_xalign (GTK_LABEL (remember_hint), 0.0);
+    gtk_label_set_line_wrap (GTK_LABEL (remember_hint), TRUE);
+    gtk_label_set_max_width_chars (GTK_LABEL (remember_hint), 35);
+    gtk_widget_set_margin_start (remember_hint, 24);
+    gtk_style_context_add_class (gtk_widget_get_style_context (remember_hint), "dim-label");
+    gtk_grid_attach (GTK_GRID (net_grid), remember_hint, 0, 3, 1, 1);
+
+    gtk_notebook_append_page (GTK_NOTEBOOK (notebook), net_grid,
+                              gtk_label_new (_("Network")));
+    gtk_box_pack_start (GTK_BOX (content), notebook, TRUE, TRUE, 0);
     g_signal_connect (pd->agent_check, "toggled",
                       G_CALLBACK (on_agent_toggled), pd);
+    g_signal_connect (pd->remember_check, "toggled",
+                      G_CALLBACK (on_remember_toggled), pd);
 
     g_signal_connect (pd->square_check,     "toggled",
                       G_CALLBACK (on_square_toggled),      pd);
@@ -577,6 +788,8 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
                       G_CALLBACK (on_separators_toggled), pd);
     g_signal_connect (pd->forget_active_check, "toggled",
                       G_CALLBACK (on_forget_active_toggled), pd);
+    g_signal_connect (pd->nm_icons_check, "toggled",
+                      G_CALLBACK (on_nm_icons_toggled), pd);
 #ifdef HAVE_LIBNOTIFY
     g_signal_connect (pd->notifications_check, "toggled",
                       G_CALLBACK (on_notifications_toggled), pd);
@@ -620,6 +833,10 @@ on_nm_changed_cb (gpointer user_data)
     np->refresh_timeout_id = 0;
     if (!np->conn)
         return G_SOURCE_REMOVE;
+
+    /* Si hay adaptadores guardados como apagados que NM volvió a encender,
+     * se apagan de nuevo (antes del refresco, que ya verá el estado final). */
+    disabled_devices_apply (np);
 
     /* Instantánea: todas las lecturas de este refresco salen de una sola
      * foto del bus en vez de decenas de llamadas sueltas. */
@@ -856,6 +1073,7 @@ net_plugin_new (XfcePanelPlugin *plugin)
     np->notif_ready    = FALSE;
 
     load_config (np);
+    popup_set_prefer_nm_icons (np->prefer_nm_icons);
 
 
     np->button = gtk_toggle_button_new ();
@@ -866,8 +1084,7 @@ net_plugin_new (XfcePanelPlugin *plugin)
 
     np->icon_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 
-    const gchar *init_disc_names[] = { "network-wireless-disconnected-symbolic", "nm-no-connection", NULL };
-    GIcon     *init_disc_gicon = g_themed_icon_new_from_names ((gchar **) init_disc_names, -1);
+    GIcon     *init_disc_gicon = net_themed_icon_new ("network-wireless-disconnected-symbolic", "nm-no-connection");
     GtkWidget *init_icon       = gtk_image_new_from_gicon (init_disc_gicon, GTK_ICON_SIZE_BUTTON);
     g_object_unref (init_disc_gicon);
     gtk_image_set_pixel_size (GTK_IMAGE (init_icon), np->icon_size);
@@ -945,6 +1162,8 @@ net_plugin_free (XfcePanelPlugin *plugin, NetPlugin *np)
     if (np->button_css)
         g_object_unref (np->button_css);
     g_free (np->last_ssid);
+    if (np->disabled_ifaces)
+        g_hash_table_destroy (np->disabled_ifaces);
     g_free (np);
 }
 
@@ -953,7 +1172,8 @@ net_plugin_construct (XfcePanelPlugin *plugin)
 {
     bindtextdomain (GETTEXT_PACKAGE, LOCALEDIR);
     bind_textdomain_codeset (GETTEXT_PACKAGE, "UTF-8");
-    textdomain (GETTEXT_PACKAGE);
+    /* Sin textdomain(): cambia el dominio por defecto de TODO el proceso del
+     * panel (y de los demás plugins). _() ya nombra nuestro dominio. */
 #ifdef HAVE_LIBNOTIFY
     notify_init ("xfce-net-plugin");
 #endif

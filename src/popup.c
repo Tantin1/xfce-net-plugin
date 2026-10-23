@@ -6,6 +6,9 @@
 
 #include "popup-private.h"
 #include <string.h>
+#ifdef GDK_WINDOWING_WAYLAND
+#include <gdk/gdkwayland.h>
+#endif
 
 typedef struct {
     NetPopup  *popup;
@@ -16,6 +19,7 @@ typedef struct {
 static void     op_free         (gpointer p);
 static gboolean on_button_press (GtkWidget *widget, GdkEventButton *event, NetPopup *popup);
 static gboolean on_focus_out    (GtkWidget *widget, GdkEventFocus *ev, NetPopup *popup);
+static gboolean popup_is_wayland (GtkWidget *w);
 
 /* Libera una cadena sensible (contraseña) sobreescribiéndola primero con
  * ceros, para que el texto no quede flotando en la memoria liberada.
@@ -109,8 +113,37 @@ popup_menu_closed (NetPopup *popup)
 
 /* ---------- posicionamiento ---------- */
 
+/* Dónde va el popup a lo largo del panel (eje X en un panel horizontal,
+ * eje Y en uno vertical). Regla:
+ *   1. centrado sobre el plugin;
+ *   2. si no entra, se corre hasta quedar dentro de la pantalla;
+ *   3. "imán": si contra un borde queda un hueco más chico que medio popup,
+ *      se pega a ese borde.
+ * Así, con el plugin cerca de un extremo el popup se pega a ESE extremo, y
+ * con el plugin hacia el centro queda centrado sobre él; nunca quedan huecos
+ * chicos que se vean descuidados. start/len: tramo disponible; btn/btn_len:
+ * el botón; size: tamaño del popup. Devuelve el comienzo del popup. */
+static gint
+place_along_panel (gint start, gint len, gint btn, gint btn_len, gint size)
+{
+    gint end = start + len;
+    if (size >= len)
+        return start;
+
+    gint p = btn + btn_len / 2 - size / 2;
+    if (p < start)        p = start;
+    if (p + size > end)   p = end - size;
+
+    gint magnet = size / 2;
+    if (p - start < magnet)
+        p = start;
+    else if (end - (p + size) < magnet)
+        p = end - size;
+    return p;
+}
+
 static void
-position_popup (NetPopup *popup, GtkWidget *button)
+position_popup (NetPopup *popup, GtkWidget *button, GtkArrowType arrow)
 {
     GdkWindow      *gdk_win;
     GdkMonitor     *monitor;
@@ -131,16 +164,236 @@ position_popup (NetPopup *popup, GtkWidget *button)
                   gtk_widget_get_display (button), bx + bw / 2, by + bh / 2);
     gdk_monitor_get_workarea (monitor, &workarea);
 
-    x = bx;
-    y = by + bh;
-
-    if (x + pw > workarea.x + workarea.width)
-        x = workarea.x + workarea.width - pw;
-
-    if (y + ph > workarea.y + workarea.height)
-        y = by - ph;
+    if (arrow == GTK_ARROW_LEFT || arrow == GTK_ARROW_RIGHT) {
+        /* Panel vertical: al costado del panel, ubicado a lo alto. */
+        y = place_along_panel (workarea.y, workarea.height, by, bh, ph);
+        if (arrow == GTK_ARROW_RIGHT) {          /* panel a la izquierda */
+            x = bx + bw;
+            if (x + pw > workarea.x + workarea.width)
+                x = bx - pw;
+        } else {                                 /* panel a la derecha */
+            x = bx - pw;
+            if (x < workarea.x)
+                x = bx + bw;
+        }
+    } else {
+        /* Panel horizontal: encima o debajo del panel, ubicado a lo ancho. */
+        x = place_along_panel (workarea.x, workarea.width, bx, bw, pw);
+        if (arrow == GTK_ARROW_UP) {             /* panel abajo */
+            y = by - ph;
+            if (y < workarea.y)
+                y = by + bh;
+        } else {                                 /* panel arriba */
+            y = by + bh;
+            if (y + ph > workarea.y + workarea.height)
+                y = by - ph;
+        }
+    }
 
     gtk_window_move (GTK_WINDOW (popup->window), x, y);
+}
+
+/* ---------- Wayland: popup pegado al botón ----------
+ *
+ * En Wayland una ventana común no puede elegir dónde aparece: la ubica el
+ * compositor (por eso el popup salía centrado). Lo que sí se puede es
+ * declararla "popup hija" del panel (transient_for + tipo POPUP_MENU) y
+ * pedirle al compositor que la acomode junto a un rectángulo (el botón) con
+ * gdk_window_move_to_rect. El compositor la corre o la da vuelta sola si no
+ * entra en la pantalla. Es el mismo mecanismo que usan los menús del panel.
+ *
+ * La captura (grab) tiene que pedirse ANTES de mostrar la ventana: así el
+ * compositor le da el teclado (búsqueda, contraseña) y la cierra solo al
+ * clickear afuera. Por eso se usa la función "prepare" de gdk_seat_grab,
+ * que muestra la ventana dentro del grab (igual que GtkMenu).
+ * El camino X11 no cambia. */
+
+/* Mensajes de diagnóstico de Wayland. No se ven salvo que se lance el panel
+ * con G_MESSAGES_DEBUG=xfce-net-plugin (o =all). */
+#define WL_DEBUG(...) g_log ("xfce-net-plugin", G_LOG_LEVEL_DEBUG, __VA_ARGS__)
+
+static gboolean
+popup_is_wayland (GtkWidget *w)
+{
+#ifdef GDK_WINDOWING_WAYLAND
+    return GDK_IS_WAYLAND_DISPLAY (gtk_widget_get_display (w));
+#else
+    (void) w;
+    return FALSE;
+#endif
+}
+
+static void
+wl_prepare_show (GdkSeat *seat, GdkWindow *window, gpointer data)
+{
+    (void) seat; (void) window;
+    gtk_widget_show_all (GTK_WIDGET (data));
+}
+
+/* Clic con la captura interna de GTK activa: todos los clics del programa
+ * (también los del panel y del botón del plugin) llegan primero acá. Si el
+ * clic cayó fuera del popup, se cierra y el clic se consume: así tocar el
+ * botón del plugin cierra el popup sin volver a abrirlo. Hace falta porque
+ * el compositor no cierra el popup cuando el clic es en otra ventana del
+ * mismo programa (el panel). Lo mismo hacen los menús de GTK. */
+static gboolean
+wl_on_button_press (GtkWidget *w, GdkEventButton *ev, NetPopup *popup)
+{
+    (void) w;
+    GdkWindow *own = gtk_widget_get_window (popup->window);
+
+    /* Durante la captura, Wayland entrega los clics del panel como si fueran
+     * en la ventana del popup, pero con coordenadas fuera de su área. Por eso
+     * no alcanza con mirar la ventana: hay que pasar el punto a coordenadas
+     * del popup y ver si cae dentro. */
+    gboolean   inside = FALSE;
+    gdouble    x = ev->x, y = ev->y;
+    GdkWindow *win = ev->window;
+    while (win && win != own) {
+        gdk_window_coords_to_parent (win, x, y, &x, &y);
+        win = gdk_window_get_effective_parent (win);
+    }
+    if (win == own)
+        inside = x >= 0 && y >= 0 &&
+                 x < gtk_widget_get_allocated_width  (popup->window) &&
+                 y < gtk_widget_get_allocated_height (popup->window);
+
+    WL_DEBUG ("wayland: clic %s del popup en (%.0f, %.0f) (menú abierto: %s)",
+              inside ? "dentro" : "fuera", x, y,
+              (popup->ctx_menu || popup->menu_idle_id) ? "sí" : "no");
+    if (inside)
+        return GDK_EVENT_PROPAGATE;     /* clic dentro del popup */
+    if (popup->ctx_menu || popup->menu_idle_id)
+        return GDK_EVENT_PROPAGATE;
+    popup_hide (popup);
+    return GDK_EVENT_STOP;
+}
+
+/* El compositor cerró el popup por su cuenta (clic afuera, otra ventana
+ * tomó el foco): GDK oculta la ventana pero GTK todavía la cree visible.
+ * Hay que pasar por popup_hide para que quede todo en orden. */
+static gboolean
+wl_on_popup_gone (GtkWidget *w, GdkEvent *ev, NetPopup *popup)
+{
+    (void) w;
+    WL_DEBUG ("wayland: el popup recibió %s",
+              ev->type == GDK_GRAB_BROKEN ? "grab-broken" : "unmap");
+    /* Abrir el menú contextual le saca el grab al popup: no es cerrar. */
+    if (popup->ctx_menu || popup->menu_idle_id)
+        return FALSE;
+    if (gtk_widget_get_visible (popup->window))
+        popup_hide (popup);
+    return FALSE;
+}
+
+static void
+popup_show_wayland (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button)
+{
+    GtkWidget *toplevel = gtk_widget_get_toplevel (button);
+    GdkWindow *gdk_win;
+
+    if (!g_object_get_data (G_OBJECT (popup->window), "wl-handlers")) {
+        g_signal_connect (popup->window, "unmap-event",
+                          G_CALLBACK (wl_on_popup_gone), popup);
+        g_signal_connect (popup->window, "grab-broken-event",
+                          G_CALLBACK (wl_on_popup_gone), popup);
+        g_object_set_data (G_OBJECT (popup->window), "wl-handlers",
+                           GINT_TO_POINTER (1));
+    }
+
+    if (GTK_IS_WINDOW (toplevel))
+        gtk_window_set_transient_for (GTK_WINDOW (popup->window),
+                                      GTK_WINDOW (toplevel));
+    gtk_widget_realize (popup->window);
+    gdk_win = gtk_widget_get_window (popup->window);
+
+    /* Rectángulo del botón, en coordenadas de la ventana del panel. */
+    GdkRectangle rect = { 0, 0, 1, 1 };
+    gtk_widget_translate_coordinates (button, toplevel, 0, 0, &rect.x, &rect.y);
+    rect.width  = MAX (gtk_widget_get_allocated_width  (button), 1);
+    rect.height = MAX (gtk_widget_get_allocated_height (button), 1);
+
+    /* Hacia dónde abrir según dónde esté el panel. Igual que en X11: el
+     * popup arranca alineado con el botón y, si no entra, se CORRE a lo
+     * largo del panel hasta tocar el borde de la pantalla. Solo se "da
+     * vuelta" en el otro eje (abrir hacia el otro lado del panel). Pedir
+     * FLIP en los dos ejes lo espejaba en vez de correrlo y quedaba un
+     * espacio contra el borde. */
+    GdkGravity    rect_anchor = GDK_GRAVITY_SOUTH_WEST;   /* panel arriba */
+    GdkGravity    win_anchor  = GDK_GRAVITY_NORTH_WEST;
+    GdkAnchorHints hints      = GDK_ANCHOR_FLIP_Y | GDK_ANCHOR_SLIDE_X;
+    switch (xfce_panel_plugin_arrow_type (plugin)) {
+    case GTK_ARROW_UP:      /* panel abajo: abrir hacia arriba */
+        rect_anchor = GDK_GRAVITY_NORTH_WEST;
+        win_anchor  = GDK_GRAVITY_SOUTH_WEST;
+        break;
+    case GTK_ARROW_RIGHT:   /* panel a la izquierda */
+        rect_anchor = GDK_GRAVITY_NORTH_EAST;
+        win_anchor  = GDK_GRAVITY_NORTH_WEST;
+        hints       = GDK_ANCHOR_FLIP_X | GDK_ANCHOR_SLIDE_Y;
+        break;
+    case GTK_ARROW_LEFT:    /* panel a la derecha */
+        rect_anchor = GDK_GRAVITY_NORTH_WEST;
+        win_anchor  = GDK_GRAVITY_NORTH_EAST;
+        hints       = GDK_ANCHOR_FLIP_X | GDK_ANCHOR_SLIDE_Y;
+        break;
+    default:
+        break;
+    }
+    /* Misma regla que en X11 (place_along_panel). En Wayland el plugin no
+     * sabe dónde está el panel en la pantalla (el compositor no lo informa),
+     * así que se usa el propio panel como referencia: exacto cuando el panel
+     * ocupa todo el ancho (o alto) de la pantalla, aproximado si es corto.
+     * Se le pide al compositor que ponga el comienzo del popup en el punto
+     * calculado; SLIDE corrige si igual no entrara. */
+    {
+        GtkRequisition pref;
+        gtk_widget_get_preferred_size (popup->window, NULL, &pref);
+        if (hints & GDK_ANCHOR_SLIDE_X) {        /* panel horizontal */
+            rect.x = place_along_panel (0, gtk_widget_get_allocated_width (toplevel),
+                                        rect.x, rect.width, pref.width);
+            rect.width = 1;
+        } else {                                  /* panel vertical */
+            rect.y = place_along_panel (0, gtk_widget_get_allocated_height (toplevel),
+                                        rect.y, rect.height, pref.height);
+            rect.height = 1;
+        }
+        WL_DEBUG ("wayland: panel %dx%d, popup %dx%d, comienzo en (%d, %d)",
+                  gtk_widget_get_allocated_width (toplevel),
+                  gtk_widget_get_allocated_height (toplevel),
+                  pref.width, pref.height, rect.x, rect.y);
+    }
+
+    gdk_window_move_to_rect (gdk_win, &rect, rect_anchor, win_anchor,
+                             hints, 0, 0);
+
+    GdkSeat *seat = gdk_display_get_default_seat (gtk_widget_get_display (popup->window));
+    GdkGrabStatus st = gdk_seat_grab (seat, gdk_win, GDK_SEAT_CAPABILITY_ALL,
+                                      TRUE, NULL, NULL,
+                                      wl_prepare_show, popup->window);
+    popup->grab_active = (st == GDK_GRAB_SUCCESS);
+    WL_DEBUG ("wayland: panel=%s, captura=%d (0 = conseguida), visible=%s",
+              G_OBJECT_TYPE_NAME (toplevel), (gint) st,
+              gtk_widget_get_visible (popup->window) ? "sí" : "no");
+    if (popup->grab_active) {
+        /* Captura interna de GTK (ver wl_on_button_press). El popup va al
+         * mismo grupo de ventanas que el panel para que abarque sus clics. */
+        if (GTK_IS_WINDOW (toplevel))
+            gtk_window_group_add_window (gtk_window_get_group (GTK_WINDOW (toplevel)),
+                                         GTK_WINDOW (popup->window));
+        gtk_grab_add (popup->window);
+        WL_DEBUG ("wayland: captura interna de GTK activa: %s",
+                  gtk_widget_has_grab (popup->window) ? "sí" : "no");
+        popup->press_handler =
+            g_signal_connect (popup->window, "button-press-event",
+                              G_CALLBACK (wl_on_button_press), popup);
+    } else {
+        /* Sin grab: mostrar igual y cerrar al perder el foco. */
+        gtk_widget_show_all (popup->window);
+        popup->press_handler =
+            g_signal_connect (popup->window, "focus-out-event",
+                              G_CALLBACK (on_focus_out), popup);
+    }
 }
 
 /* ---------- SSID de la conexión primaria ---------- */
@@ -591,6 +844,30 @@ make_lock_overlay_image (gint icon_size)
     return lock_img;
 }
 
+/* ---------- orden de los íconos (estándar o nm-applet) ---------- */
+
+static gboolean prefer_nm_icons = FALSE;
+
+void
+popup_set_prefer_nm_icons (gboolean prefer)
+{
+    prefer_nm_icons = prefer;
+}
+
+/* GTK recorre el tema activo (y los que hereda) probando los dos nombres
+ * antes de caer al tema genérico de reserva (hicolor). Así, aunque se
+ * prefiera nm-applet, si el tema no tiene ese ícono pero sí el estándar, se
+ * usa el estándar del tema y no la versión genérica de hicolor. */
+GIcon *
+net_themed_icon_new (const gchar *freedesktop_name, const gchar *nm_name)
+{
+    const gchar *names[3];
+    names[0] = prefer_nm_icons ? nm_name : freedesktop_name;
+    names[1] = prefer_nm_icons ? freedesktop_name : nm_name;
+    names[2] = NULL;
+    return g_themed_icon_new_from_names ((gchar **) names, -1);
+}
+
 /* ---------- ícono de señal Wi-Fi (usado también por plugin.c) ----------
  *
  * Comportamiento:
@@ -621,9 +898,8 @@ make_signal_icon (gint strength, gboolean secure, gint icon_size)
     g_snprintf (fd_name, sizeof fd_name,
                 "network-wireless-signal-%s-symbolic", fd_level);
 
-    /* Ícono de señal: nm-signal-* con fallback freedesktop. */
-    const gchar *signal_names[] = { fd_name, nm_name, NULL };
-    GIcon     *signal_gicon = g_themed_icon_new_from_names ((gchar **) signal_names, -1);
+    /* Ícono de señal: estándar o nm-signal-*, según la preferencia. */
+    GIcon     *signal_gicon = net_themed_icon_new (fd_name, nm_name);
     GtkWidget *signal_img   = gtk_image_new_from_gicon (signal_gicon, GTK_ICON_SIZE_MENU);
     g_object_unref (signal_gicon);
     gtk_image_set_pixel_size (GTK_IMAGE (signal_img), icon_size);
@@ -663,6 +939,7 @@ void
 device_switch_data_free (DeviceSwitchData *d)
 {
     g_free (d->device_path);
+    g_free (d->iface);
     g_free (d);
 }
 
@@ -672,6 +949,8 @@ on_device_switch_toggled (GtkSwitch *sw, gboolean state, gpointer user_data)
     (void) sw;
     DeviceSwitchData *d = user_data;
     nm_set_device_enabled_async (d->conn, d->device_path, state);
+    if (d->popup && d->popup->plugin_ref && d->iface)
+        net_plugin_device_toggled (d->popup->plugin_ref, d->iface, state);
     return FALSE;
 }
 
@@ -984,6 +1263,13 @@ on_hidden_network_clicked (GtkWidget *btn, NetPopup *popup)
     GDBusConnection *conn = popup->conn;
     if (!conn) return;
 
+    /* Wayland: el popup tiene la captura del teclado; con él abierto el
+     * diálogo no recibe lo que se escribe. Se cierra antes, igual que hace
+     * el agente de contraseñas. */
+    gboolean wayland = popup_is_wayland (popup->window);
+    if (wayland)
+        popup_hide (popup);
+
     HiddenData *hd = g_new0 (HiddenData, 1);
     hd->conn = conn;
 
@@ -1050,6 +1336,10 @@ on_hidden_network_clicked (GtkWidget *btn, NetPopup *popup)
     g_signal_connect (dialog, "destroy",  G_CALLBACK (on_hidden_destroy),  hd);
     gtk_widget_show_all (dialog);
     gtk_widget_hide (hd->status_label);
+    if (wayland) {
+        gtk_window_present (GTK_WINDOW (dialog));
+        gtk_widget_grab_focus (hd->ssid_entry);
+    }
 }
 
 void
@@ -1095,12 +1385,142 @@ on_advanced_clicked (GtkWidget *btn, gpointer user_data)
                "(nm-connection-editor, cmst, connman-gtk o nmtui)");
 }
 
+/* ---------- búsqueda de redes ----------
+ *
+ * La franja de búsqueda está oculta. Aparece al empezar a escribir con el
+ * foco en la lista (o en cualquier lugar que no sea un campo de texto) o con
+ * Ctrl+F. Escape la borra y la oculta; un segundo Escape cierra el popup.
+ * El filtrado en sí vive en popup-sections.c (apply_search_filter). */
+
+static gboolean
+search_is_open (NetPopup *popup)
+{
+    return popup->search_bar && gtk_widget_get_visible (popup->search_bar);
+}
+
+/* El popup no se puede agrandar al mostrar la franja: crecería hacia el
+ * panel y lo taparía. Por eso a la lista se le resta lo que ocupa la franja
+ * (incluido el aviso "No hay redes que coincidan" cuando está visible). */
+void
+search_sync_height (NetPopup *popup)
+{
+    if (!popup->scroll || popup->popup_height <= 0) return;
+    gint used = 0;
+    if (search_is_open (popup))
+        gtk_widget_get_preferred_height (popup->search_bar, NULL, &used);
+    gtk_widget_set_size_request (popup->scroll, popup->popup_width,
+                                 MAX (popup->popup_height - used, 100));
+}
+
+static void
+search_open (NetPopup *popup)
+{
+    if (!popup->search_bar) return;
+    gtk_widget_show (popup->search_bar);
+    search_sync_height (popup);
+    /* Sin seleccionar el texto que ya hubiera: la letra nueva va al final. */
+    gtk_entry_grab_focus_without_selecting (GTK_ENTRY (popup->search_entry));
+}
+
+/* Borra la búsqueda y oculta la franja. Si el foco estaba en el campo, lo
+ * baja a la lista para poder seguir con el teclado. */
+static void
+search_close (NetPopup *popup)
+{
+    if (!popup->search_bar) return;
+    gboolean had_focus = gtk_widget_has_focus (popup->search_entry);
+    gtk_entry_set_text (GTK_ENTRY (popup->search_entry), "");
+    gtk_widget_hide (popup->search_bar);
+    search_sync_height (popup);
+    if (had_focus && gtk_widget_get_visible (popup->window))
+        gtk_widget_child_focus (popup->scroll, GTK_DIR_TAB_FORWARD);
+}
+
+void
+on_search_button_clicked (GtkWidget *btn, NetPopup *popup)
+{
+    (void) btn;
+    if (search_is_open (popup))
+        search_close (popup);
+    else
+        search_open (popup);
+}
+
+static void
+on_search_changed (GtkEditable *editable, NetPopup *popup)
+{
+    (void) editable;
+    apply_search_filter (popup);
+    /* Volver arriba: las coincidencias quedan a la vista. */
+    GtkAdjustment *adj = gtk_scrolled_window_get_vadjustment (
+                             GTK_SCROLLED_WINDOW (popup->scroll));
+    gtk_adjustment_set_value (adj, gtk_adjustment_get_lower (adj));
+}
+
+/* Teclas de la búsqueda. Devuelve TRUE si la tecla fue consumida. */
+static gboolean
+search_handle_key (NetPopup *popup, GdkEventKey *event)
+{
+    if (!popup->search_entry)
+        return FALSE;
+
+    GtkWidget *focus = gtk_window_get_focus (GTK_WINDOW (popup->window));
+    guint      mods  = event->state & gtk_accelerator_get_default_mod_mask ();
+
+    /* Ctrl+F: abrir la búsqueda (o volver al campo si ya estaba abierta). */
+    if ((mods & GDK_CONTROL_MASK) &&
+        (event->keyval == GDK_KEY_f || event->keyval == GDK_KEY_F)) {
+        search_open (popup);
+        return TRUE;
+    }
+
+    /* Escape con la búsqueda abierta: borrarla y ocultarla (no cierra). */
+    if (event->keyval == GDK_KEY_Escape && search_is_open (popup)) {
+        search_close (popup);
+        return TRUE;
+    }
+
+    /* Desde el campo, Enter o flecha abajo bajan a la primera red visible. */
+    if (focus == popup->search_entry &&
+        (event->keyval == GDK_KEY_Down   || event->keyval == GDK_KEY_KP_Down ||
+         event->keyval == GDK_KEY_Return || event->keyval == GDK_KEY_KP_Enter)) {
+        gtk_widget_child_focus (popup->scroll, GTK_DIR_TAB_FORWARD);
+        return TRUE;
+    }
+
+    /* Una letra escrita fuera de cualquier campo de texto (por ejemplo, con
+     * el foco en una fila) arranca la búsqueda. El espacio no cuenta: sobre
+     * una fila abre el expand. Dentro del campo de contraseña tampoco: ahí
+     * las letras son de la contraseña. */
+    if (mods & (GDK_CONTROL_MASK | GDK_MOD1_MASK | GDK_SUPER_MASK))
+        return FALSE;
+    if (focus && GTK_IS_EDITABLE (focus))
+        return FALSE;
+
+    gunichar uc = gdk_keyval_to_unicode (event->keyval);
+    if (!uc || uc == ' ' || !g_unichar_isprint (uc))
+        return FALSE;
+
+    search_open (popup);
+    gchar buf[8];
+    gint  len = g_unichar_to_utf8 (uc, buf);
+    buf[len]  = '\0';
+    GtkEditable *ed = GTK_EDITABLE (popup->search_entry);
+    gint pos = (gint) gtk_entry_get_text_length (GTK_ENTRY (popup->search_entry));
+    gtk_editable_insert_text (ed, buf, len, &pos);
+    gtk_editable_set_position (ed, pos);
+    return TRUE;
+}
+
 /* ---------- event handlers de la ventana ---------- */
 
 static gboolean
 on_key_press (GtkWidget *widget, GdkEventKey *event, NetPopup *popup)
 {
     (void) widget;
+    if (search_handle_key (popup, event))
+        return GDK_EVENT_STOP;
+
     if (event->keyval == GDK_KEY_Escape) {
         popup_hide (popup);
         return GDK_EVENT_STOP;
@@ -1223,6 +1643,37 @@ popup_create (XfcePanelPlugin *plugin, GtkWidget *button)
     popup->top_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
     gtk_box_pack_start (GTK_BOX (outer_box), popup->top_box, FALSE, FALSE, 0);
 
+    /* Franja de búsqueda: fija (no se desplaza con la lista) y oculta hasta
+     * que se usa. no_show_all evita que el show_all de popup_show la muestre. */
+    {
+        popup->search_bar = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
+        gtk_widget_set_margin_start  (popup->search_bar, 12);
+        gtk_widget_set_margin_end    (popup->search_bar, 12);
+        gtk_widget_set_margin_bottom (popup->search_bar, 8);
+
+        popup->search_entry = gtk_search_entry_new ();
+        gtk_entry_set_placeholder_text (GTK_ENTRY (popup->search_entry),
+                                        _("Search networks"));
+        g_signal_connect (popup->search_entry, "changed",
+                          G_CALLBACK (on_search_changed), popup);
+        gtk_box_pack_start (GTK_BOX (popup->search_bar), popup->search_entry,
+                            FALSE, FALSE, 0);
+        gtk_widget_show (popup->search_entry);
+
+        popup->search_empty = gtk_label_new (_("No matching networks"));
+        gtk_style_context_add_class (gtk_widget_get_style_context (popup->search_empty),
+                                     "dim-label");
+        gtk_label_set_xalign (GTK_LABEL (popup->search_empty), 0.0);
+        gtk_box_pack_start (GTK_BOX (popup->search_bar), popup->search_empty,
+                            FALSE, FALSE, 0);
+        gtk_widget_set_no_show_all (popup->search_empty, TRUE);
+        gtk_widget_hide (popup->search_empty);
+
+        gtk_box_pack_start (GTK_BOX (outer_box), popup->search_bar, FALSE, FALSE, 0);
+        gtk_widget_set_no_show_all (popup->search_bar, TRUE);
+        gtk_widget_hide (popup->search_bar);
+    }
+
     scroll = gtk_scrolled_window_new (NULL, NULL);
     gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll),
                                     GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
@@ -1273,8 +1724,6 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
             GDBusConnection *conn,
             gint popup_width, gint popup_height)
 {
-    (void) plugin;
-
     popup->conn         = conn;
     popup->popup_width  = popup_width;
     popup->popup_height = popup_height;
@@ -1347,12 +1796,14 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
     if (!popup->signal_ids)
         popup->signal_ids = nm_subscribe_signals (conn, on_nm_signal_popup, popup);
 
-    gtk_widget_realize (popup->window);
-    position_popup (popup, button);
-    gtk_widget_show_all (popup->window);
-
     popup->button = button;
-    {
+    if (popup_is_wayland (popup->window)) {
+        popup_show_wayland (popup, plugin, button);
+    } else {
+        gtk_widget_realize (popup->window);
+        position_popup (popup, button, xfce_panel_plugin_arrow_type (plugin));
+        gtk_widget_show_all (popup->window);
+
         /* Diferir el grab a cuando la ventana esté realmente visible. */
         GrabData *gd = g_new0 (GrabData, 1);
         gd->popup  = popup;
@@ -1395,6 +1846,9 @@ popup_hide (NetPopup *popup)
     seat    = gdk_display_get_default_seat (display);
     gdk_seat_ungrab (seat);
     popup->grab_active = FALSE;
+    /* Wayland: soltar la captura interna de GTK (en X11 no se usa). */
+    if (gtk_widget_has_grab (popup->window))
+        gtk_grab_remove (popup->window);
 
     if (popup->press_handler) {
         g_signal_handler_disconnect (popup->window, popup->press_handler);
@@ -1437,6 +1891,21 @@ popup_hide (NetPopup *popup)
         popup->current_expand_box = NULL;
     }
     clear_open_highlight (popup);
+
+    /* La búsqueda no sobrevive al cierre: al reabrir se ven todas las redes. */
+    search_close (popup);
+
+    /* Wayland: mientras el popup tuvo la captura, el botón del panel no se
+     * enteró de que el mouse se fue, y quedaba resaltado hasta volver a
+     * pasar por encima. También quedaba visible el indicador de foco del
+     * teclado (el mismo que aparece al tabear). Se limpian los dos. */
+    if (popup->button && popup_is_wayland (popup->window)) {
+        gtk_widget_unset_state_flags (popup->button,
+                                      GTK_STATE_FLAG_PRELIGHT | GTK_STATE_FLAG_ACTIVE);
+        GtkWidget *top = gtk_widget_get_toplevel (popup->button);
+        if (GTK_IS_WINDOW (top))
+            gtk_window_set_focus_visible (GTK_WINDOW (top), FALSE);
+    }
 
     /* El bloqueo de señales que había acá no matcheaba ningún manejador:
      * los del botón están registrados con el complemento como dato, no con

@@ -352,6 +352,30 @@ msgstr "Odpowiadaj na prośby o hasło"
 msgid "Turn this off if another network applet (such as nm-applet) is also running."
 msgstr "Wyłącz, jeśli działa także inny aplet sieciowy (np. nm-applet)."
 
+#: plugin.c
+msgid "Remember disabled adapters"
+msgstr "Zapamiętaj wyłączone karty sieciowe"
+
+#: plugin.c
+msgid "Adapters you turn off stay off after restarting."
+msgstr "Wyłączone karty sieciowe pozostaną wyłączone po ponownym uruchomieniu."
+
+#: popup.c popup-sections.c
+msgid "Search networks"
+msgstr "Szukaj sieci"
+
+#: popup.c popup-sections.c
+msgid "No matching networks"
+msgstr "Brak pasujących sieci"
+
+#: plugin.c
+msgid "Prefer nm-applet icons"
+msgstr "Preferuj ikony nm-applet"
+
+#: plugin.c
+msgid "Use the icons your theme provides for nm-applet, if any, instead of the standard network icons."
+msgstr "Używaj ikon motywu przeznaczonych dla nm-applet (jeśli są) zamiast standardowych ikon sieci."
+
 #~ msgid "Saved network"
 #~ msgstr "Zapisana sieć"
 

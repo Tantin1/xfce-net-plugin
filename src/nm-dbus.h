@@ -7,6 +7,10 @@ typedef struct {
     gchar    *iface;
     gchar    *object_path;
     gchar    *description;  /* Nombre legible del hardware (puede ser NULL). Liberar con g_free(). */
+    gchar    *perm_hw;      /* Dirección física de fábrica (PermHwAddress), en
+                             * mayúsculas, o NULL si el adaptador no informa una.
+                             * A diferencia del nombre (wlan0, wlan1), no cambia
+                             * entre reinicios. */
 } NmDevice;
 
 typedef struct {

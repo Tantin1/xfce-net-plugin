@@ -352,6 +352,30 @@ msgstr "Responder a pedidos de senha"
 msgid "Turn this off if another network applet (such as nm-applet) is also running."
 msgstr "Desative se outro applet de rede (como o nm-applet) também estiver em execução."
 
+#: plugin.c
+msgid "Remember disabled adapters"
+msgstr "Lembrar adaptadores desativados"
+
+#: plugin.c
+msgid "Adapters you turn off stay off after restarting."
+msgstr "Os adaptadores que você desligar continuam desligados após reiniciar."
+
+#: popup.c popup-sections.c
+msgid "Search networks"
+msgstr "Pesquisar redes"
+
+#: popup.c popup-sections.c
+msgid "No matching networks"
+msgstr "Nenhuma rede correspondente"
+
+#: plugin.c
+msgid "Prefer nm-applet icons"
+msgstr "Preferir ícones do nm-applet"
+
+#: plugin.c
+msgid "Use the icons your theme provides for nm-applet, if any, instead of the standard network icons."
+msgstr "Usar os ícones que seu tema fornece para o nm-applet, se houver, em vez dos ícones de rede padrão."
+
 #~ msgid "Saved network"
 #~ msgstr "Rede salva"
 

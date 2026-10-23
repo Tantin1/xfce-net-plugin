@@ -82,6 +82,8 @@ make_device_section (NetPopup *popup, NmDevice *dev, gboolean show_header)
         DeviceSwitchData *d = g_new0 (DeviceSwitchData, 1);
         d->conn        = conn;
         d->device_path = g_strdup (dev->object_path);
+        d->iface       = g_strdup (dev->iface);
+        d->popup       = popup;
         g_object_set_data_full (G_OBJECT (dev_switch), "switch-data", d,
                                 (GDestroyNotify) device_switch_data_free);
 
@@ -347,8 +349,7 @@ fill_eth_section (NetPopup *popup)
         gtk_widget_set_margin_top    (eth_row, 8);
         gtk_widget_set_margin_bottom (eth_row, 8);
 
-        const gchar *eth_icon_names[] = { "nm-device-wired", "network-wired-symbolic", NULL };
-        GIcon     *eth_gicon = g_themed_icon_new_from_names ((gchar **) eth_icon_names, -1);
+        GIcon     *eth_gicon = net_themed_icon_new ("network-wired-symbolic", "nm-device-wired");
         GtkWidget *eth_icon  = gtk_image_new_from_gicon (eth_gicon, GTK_ICON_SIZE_MENU);
         g_object_unref (eth_gicon);
         gtk_box_pack_start (GTK_BOX (eth_row), eth_icon, FALSE, FALSE, 4);
@@ -369,6 +370,8 @@ fill_eth_section (NetPopup *popup)
         DeviceSwitchData *dsd = g_new0 (DeviceSwitchData, 1);
         dsd->conn        = popup->conn;
         dsd->device_path = g_strdup (dev->object_path);
+        dsd->iface       = g_strdup (dev->iface);
+        dsd->popup       = popup;
         g_object_set_data_full (G_OBJECT (eth_switch), "switch-data", dsd,
                                 (GDestroyNotify) device_switch_data_free);
         g_signal_connect (eth_switch, "state-set",
@@ -492,13 +495,11 @@ update_top_status (NetPopup *popup)
         gtk_spinner_stop (GTK_SPINNER (popup->status_spinner));
         gtk_stack_set_visible_child_name (GTK_STACK (popup->status_stack), "icon");
         if (primary_ssid) {
-            const gchar *conn_names[] = { "network-wireless-symbolic", "nm-device-wireless", NULL };
-            GIcon *conn_gicon = g_themed_icon_new_from_names ((gchar **) conn_names, -1);
+            GIcon *conn_gicon = net_themed_icon_new ("network-wireless-symbolic", "nm-device-wireless");
             gtk_image_set_from_gicon (GTK_IMAGE (popup->status_icon), conn_gicon, GTK_ICON_SIZE_MENU);
             g_object_unref (conn_gicon);
         } else {
-            const gchar *disc_names[] = { "network-wireless-disconnected-symbolic", "nm-no-connection", NULL };
-            GIcon *disc_gicon = g_themed_icon_new_from_names ((gchar **) disc_names, -1);
+            GIcon *disc_gicon = net_themed_icon_new ("network-wireless-disconnected-symbolic", "nm-no-connection");
             gtk_image_set_from_gicon (GTK_IMAGE (popup->status_icon), disc_gicon, GTK_ICON_SIZE_MENU);
             g_object_unref (disc_gicon);
         }
@@ -829,6 +830,94 @@ reorder_fixed_sections (NetPopup *popup)
                                popup->vpn_section, -1);
 }
 
+/* ---------- búsqueda de redes ----------
+ *
+ * Oculta las filas Wi-Fi cuyo nombre no contiene el texto buscado (sin
+ * distinguir mayúsculas). Junto con cada fila se oculta su separador fino.
+ * Una sección de adaptador sin ninguna coincidencia se oculta entera
+ * (encabezado incluido). Ethernet y VPN no se filtran. Si nada coincide se
+ * muestra el aviso "No hay redes que coincidan".
+ *
+ * El refresco puede volver a mostrar filas (gtk_widget_show_all), por eso se
+ * llama también al final de update_devices_section. */
+void
+apply_search_filter (NetPopup *popup)
+{
+    if (!popup->ui_built || !popup->search_entry)
+        return;
+
+    const gchar *text  = gtk_entry_get_text (GTK_ENTRY (popup->search_entry));
+    gchar       *query = (text && *text) ? g_utf8_casefold (text, -1) : NULL;
+    gint         total_matches = 0;
+
+    GList *sections = gtk_container_get_children (GTK_CONTAINER (popup->content_box));
+    for (GList *s = sections; s; s = s->next) {
+        GtkWidget *section = s->data;
+        if (section == popup->eth_section || section == popup->vpn_section)
+            continue;
+        if (!GTK_IS_CONTAINER (section))
+            continue;
+
+        gint       matches     = 0;
+        GtkWidget *pending_sep = NULL;
+        GList     *kids = gtk_container_get_children (GTK_CONTAINER (section));
+        for (GList *k = kids; k; k = k->next) {
+            GtkWidget *w = k->data;
+            if (GTK_IS_SEPARATOR (w)) {
+                pending_sep = w;
+                continue;
+            }
+            if (!GTK_IS_EVENT_BOX (w)) {
+                pending_sep = NULL;
+                continue;
+            }
+            const gchar *ssid = g_object_get_data (G_OBJECT (w), "ssid");
+            if (!ssid) {
+                pending_sep = NULL;
+                continue;
+            }
+
+            gboolean match = TRUE;
+            if (query) {
+                gchar *folded = g_utf8_casefold (ssid, -1);
+                match = (strstr (folded, query) != NULL);
+                g_free (folded);
+            }
+
+            /* La fila con el expand abierto deja de coincidir: cerrarlo. */
+            if (!match && popup->current_expand_box &&
+                gtk_widget_is_ancestor (popup->current_expand_box, w)) {
+                gtk_widget_hide (popup->current_expand_box);
+                popup->current_expand_box = NULL;
+                clear_open_highlight (popup);
+            }
+
+            gtk_widget_set_visible (w, match);
+            if (pending_sep)
+                gtk_widget_set_visible (pending_sep, match);
+            pending_sep = NULL;
+            if (match)
+                matches++;
+        }
+        g_list_free (kids);
+
+        /* Sin búsqueda la sección se ve siempre (aunque no tenga redes). */
+        gtk_widget_set_visible (section, !query || matches > 0);
+        total_matches += matches;
+    }
+    g_list_free (sections);
+
+    if (popup->search_empty) {
+        gboolean show_empty = query && total_matches == 0;
+        if (gtk_widget_get_visible (popup->search_empty) != show_empty) {
+            gtk_widget_set_visible (popup->search_empty, show_empty);
+            /* El aviso suma una línea a la franja: compensar en la lista. */
+            search_sync_height (popup);
+        }
+    }
+    g_free (query);
+}
+
 void
 update_devices_section (NetPopup *popup)
 {
@@ -886,6 +975,8 @@ update_devices_section (NetPopup *popup)
             reopen_expand_for_ssid (popup, passive_ssid, passive_dev);
         g_free (passive_ssid);
         g_free (passive_dev);
+        /* Las filas nuevas salen visibles: volver a aplicar la búsqueda. */
+        apply_search_filter (popup);
         return;
     }
 
@@ -935,6 +1026,9 @@ update_devices_section (NetPopup *popup)
         g_free (passive_ssid);
         g_free (passive_dev);
     }
+
+    /* gtk_widget_show_all mostró todas las filas: volver a aplicar la búsqueda. */
+    apply_search_filter (popup);
 }
 
 /* ---------- refresh coalescido ---------- */
@@ -1022,8 +1116,7 @@ rebuild_ui (NetPopup *popup)
     gtk_widget_set_margin_bottom (top_row, 8);
 
     {
-        const gchar *disc_names[] = { "nm-no-connection", "network-wireless-disconnected-symbolic", NULL };
-        GIcon *disc_gicon = g_themed_icon_new_from_names ((gchar **) disc_names, -1);
+        GIcon *disc_gicon = net_themed_icon_new ("network-wireless-disconnected-symbolic", "nm-no-connection");
         popup->status_icon = gtk_image_new_from_gicon (disc_gicon, GTK_ICON_SIZE_MENU);
         g_object_unref (disc_gicon);
     }
@@ -1063,6 +1156,21 @@ rebuild_ui (NetPopup *popup)
 
     gtk_box_pack_end (GTK_BOX (top_row), popup->refresh_button, FALSE, FALSE, 0);
     gtk_widget_show (popup->refresh_button);
+
+    /* Botón de búsqueda (solo la lupa), a la izquierda de Actualizar. */
+    {
+        GtkWidget *search_btn  = gtk_button_new ();
+        GtkWidget *search_icon = gtk_image_new_from_icon_name (
+                                     "system-search-symbolic", GTK_ICON_SIZE_MENU);
+        gtk_container_add (GTK_CONTAINER (search_btn), search_icon);
+        gtk_button_set_relief (GTK_BUTTON (search_btn), GTK_RELIEF_NONE);
+        gtk_widget_set_tooltip_text (search_btn, _("Search networks"));
+        gtk_widget_set_valign (search_btn, GTK_ALIGN_CENTER);
+        gtk_widget_set_margin_bottom (search_btn, 16);
+        g_signal_connect (search_btn, "clicked",
+                          G_CALLBACK (on_search_button_clicked), popup);
+        gtk_box_pack_end (GTK_BOX (top_row), search_btn, FALSE, FALSE, 0);
+    }
 
     /* Fila Wi-Fi + switch */
     GtkWidget *wifi_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);

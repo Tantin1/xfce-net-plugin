@@ -350,6 +350,30 @@ msgstr "パスワード要求に応答する"
 msgid "Turn this off if another network applet (such as nm-applet) is also running."
 msgstr "nm-applet など別のネットワークアプレットも動作している場合は、オフにしてください。"
 
+#: plugin.c
+msgid "Remember disabled adapters"
+msgstr "無効にしたアダプターを記憶"
+
+#: plugin.c
+msgid "Adapters you turn off stay off after restarting."
+msgstr "オフにしたアダプターは、再起動後もオフのままになります。"
+
+#: popup.c popup-sections.c
+msgid "Search networks"
+msgstr "ネットワークを検索"
+
+#: popup.c popup-sections.c
+msgid "No matching networks"
+msgstr "一致するネットワークはありません"
+
+#: plugin.c
+msgid "Prefer nm-applet icons"
+msgstr "nm-applet のアイコンを優先"
+
+#: plugin.c
+msgid "Use the icons your theme provides for nm-applet, if any, instead of the standard network icons."
+msgstr "テーマに nm-applet 用のアイコンがあれば、標準のネットワークアイコンの代わりに使用します。"
+
 #~ msgid "Saved network"
 #~ msgstr "保存済みネットワーク"
 

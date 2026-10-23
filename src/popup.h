@@ -91,6 +91,12 @@ typedef struct {
     /* Franja "esta red pide iniciar sesión" (portal cautivo), en la zona
      * fija superior. Oculta salvo que NM informe conectividad PORTAL. */
     GtkWidget *portal_row;
+
+    /* Búsqueda de redes (oct-2026). Franja fija entre la zona superior y la
+     * lista, oculta hasta que se empieza a escribir o se aprieta Ctrl+F. */
+    GtkWidget *search_bar;      /* contenedor de la franja */
+    GtkWidget *search_entry;    /* campo de búsqueda */
+    GtkWidget *search_empty;    /* "No hay redes que coincidan" */
 } NetPopup;
 
 /* Arma la clave "ssid|device_path" que usan pending_attempts y failed_ssids.
@@ -103,11 +109,21 @@ make_ssid_dev_key (const gchar *ssid, const gchar *device_path)
                             device_path ? device_path : "");
 }
 
+/* Íconos con reserva: arma un ícono que prueba dos nombres en orden. Por
+ * defecto primero el estándar del tema (freedesktop) y después el de
+ * nm-applet; con la opción "Preferir íconos de nm-applet" activada, al revés.
+ * Vale para el panel y el popup. Liberar con g_object_unref(). */
+GIcon *net_themed_icon_new       (const gchar *freedesktop_name, const gchar *nm_name);
+void   popup_set_prefer_nm_icons (gboolean prefer);
+
 /* Crea un widget con ícono de señal Wi-Fi. Si secure=TRUE superpone un candado. */
 GtkWidget *make_signal_icon (gint strength, gboolean secure, gint icon_size);
 
 /* Controlado desde popup.c para mostrar/ocultar el spinner del panel. */
 void net_plugin_set_connecting (gpointer np_ptr, gboolean connecting);
+/* Avisa al plugin que el usuario prendió o apagó un adaptador, para poder
+ * recordarlo al reiniciar. */
+void net_plugin_device_toggled (gpointer np_ptr, const gchar *iface, gboolean enabled);
 
 
 NetPopup *popup_create  (XfcePanelPlugin *plugin, GtkWidget *button);
