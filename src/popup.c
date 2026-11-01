@@ -1779,10 +1779,10 @@ popup_create (XfcePanelPlugin *plugin, GtkWidget *button)
     popup->content_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
     gtk_container_add (GTK_CONTAINER (scroll), popup->content_box);
 
-    /* Zona fija inferior. OJO: pack_end apila de abajo hacia arriba. Antes
-     * la línea se agregaba primero y quedaba DEBAJO del último botón, sin
-     * separar nada (con esquinas redondeadas se veía pasar por la curva).
-     * Orden ahora, de abajo hacia arriba: Avanzado, Red oculta, línea. */
+    /* Zona fija inferior. OJO: pack_end apila de abajo hacia arriba: de
+     * abajo hacia arriba quedan Avanzado y Red oculta. Sin línea propia
+     * arriba de los botones (nov-2026): la línea de debajo de la última red
+     * ya separa la lista de esta zona. */
     GtkWidget *adv_btn = gtk_button_new_with_label (_("Advanced settings…"));
     gtk_button_set_relief (GTK_BUTTON (adv_btn), GTK_RELIEF_NONE);
     gtk_widget_set_margin_start  (adv_btn, 8);
@@ -1802,12 +1802,6 @@ popup_create (XfcePanelPlugin *plugin, GtkWidget *button)
     g_signal_connect (hidden_btn, "clicked",
                       G_CALLBACK (on_hidden_network_clicked), popup);
     gtk_box_pack_end (GTK_BOX (outer_box), hidden_btn, FALSE, FALSE, 0);
-
-    GtkWidget *bottom_sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
-    /* Aire arriba: con la lista llena, la línea de la última fila quedaba
-     * pegada a esta y se veía doble. */
-    gtk_widget_set_margin_top (bottom_sep, 4);
-    gtk_box_pack_end (GTK_BOX (outer_box), bottom_sep, FALSE, FALSE, 0);
 
     g_signal_connect (win, "key-press-event", G_CALLBACK (on_key_press), popup);
 
