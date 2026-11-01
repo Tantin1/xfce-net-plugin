@@ -93,6 +93,18 @@ make_device_section (NetPopup *popup, NmDevice *dev, gboolean show_header)
         popup->device_switches = g_slist_append (popup->device_switches, dev_switch);
 
         gtk_box_pack_start (GTK_BOX (section), header_row, FALSE, FALSE, 0);
+
+        /* Línea fina debajo del encabezado del adaptador: sin ella la
+         * primera red quedaba pegada al encabezado y parecía su contenido
+         * desplegado. Es del ENCABEZADO (fija), no de la primera red, que
+         * cambia al reordenarse la lista. La marca "header-sep" hace que el
+         * refresco por diferencia la cuente como parte del encabezado y no
+         * como la línea de una fila. */
+        if (popup->show_separators) {
+            GtkWidget *header_sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
+            g_object_set_data (G_OBJECT (header_sep), "header-sep", GINT_TO_POINTER (1));
+            gtk_box_pack_start (GTK_BOX (section), header_sep, FALSE, FALSE, 0);
+        }
     }
 
     /* Set de SSIDs guardadas: una sola enumeración de perfiles por sección,
@@ -102,13 +114,15 @@ make_device_section (NetPopup *popup, NmDevice *dev, gboolean show_header)
     aps = nm_get_access_points (conn, dev->object_path);
     /* Orden: activa primero, después guardadas, después por señal. */
     aps = g_slist_sort_with_data (aps, ap_compare, saved_ssids);
+    /* Cada fila lleva su línea DEBAJO: así la primera no suma una línea a
+     * la gruesa del comienzo de la sección y la última queda cerrada. */
     for (a = aps; a; a = a->next) {
+        GtkWidget *r = make_ap_row (a->data, popup, dev->object_path, saved_ssids);
+        gtk_box_pack_start (GTK_BOX (section), r, FALSE, FALSE, 0);
         if (popup->show_separators) {
             separator = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
             gtk_box_pack_start (GTK_BOX (section), separator, FALSE, FALSE, 0);
         }
-        GtkWidget *r = make_ap_row (a->data, popup, dev->object_path, saved_ssids);
-        gtk_box_pack_start (GTK_BOX (section), r, FALSE, FALSE, 0);
     }
     nm_ap_list_free (aps);
     g_hash_table_destroy (saved_ssids);
@@ -644,35 +658,45 @@ diff_refresh_one_section (NetPopup *popup, GtkWidget *section, NmDevice *dev)
     aps = g_slist_sort_with_data (aps, ap_compare, saved_ssids);
 
     /* Inventario de filas existentes, clave "ssid|banda" → event_box. El
-     * separador propio de cada fila (el GtkSeparator inmediatamente anterior)
-     * se anota en la fila. También se cuenta el prefijo de widgets fijos
-     * (separador de módulo, encabezado) que precede a la zona de filas. */
+     * separador propio de cada fila (el GtkSeparator inmediatamente
+     * SIGUIENTE: la línea va debajo de la fila) se anota en la fila. También
+     * se cuenta el prefijo de widgets fijos (separador de módulo,
+     * encabezado) que precede a la zona de filas. */
     GHashTable *existing = g_hash_table_new_full (g_str_hash, g_str_equal,
                                                   g_free, NULL);
     GList     *kids = gtk_container_get_children (GTK_CONTAINER (section));
     gint       prefix = 0;
     gboolean   in_rows = FALSE;
-    GtkWidget *pending_sep = NULL;
+    GtkWidget *last_row = NULL;
 
     for (GList *k = kids; k; k = k->next) {
         GtkWidget *w = k->data;
+        if (g_object_get_data (G_OBJECT (w), "header-sep")) {
+            /* Línea del encabezado del adaptador: parte del prefijo fijo. */
+            if (!in_rows)
+                prefix++;
+            continue;
+        }
         if (GTK_IS_SEPARATOR (w)) {
             in_rows = TRUE;
-            pending_sep = w;
+            if (last_row)
+                g_object_set_data (G_OBJECT (last_row), "own-separator", w);
+            last_row = NULL;
             continue;
         }
         if (GTK_IS_EVENT_BOX (w)) {
             in_rows = TRUE;
             const gchar *ssid = g_object_get_data (G_OBJECT (w), "ssid");
             const gchar *band = g_object_get_data (G_OBJECT (w), "band");
+            last_row = NULL;
             if (ssid) {
-                g_object_set_data (G_OBJECT (w), "own-separator", pending_sep);
+                g_object_set_data (G_OBJECT (w), "own-separator", NULL);
                 g_hash_table_replace (existing,
                                       g_strdup_printf ("%s|%s", ssid,
                                                        band ? band : ""),
                                       w);
+                last_row = w;
             }
-            pending_sep = NULL;
             continue;
         }
         if (!in_rows)
@@ -722,11 +746,12 @@ diff_refresh_one_section (NetPopup *popup, GtkWidget *section, NmDevice *dev)
             gtk_box_pack_start (GTK_BOX (section), sep_w, FALSE, FALSE, 0);
             gtk_widget_show (sep_w);
         }
+        /* Primero la fila, después su línea (va debajo). */
+        gtk_box_reorder_child (GTK_BOX (section), row_w, pos++);
         if (sep_w) {
             g_object_set_data (G_OBJECT (row_w), "own-separator", sep_w);
             gtk_box_reorder_child (GTK_BOX (section), sep_w, pos++);
         }
-        gtk_box_reorder_child (GTK_BOX (section), row_w, pos++);
 
         g_free (fp_new);
         g_free (key);
@@ -859,23 +884,24 @@ apply_search_filter (NetPopup *popup)
             continue;
 
         gint       matches     = 0;
-        GtkWidget *pending_sep = NULL;
+        GtkWidget *last_row    = NULL;    /* fila recién vista: su línea es la que sigue */
+        gboolean   last_match  = FALSE;
         GList     *kids = gtk_container_get_children (GTK_CONTAINER (section));
         for (GList *k = kids; k; k = k->next) {
             GtkWidget *w = k->data;
             if (GTK_IS_SEPARATOR (w)) {
-                pending_sep = w;
+                /* La línea va DEBAJO de su fila: se ve si la fila se ve. */
+                if (last_row)
+                    gtk_widget_set_visible (w, last_match);
+                last_row = NULL;
                 continue;
             }
-            if (!GTK_IS_EVENT_BOX (w)) {
-                pending_sep = NULL;
+            last_row = NULL;
+            if (!GTK_IS_EVENT_BOX (w))
                 continue;
-            }
             const gchar *ssid = g_object_get_data (G_OBJECT (w), "ssid");
-            if (!ssid) {
-                pending_sep = NULL;
+            if (!ssid)
                 continue;
-            }
 
             gboolean match = TRUE;
             if (query) {
@@ -893,9 +919,8 @@ apply_search_filter (NetPopup *popup)
             }
 
             gtk_widget_set_visible (w, match);
-            if (pending_sep)
-                gtk_widget_set_visible (pending_sep, match);
-            pending_sep = NULL;
+            last_row   = w;
+            last_match = match;
             if (match)
                 matches++;
         }

@@ -97,7 +97,19 @@ typedef struct {
     GtkWidget *search_bar;      /* contenedor de la franja */
     GtkWidget *search_entry;    /* campo de búsqueda */
     GtkWidget *search_empty;    /* "No hay redes que coincidan" */
+
+    /* Aspecto del popup (nov-2026, ver popup-moderno-notas.md). */
+    GtkWidget *frame;           /* caja con nombre de componente "popover": todo el contenido va adentro */
+    gint       popup_style;     /* NET_POPUP_STYLE_*: lo fija plugin.c antes de popup_show */
+    gboolean   style_applied;   /* ya se eligió el visual al menos una vez */
+    gboolean   rgba_active;     /* ventana con transparencia (esquinas del tema) */
+    gint       float_gap;       /* separación del panel y de los bordes, en px (0 = pegada) */
 } NetPopup;
+
+/* Estilo de la ventana (Propiedades → Apariencia → "Popup style"). */
+#define NET_POPUP_STYLE_AUTO      0   /* flota solo si hay transparencia y el tema redondea */
+#define NET_POPUP_STYLE_FLOATING  1   /* siempre separada del panel */
+#define NET_POPUP_STYLE_ATTACHED  2   /* pegada al panel, esquinas rectas: el aspecto de antes */
 
 /* Arma la clave "ssid|device_path" que usan pending_attempts y failed_ssids.
  * Un solo lugar para armarla, así nunca queda inconsistente. Liberar con

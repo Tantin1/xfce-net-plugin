@@ -375,6 +375,26 @@ msgstr "Предпочитать значки nm-applet"
 msgid "Use the icons your theme provides for nm-applet, if any, instead of the standard network icons."
 msgstr "Использовать значки темы для nm-applet (если они есть) вместо стандартных значков сети."
 
+#: plugin.c
+msgid "Popup style:"
+msgstr "Стиль окна:"
+
+#: plugin.c
+msgid "Automatic"
+msgstr "Автоматически"
+
+#: plugin.c
+msgid "Floating"
+msgstr "Плавающее"
+
+#: plugin.c
+msgid "Attached to the panel"
+msgstr "Прикреплено к панели"
+
+#: plugin.c
+msgid "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
+msgstr "Автоматически: скруглённые углы и небольшой отступ от панели, если тема скругляет всплывающие окна и работает композитор; иначе прикреплено к панели."
+
 #~ msgid "Saved network"
 #~ msgstr "Сохранённая сеть"
 

@@ -374,6 +374,26 @@ msgstr "优先使用 nm-applet 图标"
 msgid "Use the icons your theme provides for nm-applet, if any, instead of the standard network icons."
 msgstr "如果主题提供了 nm-applet 图标，则使用它们代替标准网络图标。"
 
+#: plugin.c
+msgid "Popup style:"
+msgstr "弹出窗口样式："
+
+#: plugin.c
+msgid "Automatic"
+msgstr "自动"
+
+#: plugin.c
+msgid "Floating"
+msgstr "浮动"
+
+#: plugin.c
+msgid "Attached to the panel"
+msgstr "贴靠面板"
+
+#: plugin.c
+msgid "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
+msgstr "自动：当主题的弹出框为圆角且合成器正在运行时，使用圆角并与面板稍留间距；否则贴靠面板。"
+
 #~ msgid "Saved network"
 #~ msgstr "已保存的网络"
 

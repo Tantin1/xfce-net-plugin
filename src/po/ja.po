@@ -374,6 +374,26 @@ msgstr "nm-applet のアイコンを優先"
 msgid "Use the icons your theme provides for nm-applet, if any, instead of the standard network icons."
 msgstr "テーマに nm-applet 用のアイコンがあれば、標準のネットワークアイコンの代わりに使用します。"
 
+#: plugin.c
+msgid "Popup style:"
+msgstr "ポップアップのスタイル:"
+
+#: plugin.c
+msgid "Automatic"
+msgstr "自動"
+
+#: plugin.c
+msgid "Floating"
+msgstr "フローティング"
+
+#: plugin.c
+msgid "Attached to the panel"
+msgstr "パネルに接続"
+
+#: plugin.c
+msgid "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
+msgstr "自動: テーマのポップオーバーが角丸でコンポジターが動作している場合は、角を丸めてパネルから少し離します。それ以外はパネルに接続します。"
+
 #~ msgid "Saved network"
 #~ msgstr "保存済みネットワーク"
 

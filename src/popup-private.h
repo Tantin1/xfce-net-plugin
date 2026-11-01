@@ -22,6 +22,10 @@
  * Si NM no confirma en este tiempo, asumimos fallo. */
 #define OP_TIMEOUT_MS 20000
 
+/* Separación del popup flotante: del panel y de los bordes de la pantalla
+ * (en todas las direcciones o en ninguna). */
+#define POPUP_FLOAT_GAP 6
+
 /* Cooldown del botón Actualizar (ms) entre escaneos. */
 #define SCAN_COOLDOWN_MS 5000
 

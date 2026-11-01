@@ -24,6 +24,7 @@
 #define DEFAULT_SECRET_AGENT        TRUE
 #define DEFAULT_REMEMBER_DISABLED   FALSE
 #define DEFAULT_PREFER_NM_ICONS     FALSE
+#define DEFAULT_POPUP_STYLE         NET_POPUP_STYLE_AUTO
 
 /* Declaración forward: el cuerpo vive en popup.c y arma el candado con
  * fallback nm-vpn-active-lock → nm-secure-lock → recurso embebido en el .so.
@@ -69,6 +70,7 @@ typedef struct {
     gboolean        show_notifications;
     gboolean        show_forget_active;
     gboolean        prefer_nm_icons;   /* íconos de nm-applet antes que los estándar */
+    gint            popup_style;       /* NET_POPUP_STYLE_*: automático, flotante o pegada */
 
     /* Agente de secretos: responde cuando NM pide una contraseña.
      * NULL si está apagado en Propiedades o no se pudo publicar. */
@@ -226,6 +228,7 @@ load_config (NetPlugin *np)
     np->secret_agent_enabled = DEFAULT_SECRET_AGENT;
     np->remember_disabled    = DEFAULT_REMEMBER_DISABLED;
     np->prefer_nm_icons      = DEFAULT_PREFER_NM_ICONS;
+    np->popup_style          = DEFAULT_POPUP_STYLE;
     if (!np->disabled_ifaces)
         np->disabled_ifaces = g_hash_table_new_full (g_str_hash, g_str_equal,
                                                      g_free, NULL);
@@ -254,6 +257,13 @@ load_config (NetPlugin *np)
     if (g_key_file_has_key (kf, "appearance", "prefer_nm_icons", NULL))
         np->prefer_nm_icons = g_key_file_get_boolean (kf, "appearance",
                                                       "prefer_nm_icons", NULL);
+    if (g_key_file_has_key (kf, "appearance", "popup_style", NULL)) {
+        gint v = g_key_file_get_integer (kf, "appearance", "popup_style", NULL);
+        /* Validar: un valor fuera de rango (archivo editado a mano o de una
+         * versión futura) vuelve al automático. */
+        np->popup_style = (v >= NET_POPUP_STYLE_AUTO && v <= NET_POPUP_STYLE_ATTACHED)
+                          ? v : DEFAULT_POPUP_STYLE;
+    }
     if (g_key_file_has_key (kf, "network", "secret_agent", NULL))
         np->secret_agent_enabled = g_key_file_get_boolean (kf, "network",
                                                            "secret_agent", NULL);
@@ -300,6 +310,7 @@ save_config (NetPlugin *np)
     g_key_file_set_boolean  (kf, "appearance", "show_notifications", np->show_notifications);
     g_key_file_set_boolean  (kf, "appearance", "show_forget_active",  np->show_forget_active);
     g_key_file_set_boolean  (kf, "appearance", "prefer_nm_icons",     np->prefer_nm_icons);
+    g_key_file_set_integer  (kf, "appearance", "popup_style",         np->popup_style);
     g_key_file_set_boolean  (kf, "network",    "secret_agent",        np->secret_agent_enabled);
     g_key_file_set_boolean  (kf, "network",    "remember_disabled",   np->remember_disabled);
     if (np->disabled_ifaces && g_hash_table_size (np->disabled_ifaces) > 0) {
@@ -331,6 +342,7 @@ typedef struct {
     GtkWidget   *square_check;
     GtkWidget   *forget_active_check;
     GtkWidget   *nm_icons_check;
+    GtkWidget   *style_combo;
     GtkWidget   *plugin_spin;
     GtkWidget   *panel_icon_check;
     GtkWidget   *icon_spin;
@@ -414,6 +426,17 @@ on_forget_active_toggled (GtkToggleButton *btn, PropsDialog *pd)
     pd->np->show_forget_active = gtk_toggle_button_get_active (btn);
     save_config (pd->np);
     pd->np->popup->ui_built = FALSE;
+}
+
+/* El popup toma el estilo nuevo en la próxima apertura. */
+static void
+on_popup_style_changed (GtkComboBox *combo, PropsDialog *pd)
+{
+    gint v = gtk_combo_box_get_active (combo);
+    if (v < NET_POPUP_STYLE_AUTO || v > NET_POPUP_STYLE_ATTACHED)
+        return;
+    pd->np->popup_style = v;
+    save_config (pd->np);
 }
 
 static void
@@ -603,6 +626,10 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
     PropsDialog *pd = g_new0 (PropsDialog, 1);
     pd->np = np;
 
+    /* SIN padre (NULL) a propósito: en Wayland el panel es una capa
+     * (layer-shell) y, con él como padre, GTK ubica mal las ventanitas del
+     * diálogo (la lista desplegable salía en una esquina de la pantalla).
+     * No "arreglarlo" poniéndole el panel como padre. */
     GtkWidget *dialog = gtk_dialog_new_with_buttons (
         _("Properties — Network"),
         NULL,
@@ -713,6 +740,21 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
     gtk_grid_attach (GTK_GRID (grid), pd->nm_icons_check, 0, row, 2, 1);
     row++;
 
+    /* Estilo de la ventana emergente. El orden de las opciones es el de
+     * NET_POPUP_STYLE_* (0, 1, 2). */
+    GtkWidget *style_label = gtk_label_new (_("Popup style:"));
+    gtk_label_set_xalign (GTK_LABEL (style_label), 0.0);
+    pd->style_combo = gtk_combo_box_text_new ();
+    gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (pd->style_combo), _("Automatic"));
+    gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (pd->style_combo), _("Floating"));
+    gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (pd->style_combo), _("Attached to the panel"));
+    gtk_combo_box_set_active (GTK_COMBO_BOX (pd->style_combo), np->popup_style);
+    gtk_widget_set_tooltip_text (pd->style_combo,
+        _("Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."));
+    gtk_grid_attach (GTK_GRID (grid), style_label,     0, row, 1, 1);
+    gtk_grid_attach (GTK_GRID (grid), pd->style_combo, 1, row, 1, 1);
+    row++;
+
 #ifdef HAVE_LIBNOTIFY
     pd->notifications_check = gtk_check_button_new_with_label (_("Show notifications"));
     gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (pd->notifications_check),
@@ -788,6 +830,8 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
                       G_CALLBACK (on_separators_toggled), pd);
     g_signal_connect (pd->forget_active_check, "toggled",
                       G_CALLBACK (on_forget_active_toggled), pd);
+    g_signal_connect (pd->style_combo, "changed",
+                      G_CALLBACK (on_popup_style_changed), pd);
     g_signal_connect (pd->nm_icons_check, "toggled",
                       G_CALLBACK (on_nm_icons_toggled), pd);
 #ifdef HAVE_LIBNOTIFY
@@ -1031,6 +1075,7 @@ on_button_toggled (GtkToggleButton *btn, NetPlugin *np)
     if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (np->button))) {
         np->popup->show_separators   = np->show_separators;
         np->popup->show_forget_active = np->show_forget_active;
+        np->popup->popup_style        = np->popup_style;
         popup_show (np->popup, np->plugin, np->button, np->conn,
                     np->popup_width, np->popup_height);
     } else {

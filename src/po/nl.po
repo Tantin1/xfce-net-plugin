@@ -376,6 +376,26 @@ msgstr "nm-applet-pictogrammen verkiezen"
 msgid "Use the icons your theme provides for nm-applet, if any, instead of the standard network icons."
 msgstr "De pictogrammen die je thema voor nm-applet levert gebruiken, indien aanwezig, in plaats van de standaard netwerkpictogrammen."
 
+#: plugin.c
+msgid "Popup style:"
+msgstr "Pop-upstijl:"
+
+#: plugin.c
+msgid "Automatic"
+msgstr "Automatisch"
+
+#: plugin.c
+msgid "Floating"
+msgstr "Zwevend"
+
+#: plugin.c
+msgid "Attached to the panel"
+msgstr "Vast aan het paneel"
+
+#: plugin.c
+msgid "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
+msgstr "Automatisch: afgeronde hoeken en een kleine afstand tot het paneel als het thema afgeronde popovers heeft en er een compositor actief is; anders vast aan het paneel."
+
 #~ msgid "Saved network"
 #~ msgstr "Opgeslagen netwerk"
 

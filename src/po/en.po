@@ -376,6 +376,26 @@ msgstr "Prefer nm-applet icons"
 msgid "Use the icons your theme provides for nm-applet, if any, instead of the standard network icons."
 msgstr "Use the icons your theme provides for nm-applet, if any, instead of the standard network icons."
 
+#: plugin.c
+msgid "Popup style:"
+msgstr "Popup style:"
+
+#: plugin.c
+msgid "Automatic"
+msgstr "Automatic"
+
+#: plugin.c
+msgid "Floating"
+msgstr "Floating"
+
+#: plugin.c
+msgid "Attached to the panel"
+msgstr "Attached to the panel"
+
+#: plugin.c
+msgid "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
+msgstr "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
+
 #~ msgid "Saved network"
 #~ msgstr "Saved network"
 
