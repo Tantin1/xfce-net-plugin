@@ -394,8 +394,30 @@ msgstr "贴靠面板"
 msgid "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
 msgstr "自动：当主题的弹出框为圆角且合成器正在运行时，使用圆角并与面板稍留间距；否则贴靠面板。"
 
+#: popup.c
+msgid "The network rejected the connection"
+msgstr "网络拒绝了连接"
+
+#: popup.c
+msgid "The network did not respond"
+msgstr "网络没有响应"
+
+#: popup.c
+msgid "Network not found"
+msgstr "未找到网络"
+
+#: popup.c
+msgid "Did not get an address from the network"
+msgstr "未能从网络获取地址"
+
+#: popup.c
+msgid "The connection took too long"
+msgstr "连接耗时过长"
+
+#: popup.c
+msgid "Connection failed"
+msgstr "连接失败"
+
 #~ msgid "Saved network"
 #~ msgstr "已保存的网络"
 
-#~ msgid "Connection failed"
-#~ msgstr "连接失败"

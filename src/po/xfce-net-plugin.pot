@@ -403,3 +403,27 @@ msgstr ""
 #: src/plugin.c
 msgid "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
 msgstr ""
+
+#: popup.c
+msgid "The network rejected the connection"
+msgstr ""
+
+#: popup.c
+msgid "The network did not respond"
+msgstr ""
+
+#: popup.c
+msgid "Network not found"
+msgstr ""
+
+#: popup.c
+msgid "Did not get an address from the network"
+msgstr ""
+
+#: popup.c
+msgid "The connection took too long"
+msgstr ""
+
+#: popup.c
+msgid "Connection failed"
+msgstr ""

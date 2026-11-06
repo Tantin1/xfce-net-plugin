@@ -395,8 +395,30 @@ msgstr "Прикреплено к панели"
 msgid "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
 msgstr "Автоматически: скруглённые углы и небольшой отступ от панели, если тема скругляет всплывающие окна и работает композитор; иначе прикреплено к панели."
 
+#: popup.c
+msgid "The network rejected the connection"
+msgstr "Сеть отклонила подключение"
+
+#: popup.c
+msgid "The network did not respond"
+msgstr "Сеть не ответила"
+
+#: popup.c
+msgid "Network not found"
+msgstr "Сеть не найдена"
+
+#: popup.c
+msgid "Did not get an address from the network"
+msgstr "Не удалось получить адрес от сети"
+
+#: popup.c
+msgid "The connection took too long"
+msgstr "Подключение заняло слишком много времени"
+
+#: popup.c
+msgid "Connection failed"
+msgstr "Не удалось подключиться"
+
 #~ msgid "Saved network"
 #~ msgstr "Сохранённая сеть"
 
-#~ msgid "Connection failed"
-#~ msgstr "Ошибка подключения"

@@ -394,8 +394,30 @@ msgstr "パネルに接続"
 msgid "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
 msgstr "自動: テーマのポップオーバーが角丸でコンポジターが動作している場合は、角を丸めてパネルから少し離します。それ以外はパネルに接続します。"
 
+#: popup.c
+msgid "The network rejected the connection"
+msgstr "ネットワークが接続を拒否しました"
+
+#: popup.c
+msgid "The network did not respond"
+msgstr "ネットワークが応答しませんでした"
+
+#: popup.c
+msgid "Network not found"
+msgstr "ネットワークが見つかりません"
+
+#: popup.c
+msgid "Did not get an address from the network"
+msgstr "ネットワークからアドレスを取得できませんでした"
+
+#: popup.c
+msgid "The connection took too long"
+msgstr "接続に時間がかかりすぎました"
+
+#: popup.c
+msgid "Connection failed"
+msgstr "接続に失敗しました"
+
 #~ msgid "Saved network"
 #~ msgstr "保存済みネットワーク"
 
-#~ msgid "Connection failed"
-#~ msgstr "接続失敗"

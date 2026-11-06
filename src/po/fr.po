@@ -396,8 +396,30 @@ msgstr "Collée au tableau de bord"
 msgid "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
 msgstr "Automatique : coins arrondis et un petit écart avec le tableau de bord si le thème arrondit ses popovers et qu’un compositeur est actif ; sinon, collée au tableau de bord."
 
+#: popup.c
+msgid "The network rejected the connection"
+msgstr "Le réseau a refusé la connexion"
+
+#: popup.c
+msgid "The network did not respond"
+msgstr "Le réseau n'a pas répondu"
+
+#: popup.c
+msgid "Network not found"
+msgstr "Réseau introuvable"
+
+#: popup.c
+msgid "Did not get an address from the network"
+msgstr "Aucune adresse reçue du réseau"
+
+#: popup.c
+msgid "The connection took too long"
+msgstr "La connexion a pris trop de temps"
+
+#: popup.c
+msgid "Connection failed"
+msgstr "Échec de la connexion"
+
 #~ msgid "Saved network"
 #~ msgstr "Réseau enregistré"
 
-#~ msgid "Connection failed"
-#~ msgstr "Échec de la connexion"

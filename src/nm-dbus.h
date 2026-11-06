@@ -69,12 +69,15 @@ GHashTable *nm_get_saved_wifi_ssids (GDBusConnection *conn);
  * Estas funciones trabajan sobre UN perfil concreto, identificado por su ruta
  * en el bus (profile_path), en vez de "el primero con ese nombre". */
 
-/* El perfil guardado que corresponde a este punto de acceso: misma red, modo
- * cliente (no hotspot) y seguridad compatible con las banderas del AP. Si
- * ninguno es compatible, el primero con ese nombre. NULL si no hay.
- * Liberar con g_free(). */
+/* El perfil guardado que corresponde a este punto de acceso desde ESTE
+ * adaptador (device_path): misma red, modo cliente (no hotspot), que el
+ * adaptador pueda usar (libre o atado a él; nunca uno atado a otro
+ * adaptador) y con seguridad compatible con las banderas del AP. Prefiere
+ * uno atado a este adaptador, después uno libre. Si ninguno es compatible,
+ * el primero usable con ese nombre. NULL si no hay. Liberar con g_free(). */
 gchar   *nm_find_profile_for_ap       (GDBusConnection *conn, const gchar *ssid,
-                                       guint32 wpa_flags, guint32 rsn_flags);
+                                       guint32 wpa_flags, guint32 rsn_flags,
+                                       const gchar *device_path);
 /* El perfil que el adaptador tiene activo ahora (o NULL). Liberar con g_free(). */
 gchar   *nm_get_device_active_profile (GDBusConnection *conn, const gchar *device_path);
 gboolean nm_delete_profile            (GDBusConnection *conn, const gchar *profile_path);
@@ -84,18 +87,27 @@ gboolean nm_set_profile_autoconnect   (GDBusConnection *conn, const gchar *profi
                                        gboolean autoconnect);
 void     nm_activate_profile_async    (GDBusConnection *conn, const gchar *profile_path,
                                        const gchar *device_path, const gchar *ap_path);
-/* Migración: borra duplicados de verdad del perfil (misma red y MISMA
- * seguridad; otro perfil de la misma red con otra seguridad se respeta) y le
- * saca interface-name si lo tiene. Devuelve TRUE si cambió algo. */
-gboolean nm_profile_cleanup           (GDBusConnection *conn, const gchar *profile_path);
+/* Cambia solo la contraseña del perfil (WPA2/WPA3 o WEP) y conserva el
+ * resto de sus ajustes. FALSE si no se pudo; el perfil queda intacto. */
+gboolean nm_set_profile_password      (GDBusConnection *conn, const gchar *profile_path,
+                                       const gchar *password);
+/* Marca (o desmarca) el perfil como red oculta, sin tocar nada más. */
+gboolean nm_set_profile_hidden        (GDBusConnection *conn, const gchar *profile_path,
+                                       gboolean hidden);
+gboolean nm_get_profile_hidden        (GDBusConnection *conn, const gchar *profile_path);
+/* ¿La seguridad del perfil sirve para un AP con estas banderas? */
+gboolean nm_profile_fits_ap           (GDBusConnection *conn, const gchar *profile_path,
+                                       guint32 wpa_flags, guint32 rsn_flags);
+/* Rutas de todos los perfiles de cliente de esa red (no hotspot).
+ * Liberar con g_slist_free_full (lista, g_free). */
+GSList  *nm_list_wifi_profiles        (GDBusConnection *conn, const gchar *ssid);
 
-/* Migra perfiles viejos con `connection.interface-name` fijado:
- *   - Si hay varios perfiles con la misma SSID, deja uno y borra los demás.
- *   - Al perfil que queda, le saca el binding de interface-name (lo vacía),
- *     así NM lo deja usar con cualquier adapter Wi-Fi.
- * Idempotente: si ya está limpio, no hace nada.
- * Devuelve TRUE si modificó algo. */
-gboolean nm_strip_interface_name (GDBusConnection *conn, const gchar *ssid);
+/* Clasificación de una red por sus banderas (WpaFlags/RsnFlags del AP).
+ * need_password: hay que pedir clave o usuario (lleva candado). Las redes
+ *   abiertas cifradas ("Enhanced Open"/OWE) NO la necesitan.
+ * enhanced_open: red abierta solo cifrada; su perfil va con key-mgmt "owe". */
+gboolean nm_ap_flags_need_password (guint32 wpa_flags, guint32 rsn_flags);
+gboolean nm_ap_flags_enhanced_open (guint32 wpa_flags, guint32 rsn_flags);
 
 gboolean nm_get_wifi_enabled    (GDBusConnection *conn);
 void     nm_set_wifi_enabled    (GDBusConnection *conn, gboolean enabled);
@@ -153,8 +165,12 @@ void nm_activate_connection_async (GDBusConnection *conn,
                                    const gchar     *ap_path,
                                    const gchar     *ssid);
 
-/* key_mgmt: "wpa-psk" (WPA2 / mixto WPA2-WPA3), "sae" (WPA3 puro) o NULL
- * (equivale a "wpa-psk"). Solo se usa si hay contraseña.
+/* Guarda un perfil nuevo LIBRE (sin atarlo a ningún adaptador) y después
+ * lo activa en device_path. No usa "crear y activar" en un paso porque NM
+ * ataría el perfil a ese adaptador.
+ * key_mgmt: "wpa-psk" (WPA2 / mixto WPA2-WPA3), "sae" (WPA3 puro) o NULL.
+ * Con contraseña y key_mgmt NULL se usa "wpa-psk". Con key_mgmt y sin
+ * contraseña, NM pide la clave al agente de secretos al conectar.
  * hidden: TRUE para redes ocultas (que no anuncian su nombre). Marca el
  * perfil como oculto para que NM salga a buscarla activamente. */
 void nm_add_and_activate_connection_async (GDBusConnection *conn,
@@ -180,6 +196,14 @@ void nm_deactivate_vpn_async (GDBusConnection *conn, const gchar *conn_path);
  * Mientras haya al menos una suscripción activa, la lista de perfiles
  * guardados se mantiene en memoria y se descarta sola cuando cambia.
  * Devuelve un array de IDs de suscripción terminado en 0; liberar con nm_unsubscribe_signals(). */
+/* Motivo del último fallo de conexión del adaptador (código de NM,
+ * NMDeviceStateReason), si ocurrió en o después de `since`
+ * (g_get_monotonic_time). 0 = no falló desde entonces. Solo se registra
+ * mientras haya alguna suscripción a señales activa. */
+#define NM_FAIL_UNKNOWN   1       /* falló sin motivo informado */
+#define NM_FAIL_TOO_LONG  100000  /* propio del plugin: venció el tiempo */
+guint32 nm_device_last_failure (const gchar *device_path, gint64 since);
+
 typedef void (*NmSignalCallback) (gpointer user_data);
 
 guint *nm_subscribe_signals  (GDBusConnection *conn,

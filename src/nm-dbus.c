@@ -465,7 +465,7 @@ nm_get_active_ap_info (GDBusConnection *conn)
             g_variant_lookup (props, "Frequency", "u", &freq);
 
             info->strength = (gint) strength;
-            info->secure   = (wpa | rsn) != 0;
+            info->secure   = nm_ap_flags_need_password (wpa, rsn);
 
             if (freq >= 5925)      info->band = g_strdup ("6G");
             else if (freq >= 5000) info->band = g_strdup ("5G");
@@ -620,7 +620,7 @@ nm_get_access_points (GDBusConnection *conn, const gchar *device_path)
         ap->frequency   = freq;
         ap->wpa_flags   = wpa;
         ap->rsn_flags   = rsn;
-        ap->secure      = ((wpa | rsn) != 0);
+        ap->secure      = nm_ap_flags_need_password (wpa, rsn);
         ap->active      = (active_path && strcmp (paths[i], active_path) == 0);
 
         g_variant_unref (props);
@@ -802,7 +802,9 @@ typedef struct {
     gchar    *key_mgmt;      /* 802-11-wireless-security.key-mgmt, NULL = abierta */
     gchar    *mode;          /* 802-11-wireless.mode: "infrastructure", "ap"... */
     gboolean  autoconnect;   /* connection.autoconnect (NM asume TRUE si falta) */
-    gboolean  has_iface;     /* connection.interface-name fijado y no vacío */
+    gchar    *iface;         /* connection.interface-name, o NULL si es libre */
+    gchar    *mac;           /* 802-11-wireless.mac-address (MAYÚSCULAS), o NULL */
+    gboolean  hidden;        /* 802-11-wireless.hidden (red oculta) */
 } ProfileInfo;
 
 static GSList   *profiles_cache    = NULL;
@@ -820,6 +822,8 @@ profile_info_free (gpointer p)
     g_free (pi->ssid);
     g_free (pi->key_mgmt);
     g_free (pi->mode);
+    g_free (pi->iface);
+    g_free (pi->mac);
     g_free (pi);
 }
 
@@ -878,7 +882,7 @@ profiles_read (GDBusConnection *conn)
             if (g_variant_lookup (conn_dict, "autoconnect", "b", &b))
                 pi->autoconnect = b;
             if (g_variant_lookup (conn_dict, "interface-name", "&s", &s) && s && *s)
-                pi->has_iface = TRUE;
+                pi->iface = g_strdup (s);
             g_variant_unref (conn_dict);
         }
 
@@ -898,6 +902,21 @@ profiles_read (GDBusConnection *conn)
             const gchar *m = NULL;
             if (g_variant_lookup (wifi_dict, "mode", "&s", &m))
                 pi->mode = g_strdup (m);
+            gboolean hid = FALSE;
+            if (g_variant_lookup (wifi_dict, "hidden", "b", &hid))
+                pi->hidden = hid;
+            /* Atadura por dirección física (la pone, por ejemplo, el editor
+             * de conexiones al elegir un adaptador). */
+            GVariant *mac_v = NULL;
+            g_variant_lookup (wifi_dict, "mac-address", "@ay", &mac_v);
+            if (mac_v) {
+                gsize         mlen;
+                const guchar *mb = g_variant_get_fixed_array (mac_v, &mlen, 1);
+                if (mlen == 6)
+                    pi->mac = g_strdup_printf ("%02X:%02X:%02X:%02X:%02X:%02X",
+                                               mb[0], mb[1], mb[2], mb[3], mb[4], mb[5]);
+                g_variant_unref (mac_v);
+            }
             g_variant_unref (wifi_dict);
         }
 
@@ -974,6 +993,40 @@ profile_by_path (GDBusConnection *conn, const gchar *path)
 #define AP_KM_PSK    0x00000100
 #define AP_KM_8021X  0x00000200
 #define AP_KM_SAE    0x00000400
+#define AP_KM_OWE    0x00000800   /* abierta cifrada ("Enhanced Open") */
+#define AP_KM_OWE_TM 0x00001000   /* abierta con versión cifrada al lado */
+#define AP_KM_SUITEB 0x00002000   /* empresarial WPA3 de 192 bits */
+#define AP_KM_ALL    (AP_KM_PSK | AP_KM_8021X | AP_KM_SAE | AP_KM_OWE | \
+                      AP_KM_OWE_TM | AP_KM_SUITEB)
+
+/* Solo las marcas de "abierta cifrada" (ninguna que pida clave o usuario). */
+static gboolean
+flags_only_owe (guint32 f)
+{
+    guint32 km = f & AP_KM_ALL;
+    return km != 0 && (km & ~(AP_KM_OWE | AP_KM_OWE_TM)) == 0;
+}
+
+gboolean
+nm_ap_flags_need_password (guint32 wpa_flags, guint32 rsn_flags)
+{
+    guint32 f = wpa_flags | rsn_flags;
+    /* Abierta cifrada: no tiene contraseña (va sin candado). Antes cualquier
+     * marca contaba como "segura" y se pedía una clave que no existe. */
+    if (flags_only_owe (f))
+        return FALSE;
+    return f != 0;
+}
+
+gboolean
+nm_ap_flags_enhanced_open (guint32 wpa_flags, guint32 rsn_flags)
+{
+    guint32 f = wpa_flags | rsn_flags;
+    /* Solo cifrada (sin versión abierta al lado): el perfil tiene que ser
+     * "owe". Con versión abierta al lado (marca _TM) se conecta como abierta,
+     * que funciona también en placas que no soportan el cifrado. */
+    return flags_only_owe (f) && (f & AP_KM_OWE);
+}
 
 static gboolean
 profile_fits_ap (const ProfileInfo *pi, guint32 wpa_flags, guint32 rsn_flags)
@@ -983,7 +1036,13 @@ profile_fits_ap (const ProfileInfo *pi, guint32 wpa_flags, guint32 rsn_flags)
 
     if (f == 0)                                      /* abierta (o WEP) */
         return k == NULL || g_strcmp0 (k, "none") == 0;
-    if ((f & AP_KM_8021X) && !(f & (AP_KM_PSK | AP_KM_SAE)))   /* empresarial */
+    if (flags_only_owe (f)) {                        /* abierta cifrada */
+        if (g_strcmp0 (k, "owe") == 0)
+            return TRUE;
+        /* Con versión abierta al lado, un perfil abierto también sirve. */
+        return (f & AP_KM_OWE_TM) && !(f & AP_KM_OWE) && k == NULL;
+    }
+    if ((f & (AP_KM_8021X | AP_KM_SUITEB)) && !(f & (AP_KM_PSK | AP_KM_SAE)))   /* empresarial */
         return g_strcmp0 (k, "wpa-eap") == 0 || g_strcmp0 (k, "ieee8021x") == 0;
     if (f & AP_KM_PSK) {
         if (g_strcmp0 (k, "wpa-psk") == 0)
@@ -995,23 +1054,97 @@ profile_fits_ap (const ProfileInfo *pi, guint32 wpa_flags, guint32 rsn_flags)
     return FALSE;
 }
 
+/* Datos de un adaptador para decidir qué perfiles puede usar. */
+typedef struct {
+    gchar *iface;     /* nombre (wlan0) */
+    gchar *perm_hw;   /* dirección física de fábrica, MAYÚSCULAS, o NULL */
+    gchar *hw;        /* dirección física actual, MAYÚSCULAS, o NULL */
+} DevIdent;
+
+static void
+dev_ident_read (GDBusConnection *conn, const gchar *device_path, DevIdent *di)
+{
+    di->iface = di->perm_hw = di->hw = NULL;
+    if (!device_path)
+        return;
+    GVariant *v = get_property (conn, device_path, NM_DEVICE_IFACE, "Interface");
+    if (v) {
+        if (g_variant_is_of_type (v, G_VARIANT_TYPE_STRING))
+            di->iface = g_strdup (g_variant_get_string (v, NULL));
+        g_variant_unref (v);
+    }
+    di->perm_hw = read_perm_hw (conn, device_path, NM_WIFI_IFACE);
+    v = get_property (conn, device_path, NM_WIFI_IFACE, "HwAddress");
+    if (v) {
+        if (g_variant_is_of_type (v, G_VARIANT_TYPE_STRING))
+            di->hw = g_ascii_strup (g_variant_get_string (v, NULL), -1);
+        g_variant_unref (v);
+    }
+}
+
+static void
+dev_ident_clear (DevIdent *di)
+{
+    g_free (di->iface);
+    g_free (di->perm_hw);
+    g_free (di->hw);
+}
+
+/* ¿El perfil está atado a ALGÚN adaptador (por nombre o por dirección)? */
+static gboolean
+profile_is_bound (const ProfileInfo *pi)
+{
+    return pi->iface != NULL || pi->mac != NULL;
+}
+
+/* ¿NetworkManager dejaría usar este perfil desde este adaptador? Un perfil
+ * libre sirve para cualquiera; uno atado solo para el suyo. Si no se pudo
+ * saber el nombre o la dirección del adaptador, no se descarta nada (mejor
+ * intentar que no ofrecer nada). */
+static gboolean
+profile_usable_on (const ProfileInfo *pi, const DevIdent *di)
+{
+    if (pi->iface && di->iface && g_strcmp0 (pi->iface, di->iface) != 0)
+        return FALSE;
+    if (pi->mac && (di->perm_hw || di->hw) &&
+        g_strcmp0 (pi->mac, di->perm_hw) != 0 &&
+        g_strcmp0 (pi->mac, di->hw) != 0)
+        return FALSE;
+    return TRUE;
+}
+
 gchar *
 nm_find_profile_for_ap (GDBusConnection *conn, const gchar *ssid,
-                        guint32 wpa_flags, guint32 rsn_flags)
+                        guint32 wpa_flags, guint32 rsn_flags,
+                        const gchar *device_path)
 {
-    const gchar *fallback = NULL;
+    DevIdent di;
+    dev_ident_read (conn, device_path, &di);
+
+    /* Orden de preferencia, siempre entre los que este adaptador puede usar
+     * (los atados a OTRO adaptador nunca se eligen ni se modifican):
+     *   1. seguridad compatible y atado a este adaptador (lo eligió alguien);
+     *   2. seguridad compatible y libre;
+     *   3. el primero con ese nombre (mejor intentar que no ofrecer nada). */
+    const gchar *bound_fit = NULL, *free_fit = NULL, *fallback = NULL;
     for (GSList *l = profiles_get (conn); l; l = l->next) {
         ProfileInfo *pi = l->data;
-        if (!profile_is_client_for (pi, ssid))
+        if (!profile_is_client_for (pi, ssid) || !profile_usable_on (pi, &di))
             continue;
-        if (profile_fits_ap (pi, wpa_flags, rsn_flags))
-            return g_strdup (pi->path);
+        if (profile_fits_ap (pi, wpa_flags, rsn_flags)) {
+            if (profile_is_bound (pi)) {
+                if (!bound_fit) bound_fit = pi->path;
+            } else if (!free_fit) {
+                free_fit = pi->path;
+            }
+        }
         if (!fallback)
             fallback = pi->path;
     }
-    /* Ninguno con seguridad compatible: el primero con ese nombre, como
-     * antes (mejor intentar que no ofrecer nada). */
-    return fallback ? g_strdup (fallback) : NULL;
+    dev_ident_clear (&di);
+
+    const gchar *best = bound_fit ? bound_fit : free_fit ? free_fit : fallback;
+    return best ? g_strdup (best) : NULL;
 }
 
 gchar *
@@ -1119,132 +1252,30 @@ nm_forget_connection (GDBusConnection *conn, const gchar *ssid)
     return deleted_any;
 }
 
-/* ---------- Migración: quitar interface-name de perfiles viejos ---------- */
-
-/* Devuelve TRUE si el perfil en `conn_path` tiene `connection.interface-name`
- * fijado (no vacío). */
-static gboolean
-connection_has_interface_name (GDBusConnection *conn, const gchar *conn_path)
-{
-    for (GSList *l = profiles_get (conn); l; l = l->next) {
-        ProfileInfo *pi = l->data;
-        if (g_strcmp0 (pi->path, conn_path) == 0)
-            return pi->has_iface;
-    }
-    return FALSE;
-}
-
-/* Reemplaza completamente las settings del perfil, quitando interface-name. */
-static gboolean
-connection_strip_interface_name (GDBusConnection *conn, const gchar *conn_path)
-{
-    /* Obtener settings actuales con secretos para no perder la psk. */
-    GVariant *settings = g_dbus_connection_call_sync (
-        conn, NM_BUS_NAME, conn_path, NM_CONN_IFACE,
-        "GetSettings", NULL, G_VARIANT_TYPE ("(a{sa{sv}})"),
-        G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
-    if (!settings) return FALSE;
-
-    GVariant *outer = g_variant_get_child_value (settings, 0);
-
-    /* Reconstruir el dict de settings, omitiendo interface-name dentro de
-     * la sección "connection". */
-    GVariantBuilder out_builder;
-    g_variant_builder_init (&out_builder, G_VARIANT_TYPE ("a{sa{sv}}"));
-
-    GVariantIter sec_iter;
-    g_variant_iter_init (&sec_iter, outer);
-
-    const gchar *sec_name;
-    GVariant    *sec_dict;
-    while (g_variant_iter_loop (&sec_iter, "{&s@a{sv}}", &sec_name, &sec_dict)) {
-        GVariantBuilder inner_builder;
-        g_variant_builder_init (&inner_builder, G_VARIANT_TYPE ("a{sv}"));
-
-        GVariantIter prop_iter;
-        g_variant_iter_init (&prop_iter, sec_dict);
-        const gchar *prop_name;
-        GVariant    *prop_val;
-        while (g_variant_iter_loop (&prop_iter, "{&sv}", &prop_name, &prop_val)) {
-            /* Omitir interface-name dentro de la sección "connection". */
-            if (g_strcmp0 (sec_name, "connection") == 0 &&
-                g_strcmp0 (prop_name, "interface-name") == 0)
-                continue;
-            g_variant_builder_add (&inner_builder, "{sv}", prop_name, prop_val);
-        }
-        g_variant_builder_add (&out_builder, "{sa{sv}}", sec_name, &inner_builder);
-    }
-
-    g_variant_unref (outer);
-    g_variant_unref (settings);
-
-    /* Llamar Update con el dict nuevo. */
-    GError   *err = NULL;
-    GVariant *res = g_dbus_connection_call_sync (
-        conn, NM_BUS_NAME, conn_path, NM_CONN_IFACE,
-        "Update",
-        g_variant_new ("(a{sa{sv}})", &out_builder),
-        NULL,
-        G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
-    if (!res) {
-        g_warning ("nm-dbus: Update %s: %s", conn_path,
-                   err ? err->message : "?");
-        if (err) g_error_free (err);
-        return FALSE;
-    }
-    g_variant_unref (res);
-    profiles_invalidate ();
-    return TRUE;
-}
-
-gboolean
-nm_profile_cleanup (GDBusConnection *conn, const gchar *profile_path)
-{
-    ProfileInfo *me = profile_by_path (conn, profile_path);
-    if (!me || !me->ssid)
-        return FALSE;
-
-    /* Copiar lo necesario antes de borrar (borrar descarta la lista). */
-    gchar   *ssid     = g_strdup (me->ssid);
-    gchar   *key_mgmt = g_strdup (me->key_mgmt);
-    gboolean changed  = FALSE;
-
-    /* Duplicados de verdad: misma red, mismo tipo de seguridad (los que se
-     * creaban antes, uno por adaptador). Un perfil de la misma red con otra
-     * seguridad NO es un duplicado y se respeta. */
-    GSList *dups = NULL;
-    for (GSList *l = profiles_get (conn); l; l = l->next) {
-        ProfileInfo *pi = l->data;
-        if (g_strcmp0 (pi->path, profile_path) != 0 &&
-            profile_is_client_for (pi, ssid) &&
-            g_strcmp0 (pi->key_mgmt, key_mgmt) == 0)
-            dups = g_slist_prepend (dups, g_strdup (pi->path));
-    }
-    for (GSList *l = dups; l; l = l->next)
-        if (nm_delete_profile (conn, l->data))
-            changed = TRUE;
-    g_slist_free_full (dups, g_free);
-
-    /* Al perfil elegido se le saca interface-name si lo tiene. */
-    if (connection_has_interface_name (conn, profile_path) &&
-        connection_strip_interface_name (conn, profile_path))
-        changed = TRUE;
-
-    g_free (ssid);
-    g_free (key_mgmt);
-    return changed;
-}
-
-gboolean
-nm_strip_interface_name (GDBusConnection *conn, const gchar *ssid)
-{
-    gchar   *path    = find_connection_path_by_ssid (conn, ssid);
-    gboolean changed = path ? nm_profile_cleanup (conn, path) : FALSE;
-    g_free (path);
-    return changed;
-}
-
 /* ---------- ACCIÓN ASYNC: activar conexión guardada ---------- */
+
+static void failure_record (const gchar *device_path, guint32 reason);
+
+/* Si NM rechaza el pedido de entrada (adaptador no disponible, red que ya
+ * no está...), no hay cambio de estado que avise: se anota como fallo del
+ * adaptador para que el popup lo muestre enseguida, sin esperar a que venza
+ * el tiempo. */
+static void
+on_activate_done (GObject *src, GAsyncResult *res, gpointer user_data)
+{
+    gchar    *device_path = user_data;
+    GError   *err = NULL;
+    GVariant *out = g_dbus_connection_call_finish (G_DBUS_CONNECTION (src), res, &err);
+    if (out) {
+        g_variant_unref (out);
+    } else {
+        g_warning ("nm-dbus async: ActivateConnection falló: %s",
+                   err ? err->message : "?");
+        g_clear_error (&err);
+        failure_record (device_path, NM_FAIL_UNKNOWN);
+    }
+    g_free (device_path);
+}
 
 void
 nm_activate_profile_async (GDBusConnection *conn,
@@ -1260,7 +1291,7 @@ nm_activate_profile_async (GDBusConnection *conn,
                        ap_path ? ap_path : "/"),
         G_VARIANT_TYPE ("(o)"),
         G_DBUS_CALL_FLAGS_NONE, 10000, NULL,
-        on_async_done, "ActivateConnection");
+        on_activate_done, g_strdup (device_path));
 }
 
 void
@@ -1280,13 +1311,39 @@ nm_activate_connection_async (GDBusConnection *conn,
 
 /* ---------- ACCIÓN ASYNC: añadir y activar conexión nueva ---------- */
 
-/* Al terminar AddAndActivate hay un perfil nuevo: descartar la lista de
- * perfiles en memoria (la señal de NM también llega, esto es por las dudas). */
+/* Datos para activar el perfil recién guardado. */
+typedef struct {
+    GDBusConnection *conn;
+    gchar           *device_path;
+    gchar           *ap_path;
+} AddThenActivate;
+
+/* Perfil nuevo guardado: descartar la lista de perfiles en memoria (la
+ * señal de NM también llega, esto es por las dudas) y activarlo. */
 static void
-on_add_and_activate_done (GObject *src, GAsyncResult *res, gpointer user_data)
+on_add_then_activate (GObject *src, GAsyncResult *res, gpointer user_data)
 {
+    AddThenActivate *ta  = user_data;
+    GError          *err = NULL;
+    GVariant        *out = g_dbus_connection_call_finish (
+                               G_DBUS_CONNECTION (src), res, &err);
     profiles_invalidate ();
-    on_async_done (src, res, user_data);
+    if (out) {
+        const gchar *profile_path = NULL;
+        g_variant_get (out, "(&o)", &profile_path);
+        nm_activate_profile_async (ta->conn, profile_path,
+                                   ta->device_path, ta->ap_path);
+        g_variant_unref (out);
+    } else {
+        g_warning ("nm-dbus async: AddConnection falló: %s",
+                   err ? err->message : "?");
+        g_clear_error (&err);
+        failure_record (ta->device_path, NM_FAIL_UNKNOWN);
+    }
+    g_object_unref (ta->conn);
+    g_free (ta->device_path);
+    g_free (ta->ap_path);
+    g_free (ta);
 }
 
 void
@@ -1331,8 +1388,14 @@ nm_add_and_activate_connection_async (GDBusConnection *conn,
                            g_variant_new_string ("802-11-wireless"));
     g_variant_builder_add (&meta_builder, "{sv}", "autoconnect",
                            g_variant_new_boolean (autoconnect));
-    /* Importante: NO pasamos "interface-name". Así el perfil no queda atado a
-     * un adapter específico y cualquier wlanX puede usarlo. */
+    /* Nombre e identificador propios: el perfil se guarda completo antes de
+     * activarlo (ver más abajo por qué). */
+    gchar *uuid = g_uuid_string_random ();
+    g_variant_builder_add (&meta_builder, "{sv}", "id",
+                           g_variant_new_string (ssid));
+    g_variant_builder_add (&meta_builder, "{sv}", "uuid",
+                           g_variant_new_string (uuid));
+    g_free (uuid);
 
     g_variant_builder_init (&conn_builder, G_VARIANT_TYPE ("a{sa{sv}}"));
     g_variant_builder_add (&conn_builder, "{sa{sv}}", "connection",
@@ -1342,7 +1405,7 @@ nm_add_and_activate_connection_async (GDBusConnection *conn,
     g_variant_builder_add (&conn_builder, "{sa{sv}}", "ipv4", &ipv4_builder);
     g_variant_builder_add (&conn_builder, "{sa{sv}}", "ipv6", &ipv6_builder);
 
-    if (password && *password) {
+    if ((password && *password) || (key_mgmt && *key_mgmt)) {
         /* "wpa-psk" sirve para WPA2 y para redes mixtas WPA2/WPA3; "sae" es
          * obligatorio en redes WPA3 puro (con wpa-psk fallarían siempre). */
         const gchar *km = (key_mgmt && *key_mgmt) ? key_mgmt : "wpa-psk";
@@ -1350,20 +1413,31 @@ nm_add_and_activate_connection_async (GDBusConnection *conn,
         g_variant_builder_init (&sec_builder, G_VARIANT_TYPE ("a{sv}"));
         g_variant_builder_add (&sec_builder, "{sv}", "key-mgmt",
                                g_variant_new_string (km));
-        g_variant_builder_add (&sec_builder, "{sv}", "psk",
-                               g_variant_new_string (password));
+        /* Sin clave: NM se la pide al agente de secretos al conectar.
+         * "owe" (abierta cifrada) nunca lleva clave. */
+        if (password && *password && g_strcmp0 (km, "owe") != 0)
+            g_variant_builder_add (&sec_builder, "{sv}", "psk",
+                                   g_variant_new_string (password));
         g_variant_builder_add (&conn_builder, "{sa{sv}}",
                                "802-11-wireless-security", &sec_builder);
     }
 
+    /* Dos pasos: primero se GUARDA el perfil sin nombrar ningún adaptador
+     * y después se activa en el adaptador elegido. Antes se usaba el pedido
+     * "crear y activar" en un solo paso, pero NM completa ese perfil con el
+     * adaptador y lo deja ATADO a él (interface-name): la otra antena no
+     * podía usarlo. Guardado aparte queda libre para cualquier antena. */
+    AddThenActivate *ta = g_new0 (AddThenActivate, 1);
+    ta->conn        = g_object_ref (conn);
+    ta->device_path = g_strdup (device_path);
+    ta->ap_path     = g_strdup (ap_path ? ap_path : "/");
     g_dbus_connection_call (
-        conn, NM_BUS_NAME, NM_OBJECT_PATH, NM_IFACE,
-        "AddAndActivateConnection",
-        g_variant_new ("(a{sa{sv}}oo)",
-                       &conn_builder, device_path, ap_path),
-        G_VARIANT_TYPE ("(oo)"),
+        conn, NM_BUS_NAME, NM_SETTINGS_PATH, NM_SETTINGS_IFACE,
+        "AddConnection",
+        g_variant_new ("(a{sa{sv}})", &conn_builder),
+        G_VARIANT_TYPE ("(o)"),
         G_DBUS_CALL_FLAGS_NONE, 10000, NULL,
-        on_add_and_activate_done, "AddAndActivateConnection");
+        on_add_then_activate, ta);
 }
 
 /* ---------- radio Wi-Fi global ---------- */
@@ -1663,6 +1737,148 @@ nm_set_profile_autoconnect (GDBusConnection *conn,
     return FALSE;
 }
 
+/* Reemplaza UN valor (sección + clave) de un perfil y conserva todo lo
+ * demás. Si la sección no existe, se agrega con ese valor. `value` puede ser
+ * flotante (se consume). Devuelve FALSE si NM rechaza el cambio; en ese caso
+ * el perfil queda intacto. */
+static gboolean
+profile_replace_value (GDBusConnection *conn, const gchar *profile_path,
+                       const gchar *section_name, const gchar *key_name,
+                       GVariant *value)
+{
+    g_variant_ref_sink (value);
+
+    GVariant *settings = g_dbus_connection_call_sync (
+        conn, NM_BUS_NAME, profile_path, NM_CONN_IFACE,
+        "GetSettings", NULL, G_VARIANT_TYPE ("(a{sa{sv}})"),
+        G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
+    if (!settings) {
+        g_variant_unref (value);
+        return FALSE;
+    }
+    GVariant *outer = g_variant_get_child_value (settings, 0);
+    g_variant_unref (settings);
+
+    GVariantBuilder top;
+    g_variant_builder_init (&top, G_VARIANT_TYPE ("a{sa{sv}}"));
+    gboolean     found_section = FALSE;
+    GVariantIter iter_top;
+    g_variant_iter_init (&iter_top, outer);
+    const gchar *section;
+    GVariant    *section_dict;
+    while (g_variant_iter_loop (&iter_top, "{&s@a{sv}}", &section, &section_dict)) {
+        gboolean target = (g_strcmp0 (section, section_name) == 0);
+        GVariantBuilder sec_b;
+        g_variant_builder_init (&sec_b, G_VARIANT_TYPE ("a{sv}"));
+        GVariantIter iter_sec;
+        g_variant_iter_init (&iter_sec, section_dict);
+        const gchar *key;
+        GVariant    *val;
+        while (g_variant_iter_loop (&iter_sec, "{&sv}", &key, &val)) {
+            if (target && g_strcmp0 (key, key_name) == 0)
+                continue;
+            g_variant_builder_add (&sec_b, "{sv}", key, val);
+        }
+        if (target) {
+            g_variant_builder_add (&sec_b, "{sv}", key_name, value);
+            found_section = TRUE;
+        }
+        g_variant_builder_add (&top, "{sa{sv}}", section, &sec_b);
+    }
+    g_variant_unref (outer);
+    if (!found_section) {
+        GVariantBuilder sec_b;
+        g_variant_builder_init (&sec_b, G_VARIANT_TYPE ("a{sv}"));
+        g_variant_builder_add (&sec_b, "{sv}", key_name, value);
+        g_variant_builder_add (&top, "{sa{sv}}", section_name, &sec_b);
+    }
+    g_variant_unref (value);
+
+    GError   *err = NULL;
+    GVariant *res = g_dbus_connection_call_sync (
+        conn, NM_BUS_NAME, profile_path, NM_CONN_IFACE,
+        "Update",
+        g_variant_new ("(a{sa{sv}})", &top),
+        NULL, G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
+    if (!res) {
+        g_warning ("nm-dbus: cambiar %s.%s de %s: %s", section_name, key_name,
+                   profile_path, err ? err->message : "?");
+        g_clear_error (&err);
+        return FALSE;
+    }
+    g_variant_unref (res);
+    profiles_invalidate ();
+    return TRUE;
+}
+
+/* Cambia SOLO la contraseña de un perfil Wi-Fi y conserva todo lo demás
+ * (IP fija, DNS, adaptador, autoconexión...). Antes, cambiar la clave
+ * borraba el perfil y creaba uno nuevo con todo en automático.
+ * Sirve para clave compartida (WPA2/WPA3: campo "psk") y WEP ("wep-key0").
+ * Devuelve FALSE si el perfil es de otro tipo (abierto, empresarial) o si
+ * NetworkManager rechaza el cambio; en ese caso el perfil queda intacto. */
+gboolean
+nm_set_profile_password (GDBusConnection *conn,
+                         const gchar     *profile_path,
+                         const gchar     *password)
+{
+    if (!profile_path || !password || !*password)
+        return FALSE;
+    ProfileInfo *pi = profile_by_path (conn, profile_path);
+    if (!pi)
+        return FALSE;
+
+    const gchar *field = NULL;
+    if (g_strcmp0 (pi->key_mgmt, "wpa-psk") == 0 ||
+        g_strcmp0 (pi->key_mgmt, "sae") == 0)
+        field = "psk";
+    else if (g_strcmp0 (pi->key_mgmt, "none") == 0)
+        field = "wep-key0";
+    if (!field)
+        return FALSE;
+
+    return profile_replace_value (conn, profile_path,
+                                  "802-11-wireless-security", field,
+                                  g_variant_new_string (password));
+}
+
+gboolean
+nm_set_profile_hidden (GDBusConnection *conn, const gchar *profile_path,
+                       gboolean hidden)
+{
+    if (!profile_path)
+        return FALSE;
+    return profile_replace_value (conn, profile_path, "802-11-wireless",
+                                  "hidden", g_variant_new_boolean (hidden));
+}
+
+gboolean
+nm_get_profile_hidden (GDBusConnection *conn, const gchar *profile_path)
+{
+    ProfileInfo *pi = profile_path ? profile_by_path (conn, profile_path) : NULL;
+    return pi ? pi->hidden : FALSE;
+}
+
+gboolean
+nm_profile_fits_ap (GDBusConnection *conn, const gchar *profile_path,
+                    guint32 wpa_flags, guint32 rsn_flags)
+{
+    ProfileInfo *pi = profile_path ? profile_by_path (conn, profile_path) : NULL;
+    return pi ? profile_fits_ap (pi, wpa_flags, rsn_flags) : FALSE;
+}
+
+GSList *
+nm_list_wifi_profiles (GDBusConnection *conn, const gchar *ssid)
+{
+    GSList *out = NULL;
+    for (GSList *l = profiles_get (conn); l; l = l->next) {
+        ProfileInfo *pi = l->data;
+        if (profile_is_client_for (pi, ssid))
+            out = g_slist_prepend (out, g_strdup (pi->path));
+    }
+    return g_slist_reverse (out);
+}
+
 /* ---------- VPN ---------- */
 
 /* Conjunto de UUIDs (identificadores únicos) de las conexiones activas.
@@ -1919,6 +2135,94 @@ on_settings_signal (GDBusConnection *conn,
                   user_data);
 }
 
+/* ---------- Último fallo de cada adaptador ----------
+ *
+ * NM avisa cada cambio de estado de un adaptador con la señal StateChanged
+ * (estado nuevo, estado viejo, MOTIVO). Cuando el estado nuevo es "falló"
+ * (120) se anota el motivo y la hora. Así el popup puede decir POR QUÉ falló
+ * una conexión (clave, red que no responde, sin dirección...) y enterarse
+ * en el momento, sin esperar a que venza un temporizador.
+ * Vive mientras haya al menos una suscripción a señales (mismo contador que
+ * la lista de perfiles). */
+
+typedef struct {
+    guint32 reason;
+    gint64  when;     /* g_get_monotonic_time() */
+} DevFailure;
+
+static GHashTable      *dev_failures   = NULL;   /* ruta → DevFailure* */
+static guint            failure_sub_id = 0;
+static GDBusConnection *failure_conn   = NULL;
+
+static void
+on_device_state_changed (GDBusConnection *c, const gchar *sender,
+                         const gchar *path, const gchar *iface,
+                         const gchar *signal, GVariant *params, gpointer data)
+{
+    (void) c; (void) sender; (void) iface; (void) signal; (void) data;
+    if (!dev_failures || !g_variant_is_of_type (params, G_VARIANT_TYPE ("(uuu)")))
+        return;
+    guint32 new_state = 0, old_state = 0, reason = 0;
+    g_variant_get (params, "(uuu)", &new_state, &old_state, &reason);
+    if (new_state != 120)
+        return;
+    DevFailure *f = g_new (DevFailure, 1);
+    f->reason = reason ? reason : NM_FAIL_UNKNOWN;
+    f->when   = g_get_monotonic_time ();
+    g_hash_table_replace (dev_failures, g_strdup (path), f);
+}
+
+static void
+failures_start (GDBusConnection *conn)
+{
+    if (failure_sub_id)
+        return;
+    dev_failures   = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
+    failure_conn   = g_object_ref (conn);
+    failure_sub_id = g_dbus_connection_signal_subscribe (
+        conn, NM_BUS_NAME, NM_DEVICE_IFACE, "StateChanged", NULL, NULL,
+        G_DBUS_SIGNAL_FLAGS_NONE, on_device_state_changed, NULL, NULL);
+}
+
+static void
+failures_stop (void)
+{
+    if (failure_sub_id)
+        g_dbus_connection_signal_unsubscribe (failure_conn, failure_sub_id);
+    failure_sub_id = 0;
+    g_clear_object (&failure_conn);
+    g_clear_pointer (&dev_failures, g_hash_table_destroy);
+}
+
+guint32
+nm_device_last_failure (const gchar *device_path, gint64 since)
+{
+    if (!dev_failures || !device_path)
+        return 0;
+    DevFailure *f = g_hash_table_lookup (dev_failures, device_path);
+    return (f && f->when >= since) ? f->reason : 0;
+}
+
+/* Suscripciones vivas (para avisarles de un fallo que no trae señal). */
+static GSList *live_signal_data = NULL;
+
+static void
+failure_record (const gchar *device_path, guint32 reason)
+{
+    if (!dev_failures || !device_path || g_strcmp0 (device_path, "/") == 0)
+        return;
+    DevFailure *f = g_new (DevFailure, 1);
+    f->reason = reason;
+    f->when   = g_get_monotonic_time ();
+    g_hash_table_replace (dev_failures, g_strdup (device_path), f);
+    /* Avisar como si hubiera llegado una señal: cada suscriptor agenda su
+     * propio refresco (ninguno se desuscribe dentro del aviso). */
+    for (GSList *l = live_signal_data; l; l = l->next) {
+        SignalData *sd = l->data;
+        sd->callback (sd->user_data);
+    }
+}
+
 guint *
 nm_subscribe_signals (GDBusConnection *conn,
                       NmSignalCallback callback,
@@ -2000,6 +2304,8 @@ nm_subscribe_signals (GDBusConnection *conn,
     /* Mientras haya alguien escuchando, la lista de perfiles se puede
      * conservar en memoria (alguien va a avisar cuando cambie). */
     profiles_watchers++;
+    /* Y se anotan los fallos de conexión de cada adaptador. */
+    failures_start (conn);
 
     /* Guardamos sd para poder liberarlo luego.
      * Cuidado: si hay dos llamadores (plugin y popup), el segundo pisa al primero.
@@ -2007,6 +2313,7 @@ nm_subscribe_signals (GDBusConnection *conn,
     gchar *key = g_strdup_printf ("nm-signal-data-%p", (void *) ids);
     g_object_set_data_full (G_OBJECT (conn), key, sd, g_free);
     g_free (key);
+    live_signal_data = g_slist_prepend (live_signal_data, sd);
 
     return ids;
 }
@@ -2019,6 +2326,8 @@ nm_unsubscribe_signals (GDBusConnection *conn, guint *ids)
         g_dbus_connection_signal_unsubscribe (conn, ids[i]);
 
     gchar *key = g_strdup_printf ("nm-signal-data-%p", (void *) ids);
+    live_signal_data = g_slist_remove (live_signal_data,
+                                       g_object_get_data (G_OBJECT (conn), key));
     g_object_set_data (G_OBJECT (conn), key, NULL);
     g_free (key);
 
@@ -2027,8 +2336,10 @@ nm_unsubscribe_signals (GDBusConnection *conn, guint *ids)
     /* Sin nadie escuchando, nadie avisaría de cambios: descartar la lista. */
     if (profiles_watchers > 0)
         profiles_watchers--;
-    if (profiles_watchers == 0)
+    if (profiles_watchers == 0) {
         profiles_invalidate ();
+        failures_stop ();
+    }
 }
 
 

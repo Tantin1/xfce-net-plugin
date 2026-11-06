@@ -396,8 +396,30 @@ msgstr "Vast aan het paneel"
 msgid "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
 msgstr "Automatisch: afgeronde hoeken en een kleine afstand tot het paneel als het thema afgeronde popovers heeft en er een compositor actief is; anders vast aan het paneel."
 
+#: popup.c
+msgid "The network rejected the connection"
+msgstr "Het netwerk heeft de verbinding geweigerd"
+
+#: popup.c
+msgid "The network did not respond"
+msgstr "Het netwerk reageerde niet"
+
+#: popup.c
+msgid "Network not found"
+msgstr "Netwerk niet gevonden"
+
+#: popup.c
+msgid "Did not get an address from the network"
+msgstr "Geen adres ontvangen van het netwerk"
+
+#: popup.c
+msgid "The connection took too long"
+msgstr "De verbinding duurde te lang"
+
+#: popup.c
+msgid "Connection failed"
+msgstr "Verbinding mislukt"
+
 #~ msgid "Saved network"
 #~ msgstr "Opgeslagen netwerk"
 
-#~ msgid "Connection failed"
-#~ msgstr "Verbinding mislukt"

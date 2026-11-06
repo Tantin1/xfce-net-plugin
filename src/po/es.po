@@ -396,8 +396,30 @@ msgstr "Pegada al panel"
 msgid "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
 msgstr "Automático: esquinas redondeadas y una pequeña separación del panel cuando el tema redondea sus ventanas emergentes y hay un compositor activo; si no, pegada al panel."
 
+#: popup.c
+msgid "The network rejected the connection"
+msgstr "La red rechazó la conexión"
+
+#: popup.c
+msgid "The network did not respond"
+msgstr "La red no respondió"
+
+#: popup.c
+msgid "Network not found"
+msgstr "No se encontró la red"
+
+#: popup.c
+msgid "Did not get an address from the network"
+msgstr "La red no entregó una dirección"
+
+#: popup.c
+msgid "The connection took too long"
+msgstr "La conexión tardó demasiado"
+
+#: popup.c
+msgid "Connection failed"
+msgstr "No se pudo conectar"
+
 #~ msgid "Saved network"
 #~ msgstr "Red guardada"
 
-#~ msgid "Connection failed"
-#~ msgstr "Error de conexión"

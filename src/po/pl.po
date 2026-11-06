@@ -396,8 +396,30 @@ msgstr "Przyklejony do panelu"
 msgid "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
 msgstr "Automatyczny: zaokrąglone rogi i niewielki odstęp od panelu, gdy motyw ma zaokrąglone okna wyskakujące i działa kompozytor; w przeciwnym razie przyklejony do panelu."
 
+#: popup.c
+msgid "The network rejected the connection"
+msgstr "Sieć odrzuciła połączenie"
+
+#: popup.c
+msgid "The network did not respond"
+msgstr "Sieć nie odpowiedziała"
+
+#: popup.c
+msgid "Network not found"
+msgstr "Nie znaleziono sieci"
+
+#: popup.c
+msgid "Did not get an address from the network"
+msgstr "Nie otrzymano adresu z sieci"
+
+#: popup.c
+msgid "The connection took too long"
+msgstr "Połączenie trwało zbyt długo"
+
+#: popup.c
+msgid "Connection failed"
+msgstr "Połączenie nie powiodło się"
+
 #~ msgid "Saved network"
 #~ msgstr "Zapisana sieć"
 
-#~ msgid "Connection failed"
-#~ msgstr "Błąd połączenia"

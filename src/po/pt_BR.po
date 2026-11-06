@@ -396,8 +396,30 @@ msgstr "Colada ao painel"
 msgid "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
 msgstr "Automático: cantos arredondados e um pequeno espaço do painel quando o tema arredonda seus popovers e há um compositor ativo; caso contrário, colada ao painel."
 
+#: popup.c
+msgid "The network rejected the connection"
+msgstr "A rede recusou a conexão"
+
+#: popup.c
+msgid "The network did not respond"
+msgstr "A rede não respondeu"
+
+#: popup.c
+msgid "Network not found"
+msgstr "Rede não encontrada"
+
+#: popup.c
+msgid "Did not get an address from the network"
+msgstr "Não foi recebido um endereço da rede"
+
+#: popup.c
+msgid "The connection took too long"
+msgstr "A conexão demorou demais"
+
+#: popup.c
+msgid "Connection failed"
+msgstr "Falha na conexão"
+
 #~ msgid "Saved network"
 #~ msgstr "Rede salva"
 
-#~ msgid "Connection failed"
-#~ msgstr "Falha na conexão"

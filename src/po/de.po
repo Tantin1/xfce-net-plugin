@@ -396,8 +396,30 @@ msgstr "Am Panel angedockt"
 msgid "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
 msgstr "Automatisch: abgerundete Ecken und ein kleiner Abstand zum Panel, wenn das Thema abgerundete Popover hat und ein Compositor läuft; sonst am Panel angedockt."
 
+#: popup.c
+msgid "The network rejected the connection"
+msgstr "Das Netzwerk hat die Verbindung abgelehnt"
+
+#: popup.c
+msgid "The network did not respond"
+msgstr "Das Netzwerk hat nicht geantwortet"
+
+#: popup.c
+msgid "Network not found"
+msgstr "Netzwerk nicht gefunden"
+
+#: popup.c
+msgid "Did not get an address from the network"
+msgstr "Keine Adresse vom Netzwerk erhalten"
+
+#: popup.c
+msgid "The connection took too long"
+msgstr "Die Verbindung hat zu lange gedauert"
+
+#: popup.c
+msgid "Connection failed"
+msgstr "Verbindung fehlgeschlagen"
+
 #~ msgid "Saved network"
 #~ msgstr "Gespeichertes Netzwerk"
 
-#~ msgid "Connection failed"
-#~ msgstr "Verbindung fehlgeschlagen"

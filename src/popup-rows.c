@@ -539,6 +539,7 @@ on_disconnect_clicked (GtkWidget *btn, gpointer rd_ptr)
 
     OpInProgress *op = g_new0 (OpInProgress, 1);
     op->kind        = OP_DISCONNECT;
+    op->started     = g_get_monotonic_time ();
     op->ssid        = g_strdup (rd->ssid);
     op->device_path = g_strdup (rd->device_path);
     op->expand_box  = rd->expand_box;
@@ -634,7 +635,20 @@ do_connect (RowData *rd)
 
     if (rd->pass_entry)
         password = gtk_entry_get_text (GTK_ENTRY (rd->pass_entry));
-    if ((!password || !*password) && !rd->profile_path)
+    gboolean typed = (password && *password);
+
+    /* Fila sin perfil: volver a buscarlo ahora. Puede haber aparecido uno
+     * desde que se armó la fila (por ejemplo, el que creó un intento
+     * anterior); si no, cada intento crearía un perfil más. */
+    if (!rd->profile_path)
+        rd->profile_path = nm_find_profile_for_ap (rd->popup->conn, rd->ssid,
+                                                   rd->wpa_flags, rd->rsn_flags,
+                                                   rd->device_path);
+
+    /* Sin perfil usable desde este adaptador y sin clave tipeada: tomar la
+     * clave de otro perfil de la misma red (por ejemplo, uno atado al otro
+     * adaptador) para crear uno libre, sin tocar el original. */
+    if (!typed && !rd->profile_path)
         saved_pw = nm_get_saved_password (rd->popup->conn, rd->ssid);
 
     if (rd->autoconnect_check)
@@ -687,6 +701,7 @@ do_connect (RowData *rd)
     /* Registrar operación en curso. */
     OpInProgress *op = g_new0 (OpInProgress, 1);
     op->kind        = OP_CONNECT;
+    op->started     = g_get_monotonic_time ();
     op->ssid        = g_strdup (rd->ssid);
     op->device_path = g_strdup (rd->device_path);
     op->expand_box  = rd->expand_box;
@@ -713,40 +728,42 @@ do_connect (RowData *rd)
     if (rd->popup->plugin_ref)
         net_plugin_set_connecting (rd->popup->plugin_ref, TRUE);
 
-    /* Perfil propio de la fila y sin contraseña tipeada: activar ESE perfil.
-     * Si le falta la clave (por ejemplo, está en "preguntar siempre"), NM se
-     * la pide al agente de secretos. Antes solo se activaba si había clave
-     * guardada: una red abierta guardada creaba un perfil duplicado nuevo
-     * en cada conexión. */
-    if (rd->profile_path && (!password || !*password)) {
-        /* Migración: borra duplicados de verdad (misma red y misma
-         * seguridad) y le saca interface-name, sin tocar otros perfiles de
-         * la misma red con otra seguridad. */
-        nm_profile_cleanup (rd->popup->conn, rd->profile_path);
+    /* Regla: conectar NUNCA borra perfiles ni les cambia otra cosa que la
+     * clave (si se tipeó una) y la casilla "Conectar automáticamente".
+     * Antes se borraban "duplicados" y se le sacaba al perfil la atadura a
+     * un adaptador: se perdían perfiles con ajustes propios (IP fija, DNS).
+     * Con varios adaptadores, cada fila ya elige un perfil que SU adaptador
+     * puede usar (nm_find_profile_for_ap), así que no hace falta tocarlos. */
+
+    /* Clave nueva sobre un perfil existente: cambiar solo la clave. Si no se
+     * puede (perfil de otro tipo de seguridad), se crea uno nuevo y el viejo
+     * queda como estaba. */
+    if (rd->profile_path && typed) {
+        /* Guardar la clave anterior: si el intento falla se le devuelve. */
+        gchar *old_pw = nm_get_profile_password (rd->popup->conn, rd->profile_path);
+        if (nm_set_profile_password (rd->popup->conn, rd->profile_path, password)) {
+            gchar *bk = make_ssid_dev_key (rd->ssid, rd->device_path);
+            pw_backup_save (rd->popup, bk, rd->profile_path, old_pw);
+            g_free (bk);
+        } else {
+            g_clear_pointer (&rd->profile_path, g_free);
+        }
+        secure_wipe_free (old_pw);
+    }
+
+    if (rd->profile_path) {
+        /* Perfil de la fila: activar ESE perfil. Si le falta la clave (por
+         * ejemplo, está en "preguntar siempre"), NM se la pide al agente de
+         * secretos. */
         nm_set_profile_autoconnect (rd->popup->conn, rd->profile_path, autoconnect);
         nm_activate_profile_async (rd->popup->conn, rd->profile_path,
                                    rd->device_path, rd->ap_path);
-    } else if (saved_pw && (!password || !*password)) {
-        /* Sin perfil identificado (no debería pasar): camino viejo por nombre. */
-        /* Migración automática: si el perfil viejo está bindeado a un adapter
-         * específico (campo interface-name fijado), se lo sacamos para que sirva
-         * a cualquier wlanX. También borra duplicados si quedaron de antes. */
-        nm_strip_interface_name (rd->popup->conn, rd->ssid);
-        /* Aplicar el valor del checkbox antes de activar. */
-        nm_set_autoconnect_by_ssid (rd->popup->conn, rd->ssid, autoconnect);
-        nm_activate_connection_async (rd->popup->conn, rd->device_path,
-                                      rd->ap_path, rd->ssid);
     } else {
-        /* Clave nueva: se reemplaza SOLO el perfil de esta fila (antes se
-         * borraban todos los perfiles con ese nombre, aunque fueran de otra
-         * seguridad). AddAndActivate crea el perfil nuevo. */
-        if (password && *password && rd->profile_path) {
-            nm_delete_profile (rd->popup->conn, rd->profile_path);
-            g_clear_pointer (&rd->profile_path, g_free);
-        }
+        /* Sin perfil usable: AddAndActivate crea uno nuevo, libre (sin
+         * atadura a un adaptador). */
         nm_add_and_activate_connection_async (rd->popup->conn, rd->device_path,
                                               rd->ap_path, rd->ssid,
-                                              saved_pw ? saved_pw : password,
+                                              typed ? password : saved_pw,
                                               rd->key_mgmt,
                                               autoconnect, FALSE);
     }
@@ -1133,7 +1150,8 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path,
      *  - resto: clave compartida clásica ("wpa-psk", cubre WPA2 y mixto). */
     guint    sec_flags     = ap->wpa_flags | ap->rsn_flags;
     gboolean is_enterprise = ap->secure &&
-                             (sec_flags & NM_AP_SEC_KEY_MGMT_802_1X) &&
+                             (sec_flags & (NM_AP_SEC_KEY_MGMT_802_1X |
+                                           NM_AP_SEC_KEY_MGMT_SUITEB)) &&
                              !(sec_flags & (NM_AP_SEC_KEY_MGMT_PSK |
                                             NM_AP_SEC_KEY_MGMT_SAE));
     const gchar *ap_key_mgmt = NULL;
@@ -1143,6 +1161,10 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path,
             ap_key_mgmt = "sae";
         else
             ap_key_mgmt = "wpa-psk";
+    } else if (nm_ap_flags_enhanced_open (ap->wpa_flags, ap->rsn_flags)) {
+        /* Abierta cifrada: sin clave, pero el perfil tiene que ser "owe"
+         * (uno abierto común no conecta). */
+        ap_key_mgmt = "owe";
     }
 
     /* Si hay un intento de conexión pendiente para este SSID y aún estamos
@@ -1163,7 +1185,8 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path,
     if (!profile_path && saved_ssids &&
         g_hash_table_contains (saved_ssids, ap->ssid))
         profile_path = nm_find_profile_for_ap (conn, ap->ssid,
-                                               ap->wpa_flags, ap->rsn_flags);
+                                               ap->wpa_flags, ap->rsn_flags,
+                                               device_path);
 
     /* is_connecting: hay un intento de conexión a esta red desde este
      * adaptador, todavía dentro de la ventana de 20s. La fila muestra
@@ -1518,6 +1541,9 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path,
         {
             const gchar *sec_str = _("Open");
             if      (is_enterprise)          sec_str = _("Enterprise (802.1X)");
+            else if (!ap->secure && sec_flags)   /* abierta cifrada */
+                sec_str = nm_ap_flags_enhanced_open (ap->wpa_flags, ap->rsn_flags)
+                          ? "OWE" : _("Open");
             else if ((ap->rsn_flags & NM_AP_SEC_KEY_MGMT_SAE) &&
                      !(sec_flags & NM_AP_SEC_KEY_MGMT_PSK))
                                              sec_str = "WPA3";
@@ -1608,6 +1634,8 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path,
     rd->key_mgmt    = ap_key_mgmt;
     rd->device_path = g_strdup (device_path);
     rd->profile_path = profile_path;      /* pasa a ser de la fila */
+    rd->wpa_flags   = ap->wpa_flags;
+    rd->rsn_flags   = ap->rsn_flags;
     rd->pass_entry        = pass_entry;
     rd->autoconnect_check = autoconnect_check_widget;
     rd->forget_btn        = forget_btn;
@@ -1632,11 +1660,19 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path,
      * autoconnect_check y antes del action_row (que solo tiene "Olvidar"). */
     gchar   *fk_exp      = make_ssid_dev_key (ap->ssid, device_path);
     gboolean had_fail_exp = g_hash_table_contains (popup->failed_ssids, fk_exp);
+    guint32  fail_reason  = GPOINTER_TO_UINT (g_hash_table_lookup (popup->failed_ssids, fk_exp));
     g_free (fk_exp);
     if (!ap_active && rd->saved && ap->secure && had_fail_exp) {
 
         /* ---- Estado A ---- */
         rd->state_a_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
+
+        /* Por qué falló el último intento (motivo que informó NM). */
+        GtkWidget *why = gtk_label_new (failure_text (fail_reason));
+        gtk_style_context_add_class (gtk_widget_get_style_context (why), "error");
+        gtk_label_set_xalign (GTK_LABEL (why), 0.0);
+        gtk_label_set_line_wrap (GTK_LABEL (why), TRUE);
+        gtk_box_pack_start (GTK_BOX (rd->state_a_box), why, FALSE, FALSE, 0);
 
         rd->retry_btn = gtk_button_new_with_label (
             _("Retry with saved password"));

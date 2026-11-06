@@ -396,8 +396,30 @@ msgstr "Attached to the panel"
 msgid "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
 msgstr "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
 
+#: popup.c
+msgid "The network rejected the connection"
+msgstr "The network rejected the connection"
+
+#: popup.c
+msgid "The network did not respond"
+msgstr "The network did not respond"
+
+#: popup.c
+msgid "Network not found"
+msgstr "Network not found"
+
+#: popup.c
+msgid "Did not get an address from the network"
+msgstr "Did not get an address from the network"
+
+#: popup.c
+msgid "The connection took too long"
+msgstr "The connection took too long"
+
+#: popup.c
+msgid "Connection failed"
+msgstr "Connection failed"
+
 #~ msgid "Saved network"
 #~ msgstr "Saved network"
 
-#~ msgid "Connection failed"
-#~ msgstr "Connection failed"

@@ -25,6 +25,10 @@
 /* Separación del popup flotante: del panel y de los bordes de la pantalla
  * (en todas las direcciones o en ninguna). */
 #define POPUP_FLOAT_GAP 6
+/* Modo automático: desde cuántos píxeles de radio el popover del tema se ve
+ * redondeado. Casi ningún tema da 0 (Numix 2, Arc 3, Qogir 3, Greybird 5),
+ * y a esos tamaños las esquinas se ven rectas; Adwaita da 9. */
+#define POPUP_ROUND_MIN 6
 
 /* Cooldown del botón Actualizar (ms) entre escaneos. */
 #define SCAN_COOLDOWN_MS 5000
@@ -39,6 +43,7 @@
 #define NM_AP_SEC_KEY_MGMT_PSK    0x00000100
 #define NM_AP_SEC_KEY_MGMT_802_1X 0x00000200
 #define NM_AP_SEC_KEY_MGMT_SAE    0x00000400
+#define NM_AP_SEC_KEY_MGMT_SUITEB 0x00002000
 
 /* ================================================================
  * Operaciones en curso
@@ -66,8 +71,22 @@ typedef struct {
     GSList    *extra_disabled;/* Lista de GtkWidget* extra que se deshabilitaron y hay que rehabilitar al fallar. */
     guint      timeout_id;    /* Fuente de timeout de 20s. */
     gboolean   extended;      /* TRUE si ya se le dio la prórroga única por "sigue intentando". */
+    gint64     started;       /* g_get_monotonic_time() al empezar. */
+    guint32    fail_reason;   /* Motivo del fallo (código de NM o NM_FAIL_*), 0 = no falló. */
     NetPopup  *popup;
 } OpInProgress;
+
+/* Texto corto para el usuario según el motivo del fallo (código de NM o
+ * NM_FAIL_*). Nunca NULL. */
+const gchar *failure_text (guint32 reason);
+
+/* Respaldo de la clave anterior de un perfil (ver NetPopup.pw_backups).
+ * pw_backup_save: anota (perfil, clave vieja) para el intento `key`.
+ * pw_backup_resolve: failed=TRUE le devuelve la clave vieja al perfil;
+ * FALSE la descarta. En los dos casos borra el respaldo. */
+void pw_backup_save    (NetPopup *popup, const gchar *key,
+                        const gchar *profile_path, const gchar *old_password);
+void pw_backup_resolve (NetPopup *popup, const gchar *key, gboolean failed);
 
 typedef struct {
     GDBusConnection *conn;
@@ -88,6 +107,8 @@ typedef struct {
     const gchar     *key_mgmt;       /* "wpa-psk" o "sae" según el AP. Cadena estática, no liberar. */
     gchar           *device_path;
     gchar           *profile_path;   /* Perfil guardado que usa esta fila (ruta en el bus), o NULL. */
+    guint32          wpa_flags;      /* Banderas de seguridad del AP, para volver a */
+    guint32          rsn_flags;      /* buscar el perfil justo al conectar. */
     GtkWidget       *pass_entry;
     GtkWidget       *autoconnect_check;
 

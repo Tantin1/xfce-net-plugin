@@ -16,6 +16,10 @@ typedef struct {
     gint       popup_width;
     gint       popup_height;
     GtkWidget *button;
+    /* Tamaño con el que se ubicó la ventana (X11) y hacia dónde abre. Si al
+     * aparecer el tamaño real es otro, se la vuelve a ubicar. */
+    gint         placed_w, placed_h;
+    GtkArrowType placed_arrow;
     GSList    *device_switches;
 
     /* Conexión DBus prestada (no liberar). */
@@ -23,6 +27,11 @@ typedef struct {
 
     /* Construcción perezosa: TRUE si la UI ya fue armada al menos una vez. */
     gboolean         ui_built;
+    /* El tema cambió con la ventana cerrada: rearmar el contenido antes de
+     * la próxima apertura (ver on_theme_changed en popup.c). */
+    gboolean         theme_dirty;
+    GtkSettings     *theme_settings;
+    gulong           theme_handler;
 
     /* Estado superior: ícono, label y switch global. Se actualizan in-place. */
     GtkWidget *status_stack;
@@ -72,6 +81,11 @@ typedef struct {
      * rastro de fallos cuando el usuario cierra el popup antes de los 20s. */
     GHashTable *pending_attempts;
 
+    /* Clave anterior de un perfil al que se le cambió la clave para conectar.
+     * Clave "ssid|device_path" → PwBackup (popup.c). Si el intento falla se
+     * le devuelve; si conecta, se descarta. */
+    GHashTable *pw_backups;
+
     /* Puntero opaco al NetPlugin del panel. Usado para controlar el spinner. */
     gpointer plugin_ref;
 
@@ -99,7 +113,7 @@ typedef struct {
     GtkWidget *search_empty;    /* "No hay redes que coincidan" */
 
     /* Aspecto del popup (nov-2026, ver popup-moderno-notas.md). */
-    GtkWidget *frame;           /* caja con nombre de componente "popover": todo el contenido va adentro */
+    GtkWidget *frame;           /* marco con nombre de componente "menu" (colores del menú del tema): todo el contenido va adentro */
     gint       popup_style;     /* NET_POPUP_STYLE_*: lo fija plugin.c antes de popup_show */
     gboolean   style_applied;   /* ya se eligió el visual al menos una vez */
     gboolean   rgba_active;     /* ventana con transparencia (esquinas del tema) */

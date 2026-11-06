@@ -15,14 +15,38 @@ typedef struct {
     GtkWidget *button;
 } GrabData;
 
-/* ---------- caja "popover" ----------
+/* ---------- marco "menu" y popover de medición ----------
  *
- * Los temas de GTK 3 escriben las esquinas y el fondo de los popovers para el
- * COMPONENTE "popover" (popover.background { border-radius: … }), no para una
- * clase: una caja común con la clase .popover queda con radio 0. Por eso una
- * subclase mínima de GtkBox cuyo nombre de componente es "popover". Todo el
- * contenido va ADENTRO (si solo se pinta el fondo detrás, la letra sigue
- * siendo la de una ventana y en temas como Numix queda ilegible). */
+ * Los temas de GTK 3 escriben sus reglas para el COMPONENTE (menu { … },
+ * popover.background { … }), no para una clase: una caja común con la clase
+ * .menu o .popover no las recibe. Por eso dos subclases mínimas de GtkBox,
+ * cada una con su nombre de componente.
+ *
+ * Nov-2026: los COLORES salen del menú del tema, igual que los plugins nativos
+ * de Xfce (pulseaudio, notifyd), que son GtkMenu. En la mayoría de los temas
+ * menú y popover coinciden, pero en Greybird-dark el popover es gris claro
+ * (#676d6e, poco contraste) y el menú oscuro (#303133). Todo el contenido va
+ * ADENTRO del marco de menú, en los tres estilos de ventana.
+ *
+ * El RADIO de las esquinas, en cambio, se toma de los popovers (los menús
+ * casi siempre tienen 0): de un popover que nunca se muestra, solo para leer
+ * el estilo del tema. */
+typedef GtkBox      NetMenuFrame;
+typedef GtkBoxClass NetMenuFrameClass;
+G_DEFINE_TYPE (NetMenuFrame, net_menu_frame, GTK_TYPE_BOX)
+
+static void
+net_menu_frame_class_init (NetMenuFrameClass *klass)
+{
+    gtk_widget_class_set_css_name (GTK_WIDGET_CLASS (klass), "menu");
+}
+
+static void
+net_menu_frame_init (NetMenuFrame *self)
+{
+    (void) self;
+}
+
 typedef GtkBox      NetPopupFrame;
 typedef GtkBoxClass NetPopupFrameClass;
 G_DEFINE_TYPE (NetPopupFrame, net_popup_frame, GTK_TYPE_BOX)
@@ -37,6 +61,31 @@ static void
 net_popup_frame_init (NetPopupFrame *self)
 {
     (void) self;
+}
+
+/* Esquinas redondeadas del marco de menú, con el radio de los popovers del
+ * tema. Solo con la ventana transparente: opaca, las esquinas se pintarían
+ * con el fondo de la ventana y se verían cuadradas. radius <= 0: rectas. */
+static void
+popup_set_round (NetPopup *popup, gint radius)
+{
+    static GtkCssProvider *provider = NULL;   /* uno por proceso: mismo tema */
+    GtkStyleContext *fctx = gtk_widget_get_style_context (popup->frame);
+
+    if (radius <= 0) {
+        gtk_style_context_remove_class (fctx, "net-round");
+        return;
+    }
+    if (!provider) {
+        provider = gtk_css_provider_new ();
+        gtk_style_context_add_provider_for_screen (gtk_widget_get_screen (popup->window),
+            GTK_STYLE_PROVIDER (provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    }
+    gchar *css = g_strdup_printf ("menu.net-popup-frame.net-round { border-radius: %dpx; }",
+                                  radius);
+    gtk_css_provider_load_from_data (provider, css, -1, NULL);
+    g_free (css);
+    gtk_style_context_add_class (fctx, "net-round");
 }
 
 /* Prototipos locales de este módulo. */
@@ -193,6 +242,9 @@ position_popup (NetPopup *popup, GtkWidget *button, GtkArrowType arrow)
     gtk_widget_get_preferred_size (popup->window, NULL, &preferred);
     pw = preferred.width;
     ph = preferred.height;
+    popup->placed_w     = pw;
+    popup->placed_h     = ph;
+    popup->placed_arrow = arrow;
 
     monitor = gdk_display_get_monitor_at_point (
                   gtk_widget_get_display (button), bx + bw / 2, by + bh / 2);
@@ -228,6 +280,38 @@ position_popup (NetPopup *popup, GtkWidget *button, GtkArrowType arrow)
     }
 
     gtk_window_move (GTK_WINDOW (popup->window), x, y);
+}
+
+/* GTK no actualiza el estilo de una ventana OCULTA: después de cambiar el
+ * tema, la primera apertura se mide con el tamaño del tema anterior y la
+ * ventana queda mal ubicada (muy arriba del panel, o encima de él). Cuando
+ * aparece, GTK le da el tamaño real: si no coincide con el usado para
+ * ubicarla, se la vuelve a ubicar. En el uso normal coinciden y no hace nada.
+ * Sirve también si el contenido cambia de alto con la ventana abierta. */
+static void
+on_popup_size_allocate (GtkWidget *win, GtkAllocation *alloc, NetPopup *popup)
+{
+    (void) alloc;
+    if (!gtk_widget_get_visible (win) || !popup->button || popup_is_wayland (win))
+        return;
+    gint w, h;
+    gtk_window_get_size (GTK_WINDOW (win), &w, &h);
+    if (w != popup->placed_w || h != popup->placed_h)
+        position_popup (popup, popup->button, popup->placed_arrow);
+}
+
+/* GTK no actualiza el estilo de los widgets de una ventana OCULTA (lo hace
+ * al mostrarla). Medida así, la primera apertura tras cambiar el tema usa el
+ * tamaño del tema anterior y queda corrida: en X11 lo corrige
+ * on_popup_size_allocate con un reacomodo; en Wayland la ubicación ya quedó
+ * pedida al compositor. Los widgets NUEVOS sí nacen con el tema actual, así
+ * que con la ventana cerrada se marca para rearmar el contenido al abrir. */
+static void
+on_theme_changed (GObject *settings, GParamSpec *pspec, NetPopup *popup)
+{
+    (void) settings; (void) pspec;
+    if (!gtk_widget_get_visible (popup->window))
+        popup->theme_dirty = TRUE;
 }
 
 /* ---------- Wayland: popup pegado al botón ----------
@@ -528,6 +612,75 @@ get_primary_ssid (GDBusConnection *conn)
 
 /* ---------- Operaciones en curso: helpers ---------- */
 
+typedef struct {
+    gchar *profile_path;
+    gchar *old_password;
+} PwBackup;
+
+static void
+pw_backup_free (gpointer p)
+{
+    PwBackup *b = p;
+    g_free (b->profile_path);
+    secure_wipe_free (b->old_password);
+    g_free (b);
+}
+
+void
+pw_backup_save (NetPopup *popup, const gchar *key,
+                const gchar *profile_path, const gchar *old_password)
+{
+    if (!popup->pw_backups || !key || !profile_path || !old_password)
+        return;
+    PwBackup *b = g_new0 (PwBackup, 1);
+    b->profile_path = g_strdup (profile_path);
+    b->old_password = g_strdup (old_password);
+    g_hash_table_replace (popup->pw_backups, g_strdup (key), b);
+}
+
+void
+pw_backup_resolve (NetPopup *popup, const gchar *key, gboolean failed)
+{
+    if (!popup->pw_backups || !key)
+        return;
+    PwBackup *b = g_hash_table_lookup (popup->pw_backups, key);
+    if (!b)
+        return;
+    /* Falló con la clave nueva: el perfil vuelve a tener la de antes, así
+     * "Reintentar con la contraseña guardada" usa esa. */
+    if (failed)
+        nm_set_profile_password (popup->conn, b->profile_path, b->old_password);
+    g_hash_table_remove (popup->pw_backups, key);
+}
+
+/* Motivos de NM (NMDeviceStateReason) que interesan para explicar un fallo. */
+const gchar *
+failure_text (guint32 reason)
+{
+    switch (reason) {
+    case 7:                         /* NO_SECRETS: clave mala o cancelada */
+        return _("Incorrect password");
+    case 8:                         /* SUPPLICANT_DISCONNECT */
+    case 9:                         /* SUPPLICANT_CONFIG_FAILED */
+        return _("The network rejected the connection");
+    case 10:                        /* SUPPLICANT_FAILED */
+    case 11:                        /* SUPPLICANT_TIMEOUT */
+        return _("The network did not respond");
+    case 53:                        /* SSID_NOT_FOUND */
+        return _("Network not found");
+    case 5:                         /* IP_CONFIG_UNAVAILABLE */
+    case 6:                         /* IP_CONFIG_EXPIRED */
+    case 15:                        /* DHCP_START_FAILED */
+    case 16:                        /* DHCP_ERROR */
+    case 17:                        /* DHCP_FAILED */
+        return _("Did not get an address from the network");
+    case NM_FAIL_TOO_LONG:
+        return _("The connection took too long");
+    default:
+        return _("Connection failed");
+    }
+}
+
 static void
 op_free (gpointer p)
 {
@@ -566,7 +719,7 @@ op_show_error (OpInProgress *op)
     if (op->kind == OP_CONNECT && op->expand_box && GTK_IS_WIDGET (op->expand_box)) {
         GtkWidget *err_label = g_object_get_data (G_OBJECT (op->expand_box), "error-label");
         if (!err_label) {
-            err_label = gtk_label_new (_("Incorrect password"));
+            err_label = gtk_label_new (NULL);
             gtk_style_context_add_class (
                 gtk_widget_get_style_context (err_label), "error");
             gtk_label_set_xalign (GTK_LABEL (err_label), 0.0);
@@ -576,6 +729,9 @@ op_show_error (OpInProgress *op)
             g_object_set_data (G_OBJECT (op->expand_box),
                                "error-label", err_label);
         }
+        /* Antes decía siempre "Contraseña incorrecta", aunque el problema
+         * fuera la señal o la dirección IP. */
+        gtk_label_set_text (GTK_LABEL (err_label), failure_text (op->fail_reason));
         gtk_widget_show (err_label);
         if (op->pass_entry && GTK_IS_ENTRY (op->pass_entry))
             gtk_entry_set_text (GTK_ENTRY (op->pass_entry), "");
@@ -592,17 +748,26 @@ op_timeout_cb (gpointer user_data)
     OpInProgress *op = user_data;
     op->timeout_id = 0;
 
-    /* Prórroga única: si es un intento de conexión y la antena TODAVÍA está
-     * intentando (autenticando, pidiendo IP, etc.), no declaramos fallo aún.
-     * Le damos una sola tanda extra de OP_TIMEOUT_MS. Si al vencer esa tanda
-     * sigue sin conectar, ahí sí se declara el fallo (este mismo callback
-     * vuelve a entrar, pero op->extended ya estará en TRUE). */
-    if (op->kind == OP_CONNECT && !op->extended && op->popup &&
+    /* ¿NM ya informó que falló? Entonces se sabe por qué. */
+    if (op->kind == OP_CONNECT && !op->fail_reason)
+        op->fail_reason = nm_device_last_failure (op->device_path, op->started);
+
+    /* Prórroga única: si es un intento de conexión, NM no informó fallo y la
+     * antena TODAVÍA está intentando (autenticando, pidiendo IP, etc.), no
+     * declaramos fallo aún. Le damos una sola tanda extra de OP_TIMEOUT_MS.
+     * Si al vencer esa tanda sigue sin conectar, ahí sí se declara el fallo
+     * (este mismo callback vuelve a entrar, pero op->extended ya estará en
+     * TRUE). Si NM avisa el fallo antes, check_ops_progress lo adelanta. */
+    if (op->kind == OP_CONNECT && !op->fail_reason && !op->extended && op->popup &&
         device_is_connecting (op->popup->conn, op->device_path)) {
         op->extended   = TRUE;
         op->timeout_id = g_timeout_add (OP_TIMEOUT_MS, op_timeout_cb, op);
         return G_SOURCE_REMOVE;
     }
+    if (op->kind == OP_CONNECT && !op->fail_reason)
+        op->fail_reason = (op->popup &&
+                           device_is_connecting (op->popup->conn, op->device_path))
+                          ? NM_FAIL_TOO_LONG : NM_FAIL_UNKNOWN;
 
     /* Apagar spinner: operación falló. */
     if (op->kind == OP_CONNECT && op->popup && op->popup->plugin_ref)
@@ -620,11 +785,12 @@ op_timeout_cb (gpointer user_data)
     if (op->kind == OP_CONNECT && op->ssid) {
         g_hash_table_replace (op->popup->failed_ssids,
                               make_ssid_dev_key (op->ssid, op->device_path),
-                              GINT_TO_POINTER (1));
+                              GUINT_TO_POINTER (op->fail_reason));
         /* Ya procesamos visualmente el fallo, no es "pending". */
         {
             gchar *attempt_key = make_ssid_dev_key (op->ssid, op->device_path);
             g_hash_table_remove (op->popup->pending_attempts, attempt_key);
+            pw_backup_resolve (op->popup, attempt_key, TRUE);
             g_free (attempt_key);
         }
         failed_ssid = g_strdup (op->ssid);
@@ -703,59 +869,55 @@ process_pending_attempts (NetPopup *popup)
     if (!popup->pending_attempts) return;
     if (g_hash_table_size (popup->pending_attempts) == 0) return;
 
-    gint64  now = g_get_monotonic_time ();  /* microsegundos */
-    GSList *to_mark_failed = NULL;
+    gint64 now = g_get_monotonic_time ();  /* microsegundos */
 
+    /* Cada intento se decide por lo que informó NM, no solo por el reloj:
+     *   - conectado                       → nada que marcar;
+     *   - NM informó un fallo después de empezar → fallido, con su motivo
+     *     (aunque no hayan pasado los 20s);
+     *   - todavía intentando (autenticando, pidiendo IP...) → se espera,
+     *     aunque hayan pasado los 20s (antes se marcaba fallo igual);
+     *   - pasaron 20s y no está ni conectado ni intentando → fallido sin
+     *     motivo conocido.
+     * Pasados PENDING_ATTEMPT_MAX_AGE_SECS se descarta sin marcar: ya no se
+     * distingue un fallo de una desconexión hecha desde afuera. */
     GHashTableIter iter;
     gpointer       key, value;
     g_hash_table_iter_init (&iter, popup->pending_attempts);
     while (g_hash_table_iter_next (&iter, &key, &value)) {
-        gint64      *ts   = value;
+        gint64      *ts       = value;
         gint64       age_secs = (now - *ts) / G_USEC_PER_SEC;
+        const gchar *k        = key;
+        const gchar *sep      = strrchr (k, '|');
 
-        if (age_secs > PENDING_ATTEMPT_MAX_AGE_SECS) {
-            /* Intento viejo: a esta altura ya no se puede distinguir un fallo
-             * real de una desconexión manual hecha desde afuera del plugin
-             * (nmtui, terminal). Descartar sin marcar fallo — cualquier marca
-             * tardía sería confusa. La limpieza al final lo elimina. */
+        /* La clave es "ssid|device_path", la misma que usa failed_ssids.
+         * Clave mal formada o intento viejo: descartar sin marcar. */
+        if (!sep || !sep[1] || age_secs > PENDING_ATTEMPT_MAX_AGE_SECS) {
+            pw_backup_resolve (popup, k, FALSE);
+            g_hash_table_iter_remove (&iter);
             continue;
         }
+        const gchar *dev = sep + 1;
 
-        if (age_secs * 1000 < OP_TIMEOUT_MS)
-            continue;  /* todavía dentro del tiempo de espera, no declarar fallo */
+        if (device_is_activated (popup->conn, dev)) {
+            if ((now - *ts) / 1000 >= (gint64) OP_TIMEOUT_MS) {
+                pw_backup_resolve (popup, k, FALSE);
+                g_hash_table_iter_remove (&iter);
+            }
+            continue;   /* los recientes se conservan: NM puede mentir "activado" */
+        }
 
-        /* La clave es "ssid|device_path" y es la misma que usa failed_ssids,
-         * así que se reutiliza tal cual. Siempre trae adaptador: todos los
-         * intentos se registran desde una fila, que conoce su adaptador. */
-        const gchar *k   = key;
-        const gchar *sep = strrchr (k, '|');
-        if (!sep || !sep[1])
-            continue;   /* clave mal formada: la limpieza final la elimina */
-        if (!device_is_activated (popup->conn, sep + 1))
-            to_mark_failed = g_slist_prepend (to_mark_failed, g_strdup (k));
-    }
-
-    for (GSList *l = to_mark_failed; l; l = l->next) {
-        g_hash_table_replace (popup->failed_ssids,
-                              g_strdup ((const gchar *) l->data),
-                              GINT_TO_POINTER (1));
-    }
-    g_slist_free_full (to_mark_failed, g_free);
-
-    /* Eliminar los intentos cuya ventana de 20s ya expiró: a esta altura ya
-     * fueron evaluados (marcados como fallo o descartados). Los más recientes
-     * se conservan para que make_ap_row pueda forzar "no conectada" durante
-     * ese período (NM puede mentir sobre el estado activo hasta que el AP
-     * rechace la auth). Antes el umbral era de 60s por error: las entradas
-     * de 20-60s quedaban dando vueltas sin servir para nada. */
-    GHashTableIter iter2;
-    gpointer       key2, value2;
-    g_hash_table_iter_init (&iter2, popup->pending_attempts);
-    while (g_hash_table_iter_next (&iter2, &key2, &value2)) {
-        gint64 *ts = value2;
-        gint64  age_ms = (now - *ts) / 1000;
-        if (age_ms >= (gint64) OP_TIMEOUT_MS)
-            g_hash_table_iter_remove (&iter2);
+        guint32 reason = nm_device_last_failure (dev, *ts);
+        if (!reason) {
+            if ((now - *ts) / 1000 < (gint64) OP_TIMEOUT_MS ||
+                device_is_connecting (popup->conn, dev))
+                continue;   /* todavía puede conectar */
+            reason = NM_FAIL_UNKNOWN;
+        }
+        g_hash_table_replace (popup->failed_ssids, g_strdup (k),
+                              GUINT_TO_POINTER (reason));
+        pw_backup_resolve (popup, k, TRUE);
+        g_hash_table_iter_remove (&iter);
     }
 }
 
@@ -768,6 +930,7 @@ check_ops_progress (NetPopup *popup)
     GHashTableIter iter;
     gpointer       key, value;
     GSList        *to_remove = NULL;
+    GSList        *failed_now = NULL;
 
     g_hash_table_iter_init (&iter, popup->ops_in_progress);
     while (g_hash_table_iter_next (&iter, &key, &value)) {
@@ -799,6 +962,7 @@ check_ops_progress (NetPopup *popup)
                         g_hash_table_remove (popup->failed_ssids, fk);
                         /* Limpiar intento pendiente: ya resuelto en este ciclo. */
                         g_hash_table_remove (popup->pending_attempts, fk);
+                        pw_backup_resolve (popup, fk, FALSE);
                         g_free (fk);
                     }
                     if (op->expand_box && GTK_IS_WIDGET (op->expand_box)) {
@@ -812,6 +976,13 @@ check_ops_progress (NetPopup *popup)
                         net_plugin_set_connecting (popup->plugin_ref, FALSE);
                 }
                 g_free (active_ssid);
+            } else if (!op->fail_reason) {
+                /* NM ya informó que falló: no esperar al temporizador. */
+                guint32 reason = nm_device_last_failure (device_path, op->started);
+                if (reason) {
+                    op->fail_reason = reason;
+                    failed_now = g_slist_append (failed_now, g_strdup (device_path));
+                }
             }
         } else { /* OP_DISCONNECT */
             if (device_is_disconnected (popup->conn, device_path)) {
@@ -831,6 +1002,19 @@ check_ops_progress (NetPopup *popup)
         g_free (l->data);
     }
     g_slist_free (to_remove);
+
+    /* Fallos ya informados: el mismo camino que el temporizador vencido,
+     * pero en un idle (acá no se puede reconstruir la lista ni tocar la
+     * tabla de operaciones). */
+    for (GSList *l = failed_now; l; l = l->next) {
+        OpInProgress *op = g_hash_table_lookup (popup->ops_in_progress, l->data);
+        if (op) {
+            if (op->timeout_id)
+                g_source_remove (op->timeout_id);
+            op->timeout_id = g_idle_add (op_timeout_cb, op);
+        }
+    }
+    g_slist_free_full (failed_now, g_free);
 }
 
 /* ---------- verificación robusta de existencia de íconos del tema ----------
@@ -1083,7 +1267,14 @@ typedef struct {
     GtkWidget       *status_label;
     gchar           *ssid;             /* red que se está intentando */
     gchar           *device_path;      /* adaptador usado */
-    gboolean         remove_on_fail;   /* el perfil lo creamos nosotros */
+    /* Intento en curso. Regla: un perfil que ya existía nunca se borra; si
+     * el intento falla, se le devuelve lo que se le cambió. */
+    GSList          *before;           /* perfiles de esa red que ya existían */
+    gchar           *reused_path;      /* perfil existente que se usó, o NULL */
+    gchar           *old_password;     /* su clave anterior (para devolverla) */
+    gboolean         set_password;     /* se le cambió la clave */
+    gboolean         set_hidden;       /* se le puso la marca "oculta" */
+    gint64           started;          /* inicio del intento (monotónico) */
     gboolean         seen_activating;  /* el adaptador ya pasó por 40-90 */
     guint           *signal_ids;       /* suscripción propia, NULL si no hay intento */
     guint            timeout_id;       /* límite de espera */
@@ -1125,6 +1316,18 @@ hidden_set_busy (HiddenData *hd, gboolean busy)
                                        GTK_RESPONSE_OK, !busy);
 }
 
+/* Olvida los datos del intento (no toca perfiles). */
+static void
+hidden_attempt_clear (HiddenData *hd)
+{
+    g_slist_free_full (hd->before, g_free);
+    hd->before = NULL;
+    g_clear_pointer (&hd->reused_path, g_free);
+    g_clear_pointer (&hd->old_password, secure_wipe_free);
+    hd->set_password = FALSE;
+    hd->set_hidden   = FALSE;
+}
+
 /* Al destruirse el diálogo (Cancelar, cerrar ventana o éxito). Las acciones
  * ya enviadas a NM siguen su curso aunque el diálogo se cierre. */
 static void
@@ -1132,6 +1335,7 @@ on_hidden_destroy (GtkWidget *dialog, HiddenData *hd)
 {
     (void) dialog;
     hidden_stop_watch (hd);
+    hidden_attempt_clear (hd);
     g_free (hd->ssid);
     g_free (hd->device_path);
     g_free (hd);
@@ -1141,16 +1345,32 @@ static void
 hidden_fail (HiddenData *hd)
 {
     hidden_stop_watch (hd);
-    /* Un perfil de red oculta fallido con autoconexión quedaría reintentando
-     * para siempre: si lo creamos nosotros, se borra. */
-    if (hd->remove_on_fail && hd->ssid)
-        nm_forget_connection (hd->conn, hd->ssid);
+    if (hd->reused_path) {
+        /* Perfil que ya existía: no se borra; se le devuelve lo cambiado. */
+        if (hd->set_password && hd->old_password)
+            nm_set_profile_password (hd->conn, hd->reused_path, hd->old_password);
+        if (hd->set_hidden)
+            nm_set_profile_hidden (hd->conn, hd->reused_path, FALSE);
+    } else if (hd->ssid) {
+        /* Perfil creado en este intento: un perfil de red oculta fallido con
+         * autoconexión quedaría reintentando para siempre, así que se borra.
+         * SOLO el creado ahora (antes se borraban todos los de esa red). */
+        GSList *now = nm_list_wifi_profiles (hd->conn, hd->ssid);
+        for (GSList *l = now; l; l = l->next)
+            if (!g_slist_find_custom (hd->before, l->data, (GCompareFunc) g_strcmp0))
+                nm_delete_profile (hd->conn, l->data);
+        g_slist_free_full (now, g_free);
+    }
+    hidden_attempt_clear (hd);
 
     GtkStyleContext *ctx = gtk_widget_get_style_context (hd->status_label);
     gtk_style_context_remove_class (ctx, "dim-label");
     gtk_style_context_add_class    (ctx, "error");
+    /* Si NM informó por qué falló, decirlo. */
+    guint32 reason = nm_device_last_failure (hd->device_path, hd->started);
     gtk_label_set_text (GTK_LABEL (hd->status_label),
-                        _("Last connection attempt failed"));
+                        reason ? failure_text (reason)
+                               : _("Last connection attempt failed"));
     gtk_widget_show (hd->status_label);
     hidden_set_busy (hd, FALSE);
 }
@@ -1203,8 +1423,9 @@ hidden_eval_idle (gpointer user_data)
         hd->seen_activating = TRUE;
     else if (hidden_is_connected (hd, state))
         hidden_succeed (hd);
-    else if (hd->seen_activating && (state == 120 || state <= 30))
-        hidden_fail (hd);
+    else if ((hd->seen_activating && (state == 120 || state <= 30)) ||
+             nm_device_last_failure (hd->device_path, hd->started))
+        hidden_fail (hd);   /* también si NM rechazó el pedido de entrada */
     return G_SOURCE_REMOVE;
 }
 
@@ -1279,13 +1500,31 @@ on_hidden_response (GtkDialog *dialog, gint response, HiddenData *hd)
     hd->ssid            = g_strdup (ssid);
     hd->device_path     = device_path;
     hd->seen_activating = FALSE;
+    hd->started         = g_get_monotonic_time ();
 
-    /* Igual que en la fila: con clave nueva se borra el perfil viejo para no
-     * acumular duplicados. Así, todo perfil que quede es nuestro. */
-    gboolean had_profile = nm_has_saved_connection (hd->conn, ssid);
-    if (secure && had_profile)
-        nm_forget_connection (hd->conn, ssid);
-    hd->remove_on_fail = secure || !had_profile;
+    /* Igual que en la fila: si ya hay un perfil de esa red que este
+     * adaptador pueda usar y con la seguridad elegida, se reutiliza (solo se
+     * le cambia la clave y se lo marca como oculta). Si no, se crea uno.
+     * Nunca se borra un perfil que ya existía. */
+    hidden_attempt_clear (hd);
+    hd->before = nm_list_wifi_profiles (hd->conn, ssid);
+    guint32 rsn = secure ? (NM_AP_SEC_KEY_MGMT_PSK | NM_AP_SEC_KEY_MGMT_SAE) : 0;
+    gchar  *reuse = nm_find_profile_for_ap (hd->conn, ssid, 0, rsn, device_path);
+    if (reuse && !nm_profile_fits_ap (hd->conn, reuse, 0, rsn))
+        g_clear_pointer (&reuse, g_free);
+    if (reuse && secure) {
+        hd->old_password = nm_get_profile_password (hd->conn, reuse);
+        if (nm_set_profile_password (hd->conn, reuse, password))
+            hd->set_password = TRUE;
+        else
+            g_clear_pointer (&reuse, g_free);   /* no se pudo: crear uno */
+    }
+    if (reuse && !nm_get_profile_hidden (hd->conn, reuse) &&
+        nm_set_profile_hidden (hd->conn, reuse, TRUE))
+        hd->set_hidden = TRUE;
+    hd->reused_path = reuse;
+    if (!reuse)
+        g_clear_pointer (&hd->old_password, secure_wipe_free);
 
     GtkStyleContext *ctx = gtk_widget_get_style_context (hd->status_label);
     gtk_style_context_remove_class (ctx, "error");
@@ -1298,9 +1537,13 @@ on_hidden_response (GtkDialog *dialog, gint response, HiddenData *hd)
     hd->signal_ids = nm_subscribe_signals (hd->conn, on_hidden_nm_signal, hd);
     hd->timeout_id = g_timeout_add (HIDDEN_TIMEOUT_MS, hidden_timeout_cb, hd);
 
-    nm_add_and_activate_connection_async (
-        hd->conn, hd->device_path, "/", hd->ssid,
-        secure ? password : NULL, NULL, TRUE, TRUE);
+    if (hd->reused_path)
+        nm_activate_profile_async (hd->conn, hd->reused_path,
+                                   hd->device_path, "/");
+    else
+        nm_add_and_activate_connection_async (
+            hd->conn, hd->device_path, "/", hd->ssid,
+            secure ? password : NULL, NULL, TRUE, TRUE);
 }
 
 void
@@ -1684,18 +1927,17 @@ popup_create (XfcePanelPlugin *plugin, GtkWidget *button)
                 ".net-row-open:dir(rtl), .net-row-open:focus:dir(rtl) {"
                 "  box-shadow: inset -3px 0 @theme_selected_bg_color; }"
                 ".module-sep { background-color: alpha(currentColor, 0.3); background-image: none; min-height: 2px; }"
-                /* Ventana transparente: se ven las esquinas del popover. */
+                /* Ventana transparente: se ven las esquinas redondeadas. */
                 "window.net-popup-window.net-rounded { background-color: transparent; background-image: none; }"
-                /* Sombra del tema: quedaría cortada. Margen: algunos temas lo dan. */
-                "popover.net-popup-frame { box-shadow: none; margin: 0; }"
-                /* Sin transparencia: esquinas rectas (si no, saldrían negras). */
-                "popover.net-popup-frame.net-square { border-radius: 0; }"
-                /* Separadores dentro del popover: sin margen (quedaba una
-                 * franja sin resaltar junto a la fila) y con color propio
-                 * relativo a la letra del popover: muchos temas los pintan
-                 * casi del color del fondo (Arc: blanco sobre blanco).
-                 * background-image: none anula degradados de algunos temas. */
-                "popover.net-popup-frame separator { margin: 0; min-height: 1px;"
+                /* Marco de menú: sin margen ni sombra (quedaría cortada) y
+                 * recto salvo con la clase net-round (popup_set_round). */
+                "menu.net-popup-frame { margin: 0; box-shadow: none; border-radius: 0; }"
+                /* Separadores: sin margen (quedaba una franja sin resaltar
+                 * junto a la fila) y con color propio relativo a la letra
+                 * del menú: muchos temas los pintan casi del color del fondo
+                 * (Arc: blanco sobre blanco). background-image: none anula
+                 * degradados de algunos temas. */
+                "menu.net-popup-frame separator { margin: 0; min-height: 1px;"
                 "  background-color: alpha(currentColor, 0.15); background-image: none; }",
                 -1, &css_err);
             if (css_err) {
@@ -1721,16 +1963,26 @@ popup_create (XfcePanelPlugin *plugin, GtkWidget *button)
     gtk_widget_set_size_request     (win, -1, -1);
     gtk_style_context_add_class (gtk_widget_get_style_context (win), "net-popup-window");
 
-    /* ventana → caja "popover" → todo el contenido. */
-    popup->frame = g_object_new (net_popup_frame_get_type (),
+    /* ventana → marco "menu" → todo el contenido. SIN la clase
+     * "background": en Greybird claro pisaba el blanco del menú (#fcfcfc)
+     * con el gris de las ventanas (#cecece). */
+    popup->frame = g_object_new (net_menu_frame_get_type (),
                                  "orientation", GTK_ORIENTATION_VERTICAL, NULL);
-    {
-        GtkStyleContext *fctx = gtk_widget_get_style_context (popup->frame);
-        gtk_style_context_add_class (fctx, "background");
-        gtk_style_context_add_class (fctx, "net-popup-frame");
-        gtk_style_context_add_class (fctx, "net-square");   /* hasta elegir el visual */
-    }
+    gtk_style_context_add_class (gtk_widget_get_style_context (popup->frame),
+                                 "net-popup-frame");
     gtk_container_add (GTK_CONTAINER (win), popup->frame);
+
+    /* Popover que nunca se muestra: solo para leer el radio de los popovers
+     * del tema. Sin padre; lo mantiene vivo esta referencia y se libera con
+     * la ventana. Lleva "background" porque los temas escriben
+     * popover.background { border-radius: … }. */
+    {
+        GtkWidget *probe = g_object_new (net_popup_frame_get_type (),
+                                         "orientation", GTK_ORIENTATION_VERTICAL, NULL);
+        gtk_style_context_add_class (gtk_widget_get_style_context (probe), "background");
+        g_object_set_data_full (G_OBJECT (win), "net-popover-probe",
+                                g_object_ref_sink (probe), g_object_unref);
+    }
 
     outer_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
     gtk_style_context_add_class (gtk_widget_get_style_context (outer_box), "popup");
@@ -1806,12 +2058,20 @@ popup_create (XfcePanelPlugin *plugin, GtkWidget *button)
     g_signal_connect (win, "key-press-event", G_CALLBACK (on_key_press), popup);
 
     popup->window = win;
+    g_signal_connect (win, "size-allocate",
+                      G_CALLBACK (on_popup_size_allocate), popup);
+    popup->theme_settings = gtk_settings_get_for_screen (gtk_widget_get_screen (win));
+    popup->theme_handler  = g_signal_connect (popup->theme_settings,
+                                              "notify::gtk-theme-name",
+                                              G_CALLBACK (on_theme_changed), popup);
     popup->ops_in_progress = g_hash_table_new_full (g_str_hash, g_str_equal,
                                                      g_free, op_free);
     popup->failed_ssids = g_hash_table_new_full (g_str_hash, g_str_equal,
                                                   g_free, NULL);
     popup->pending_attempts = g_hash_table_new_full (g_str_hash, g_str_equal,
                                                       g_free, g_free);
+    popup->pw_backups = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                               g_free, pw_backup_free);
     return popup;
 }
 
@@ -1826,12 +2086,31 @@ popup_apply_style (NetPopup *popup)
     GdkScreen       *screen = gtk_widget_get_screen (win);
     GdkVisual       *rgba   = gdk_screen_get_rgba_visual (screen);
     GtkStyleContext *wctx   = gtk_widget_get_style_context (win);
-    GtkStyleContext *fctx   = gtk_widget_get_style_context (popup->frame);
+
+    /* Radio de los POPOVERS del tema, leído del popover oculto (nunca del
+     * marco de menú: casi siempre da 0 y Automático no flotaría nunca). */
+    gint       radius = 0;
+    GtkWidget *probe  = g_object_get_data (G_OBJECT (win), "net-popover-probe");
+    if (probe) {
+        GtkStyleContext *pctx = gtk_widget_get_style_context (probe);
+        gtk_style_context_get (pctx, gtk_style_context_get_state (pctx),
+                               "border-radius", &radius, NULL);
+    }
 
     /* Transparencia solo con compositor: sin él, las esquinas saldrían negras.
      * (En Wayland siempre hay: el compositor es labwc / xfwl4.) */
-    gboolean want = popup->popup_style != NET_POPUP_STYLE_ATTACHED &&
-                    gdk_screen_is_composited (screen) && rgba != NULL;
+    gboolean composited = gdk_screen_is_composited (screen) && rgba != NULL;
+
+    /* Automático: flota solo si se puede (compositor) y el tema redondea de
+     * forma VISIBLE. Antes bastaba cualquier radio mayor que 0, y casi todos
+     * los temas dan 2-5 px: nunca quedaba pegada al panel. */
+    gboolean floating;
+    switch (popup->popup_style) {
+    case NET_POPUP_STYLE_FLOATING: floating = TRUE;  break;
+    case NET_POPUP_STYLE_ATTACHED: floating = FALSE; break;
+    default: floating = composited && radius >= POPUP_ROUND_MIN; break;
+    }
+    gboolean want = floating && composited;
 
     if (!popup->style_applied || want != popup->rgba_active) {
         if (gtk_widget_get_realized (win) && !gtk_widget_get_visible (win))
@@ -1844,31 +2123,17 @@ popup_apply_style (NetPopup *popup)
         /* Si no se pudo (ventana visible), se aplica en la próxima apertura. */
     }
 
-    if (popup->rgba_active) {
+    if (popup->rgba_active)
         gtk_style_context_add_class    (wctx, "net-rounded");
-        gtk_style_context_remove_class (fctx, "net-square");
-    } else {
+    else
         gtk_style_context_remove_class (wctx, "net-rounded");
-        gtk_style_context_add_class    (fctx, "net-square");
-    }
 
-    /* Separación: "tiene transparencia" no es "está redondeada" (un tema de
-     * esquinas rectas flotaría igual). En automático se mira el radio real
-     * del tema; sin la clase de esquinas rectas, da el del popover. */
-    gint radius = 0;
-    gtk_style_context_get (fctx, gtk_style_context_get_state (fctx),
-                           "border-radius", &radius, NULL);
-    switch (popup->popup_style) {
-    case NET_POPUP_STYLE_FLOATING:
-        popup->float_gap = POPUP_FLOAT_GAP;
-        break;
-    case NET_POPUP_STYLE_ATTACHED:
-        popup->float_gap = 0;
-        break;
-    default:
-        popup->float_gap = (popup->rgba_active && radius > 0) ? POPUP_FLOAT_GAP : 0;
-        break;
-    }
+    /* Los colores son siempre los del menú; el estilo solo cambia la
+     * separación y las esquinas (redondeadas solo con transparencia). */
+    popup_set_round (popup, popup->rgba_active ? radius : 0);
+
+    /* Separación del panel: flotante sí, pegada no. */
+    popup->float_gap = floating ? POPUP_FLOAT_GAP : 0;
 }
 
 void
@@ -1934,7 +2199,8 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
 
     /* Construir UI si es la primera vez. */
     nm_cache_begin (conn);
-    if (!popup->ui_built) {
+    if (!popup->ui_built || popup->theme_dirty) {
+        popup->theme_dirty = FALSE;
         rebuild_ui (popup);
     } else {
         /* Ya estaba construida; refrescar estado por las dudas. */
@@ -2076,6 +2342,10 @@ popup_destroy (NetPopup *popup)
 {
     if (!popup) return;
     popup_hide (popup);
+    /* La configuración de GTK sobrevive al popup: soltar el aviso de tema. */
+    if (popup->theme_handler)
+        g_signal_handler_disconnect (popup->theme_settings, popup->theme_handler);
+    popup->theme_handler = 0;
     /* popup_hide no hace nada si el popup ya estaba oculto, así que los
      * temporizadores se cancelan también acá: ninguno debe disparar con el
      * popup liberado (quitar el plugin del panel). */
@@ -2094,6 +2364,8 @@ popup_destroy (NetPopup *popup)
         g_hash_table_destroy (popup->failed_ssids);
     if (popup->pending_attempts)
         g_hash_table_destroy (popup->pending_attempts);
+    if (popup->pw_backups)
+        g_hash_table_destroy (popup->pw_backups);
     gtk_widget_destroy (popup->window);
     g_free (popup);
 }

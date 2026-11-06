@@ -396,8 +396,30 @@ msgstr "Attaccata al pannello"
 msgid "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
 msgstr "Automatico: angoli arrotondati e un piccolo spazio dal pannello quando il tema arrotonda i popover e un compositore è attivo; altrimenti attaccata al pannello."
 
+#: popup.c
+msgid "The network rejected the connection"
+msgstr "La rete ha rifiutato la connessione"
+
+#: popup.c
+msgid "The network did not respond"
+msgstr "La rete non ha risposto"
+
+#: popup.c
+msgid "Network not found"
+msgstr "Rete non trovata"
+
+#: popup.c
+msgid "Did not get an address from the network"
+msgstr "Nessun indirizzo ricevuto dalla rete"
+
+#: popup.c
+msgid "The connection took too long"
+msgstr "La connessione ha impiegato troppo tempo"
+
+#: popup.c
+msgid "Connection failed"
+msgstr "Connessione non riuscita"
+
 #~ msgid "Saved network"
 #~ msgstr "Rete salvata"
 
-#~ msgid "Connection failed"
-#~ msgstr "Connessione fallita"
