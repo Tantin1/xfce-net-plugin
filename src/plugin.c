@@ -164,7 +164,11 @@ apply_config (NetPlugin *np)
 
     {
         gchar *css;
-        gint   ps = xfce_panel_plugin_get_size (plugin);
+        /* Lado de UNA fila: con el panel en varias filas, el tamaño del
+         * panel es el de todas juntas. El plugin está marcado como "chico"
+         * (ocupa una sola fila), así que el botón cuadrado mide una fila. */
+        gint   rows = (gint) xfce_panel_plugin_get_nrows (plugin);
+        gint   ps   = xfce_panel_plugin_get_size (plugin) / MAX (rows, 1);
 
         if (np->square_button)
             css = g_strdup_printf (
@@ -1103,6 +1107,25 @@ on_size_changed (XfcePanelPlugin *plugin, gint size, NetPlugin *np)
     return TRUE;
 }
 
+/* Cambió la cantidad de filas del panel: el tamaño del panel no cambia,
+ * pero sí el de cada fila (botón cuadrado e ícono automático). */
+static void
+on_nrows_changed (XfcePanelPlugin *plugin, guint rows, NetPlugin *np)
+{
+    (void) plugin;
+    (void) rows;
+    apply_config (np);
+}
+
+/* Cambió el modo del panel (horizontal, vertical o barra de escritorio). */
+static void
+on_mode_changed (XfcePanelPlugin *plugin, XfcePanelPluginMode mode, NetPlugin *np)
+{
+    (void) plugin;
+    (void) mode;
+    apply_config (np);
+}
+
 static NetPlugin *
 net_plugin_new (XfcePanelPlugin *plugin)
 {
@@ -1148,6 +1171,10 @@ net_plugin_new (XfcePanelPlugin *plugin)
 
     g_signal_connect (plugin, "size-changed",
                       G_CALLBACK (on_size_changed), np);
+    g_signal_connect (plugin, "nrows-changed",
+                      G_CALLBACK (on_nrows_changed), np);
+    g_signal_connect (plugin, "mode-changed",
+                      G_CALLBACK (on_mode_changed), np);
     g_signal_connect (np->button, "toggled",
                       G_CALLBACK (on_button_toggled), np);
 
