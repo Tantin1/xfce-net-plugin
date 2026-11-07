@@ -65,6 +65,7 @@ typedef struct {
     guint      pending_timeout_id;  /* evaluar intentos pendientes al reabrir */
     guint      passive_timeout_id;  /* expand pasivo "Conectando…" */
     guint      refresh_idle_id;     /* refresco agendado (coalescido) */
+    guint      reserve_idle_id;     /* reacomodo del hueco de la barra de desplazamiento */
     gboolean   show_separators;
 
     /* Redes cuya última operación CONNECT falló, clave "ssid|device_path"

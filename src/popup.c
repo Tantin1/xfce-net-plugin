@@ -1880,6 +1880,90 @@ on_button_press (GtkWidget *widget, GdkEventButton *event, NetPopup *popup)
     return GDK_EVENT_PROPAGATE;
 }
 
+/* ---------- hueco reservado para la barra de desplazamiento ----------
+ *
+ * Con barras clásicas (las que ocupan lugar), al aparecer la barra la lista
+ * se angostaba y todo lo alineado a la derecha (interruptores, "Conectado",
+ * botones) se corría unos píxeles. Por ejemplo, al abrir un expand con pocas
+ * redes.
+ *
+ * Primera versión (parche 02): un margen a la derecha mientras la barra no
+ * se veía. Tenía un parpadeo: el margen se sacaba un instante DESPUÉS de que
+ * aparecía la barra, y en ese instante estaban los dos y todo se corría.
+ *
+ * Ahora: la barra está SIEMPRE (GTK le guarda su lugar) y cuando no hace
+ * falta se la vuelve invisible con la clase "net-noscroll" (opacidad 0).
+ * Mostrarla u ocultarla no cambia ningún tamaño, así que nada se mueve,
+ * ni siquiera un instante. Con barras flotantes (se dibujan encima del
+ * contenido, no ocupan lugar) se deja como antes: aparece cuando hace falta. */
+
+/* ¿Las barras de esta lista son flotantes? Mismo criterio que usa GTK:
+ * la propiedad de la lista, el ajuste del sistema y la variable de entorno. */
+static gboolean
+scroll_uses_overlay (GtkWidget *scroll)
+{
+    if (!gtk_scrolled_window_get_overlay_scrolling (GTK_SCROLLED_WINDOW (scroll)))
+        return FALSE;
+    if (g_strcmp0 (g_getenv ("GTK_OVERLAY_SCROLLING"), "0") == 0)
+        return FALSE;
+    GtkSettings *settings = gtk_widget_get_settings (scroll);
+    gboolean     overlay  = TRUE;
+    if (g_object_class_find_property (G_OBJECT_GET_CLASS (settings),
+                                      "gtk-overlay-scrolling"))
+        g_object_get (settings, "gtk-overlay-scrolling", &overlay, NULL);
+    return overlay;
+}
+
+static void
+scroll_reserve_sync (NetPopup *popup)
+{
+    if (!popup->scroll)
+        return;
+
+    GtkScrolledWindow *sw      = GTK_SCROLLED_WINDOW (popup->scroll);
+    gboolean           overlay = scroll_uses_overlay (popup->scroll);
+
+    /* Barras clásicas: siempre presente (lugar guardado). Flotantes: solo
+     * cuando hace falta, como siempre. Solo cambia si cambió el ajuste del
+     * sistema, y eso se mira al abrir el popup. */
+    GtkPolicyType want = overlay ? GTK_POLICY_AUTOMATIC : GTK_POLICY_ALWAYS;
+    GtkPolicyType hpol, vpol;
+    gtk_scrolled_window_get_policy (sw, &hpol, &vpol);
+    if (vpol != want)
+        gtk_scrolled_window_set_policy (sw, GTK_POLICY_NEVER, want);
+
+    /* ¿Hace falta desplazarse? (el contenido es más alto que lo visible) */
+    GtkAdjustment *adj    = gtk_scrolled_window_get_vadjustment (sw);
+    gboolean       needed = gtk_adjustment_get_upper (adj) - gtk_adjustment_get_lower (adj)
+                            > gtk_adjustment_get_page_size (adj);
+
+    GtkStyleContext *ctx = gtk_widget_get_style_context (popup->scroll);
+    if (!overlay && !needed)
+        gtk_style_context_add_class    (ctx, "net-noscroll");
+    else
+        gtk_style_context_remove_class (ctx, "net-noscroll");
+}
+
+/* Diferido: el aviso de cambio llega en medio del acomodo de la ventana.
+ * La demora ya no mueve nada: como mucho la barra se ve un instante tarde. */
+static gboolean
+scroll_reserve_idle (gpointer user_data)
+{
+    NetPopup *popup = user_data;
+    popup->reserve_idle_id = 0;
+    scroll_reserve_sync (popup);
+    return G_SOURCE_REMOVE;
+}
+
+/* Cambió el alto del contenido o el de la zona visible. */
+static void
+on_scroll_adj_changed (GtkAdjustment *adj, NetPopup *popup)
+{
+    (void) adj;
+    if (!popup->reserve_idle_id)
+        popup->reserve_idle_id = g_idle_add (scroll_reserve_idle, popup);
+}
+
 /* ---------- API publica ---------- */
 
 static gboolean
@@ -1932,6 +2016,9 @@ popup_create (XfcePanelPlugin *plugin, GtkWidget *button)
                 /* Marco de menú: sin margen ni sombra (quedaría cortada) y
                  * recto salvo con la clase net-round (popup_set_round). */
                 "menu.net-popup-frame { margin: 0; box-shadow: none; border-radius: 0; }"
+                /* Barra de desplazamiento sin nada que desplazar: invisible
+                 * pero en su lugar (ver scroll_reserve_sync). */
+                "scrolledwindow.net-noscroll > scrollbar { opacity: 0; }"
                 /* Separadores: sin margen (quedaba una franja sin resaltar
                  * junto a la fila) y con color propio relativo a la letra
                  * del menú: muchos temas los pintan casi del color del fondo
@@ -2030,6 +2117,8 @@ popup_create (XfcePanelPlugin *plugin, GtkWidget *button)
 
     popup->content_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
     gtk_container_add (GTK_CONTAINER (scroll), popup->content_box);
+    g_signal_connect (gtk_scrolled_window_get_vadjustment (GTK_SCROLLED_WINDOW (scroll)),
+                      "changed", G_CALLBACK (on_scroll_adj_changed), popup);
 
     /* Zona fija inferior. OJO: pack_end apila de abajo hacia arriba: de
      * abajo hacia arriba quedan Avanzado y Red oculta. Sin línea propia
@@ -2147,6 +2236,7 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
     popup_apply_style (popup);
     gtk_widget_set_size_request (popup->window, popup_width, -1);
     search_sync_height (popup);   /* lista = alto configurado − borde del tema */
+    scroll_reserve_sync (popup);  /* hueco de la barra desde el primer dibujo */
 
     /* Procesar intentos pendientes de la sesión anterior del popup: para cada
      * SSID que tenía un intento de conexión sin resolver al cerrarse, mirar
@@ -2349,9 +2439,16 @@ popup_destroy (NetPopup *popup)
     /* popup_hide no hace nada si el popup ya estaba oculto, así que los
      * temporizadores se cancelan también acá: ninguno debe disparar con el
      * popup liberado (quitar el plugin del panel). */
+    /* Soltar el aviso de la barra ANTES de destruir la ventana: al
+     * destruirse podría avisar un cambio y agendar un reacomodo sobre el
+     * popup ya liberado. */
+    if (popup->scroll)
+        g_signal_handlers_disconnect_by_func (
+            gtk_scrolled_window_get_vadjustment (GTK_SCROLLED_WINDOW (popup->scroll)),
+            on_scroll_adj_changed, popup);
     guint *timers[] = { &popup->scan_timeout_id, &popup->pending_timeout_id,
                         &popup->passive_timeout_id, &popup->refresh_idle_id,
-                        &popup->menu_idle_id };
+                        &popup->menu_idle_id, &popup->reserve_idle_id };
     for (gsize i = 0; i < G_N_ELEMENTS (timers); i++) {
         if (*timers[i]) {
             g_source_remove (*timers[i]);
