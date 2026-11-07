@@ -13,6 +13,8 @@ find_package(Intl REQUIRED)
 
 pkg_check_modules(GTK3       REQUIRED gtk+-3.0>=3.24)
 pkg_check_modules(XFCE4PANEL REQUIRED libxfce4panel-2.0>=4.18)
+# Configuración por copia del plugin, como los nativos (Debian: libxfconf-0-dev).
+pkg_check_modules(XFCONF     REQUIRED libxfconf-0>=4.18)
 pkg_check_modules(LIBNOTIFY           libnotify>=0.7)
 pkg_check_modules(LIBQRENCODE         libqrencode)
 
@@ -64,6 +66,7 @@ add_custom_command(
 target_include_directories(xfce-net-plugin PRIVATE
     ${GTK3_INCLUDE_DIRS}
     ${XFCE4PANEL_INCLUDE_DIRS}
+    ${XFCONF_INCLUDE_DIRS}
     ${LIBNOTIFY_INCLUDE_DIRS}
     ${LIBQRENCODE_INCLUDE_DIRS}
 )
@@ -71,12 +74,14 @@ target_include_directories(xfce-net-plugin PRIVATE
 target_compile_options(xfce-net-plugin PRIVATE
     ${GTK3_CFLAGS_OTHER}
     ${XFCE4PANEL_CFLAGS_OTHER}
+    ${XFCONF_CFLAGS_OTHER}
     -Wall -Wextra
 )
 
 target_link_libraries(xfce-net-plugin PRIVATE
     ${GTK3_LIBRARIES}
     ${XFCE4PANEL_LIBRARIES}
+    ${XFCONF_LIBRARIES}
     ${Intl_LIBRARIES}
     ${LIBNOTIFY_LIBRARIES}
     ${LIBQRENCODE_LIBRARIES}

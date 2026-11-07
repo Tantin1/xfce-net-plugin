@@ -5,6 +5,8 @@
  * proceso del panel y comparten el dominio "por defecto": con gi18n.h
  * nuestros textos se buscaban en el de otro y salían en inglés. */
 #include <glib/gi18n-lib.h>
+#include <glib/gstdio.h>
+#include <xfconf/xfconf.h>
 #ifdef HAVE_LIBNOTIFY
 #include <libnotify/notify.h>
 #endif
@@ -61,6 +63,10 @@ typedef struct {
     gboolean        show_separators;
 
     GtkCssProvider *button_css;
+
+    /* Configuración en Xfconf, propia de ESTA copia del plugin (bajo
+     * /plugins/plugin-N del canal xfce4-panel). NULL si Xfconf no respondió. */
+    XfconfChannel  *channel;
 
     guint *signal_ids;
     guint  refresh_timeout_id;   /* refresco agendado del ícono (100 ms) */
@@ -202,9 +208,22 @@ apply_config (NetPlugin *np)
                        np->last_secure, np->last_vpn, np->last_wired);
 }
 
-/* ---------- leer / guardar configuración ---------- */
+/* ---------- leer / guardar configuración ----------
+ *
+ * Igual que los plugins nativos de Xfce: la configuración vive en Xfconf,
+ * canal "xfce4-panel", bajo la ruta propia de cada copia del plugin
+ * (/plugins/plugin-N, la da xfce_panel_plugin_get_property_base). Así:
+ *   - cada copia (por ejemplo, una en cada panel) tiene la suya;
+ *   - al quitar el plugin, el PANEL borra esa ruta entera, y si se lo vuelve
+ *     a agregar arranca con los valores por defecto. El plugin no tiene que
+ *     hacer nada para eso.
+ *
+ * Antes (hasta nov-2026) todo iba a ~/.config/xfce4/panel/xfce-net-plugin.ini,
+ * compartido por todas las copias y que sobrevivía a quitar el plugin. La
+ * primera copia que arranca sin configuración en Xfconf lo importa una vez y
+ * lo borra (si quedara, cada copia nueva volvería a leerlo). */
 
-#define CONFIG_PATH "xfce4/panel/xfce-net-plugin.ini"
+#define CONFIG_PATH "xfce4/panel/xfce-net-plugin.ini"   /* solo para importar */
 
 static gchar *
 get_config_path (void)
@@ -212,14 +231,11 @@ get_config_path (void)
     return g_build_filename (g_get_user_config_dir (), CONFIG_PATH, NULL);
 }
 
+static void save_config (NetPlugin *np);
 
 static void
-load_config (NetPlugin *np)
+config_defaults (NetPlugin *np)
 {
-    GKeyFile *kf   = g_key_file_new ();
-    gchar    *path = get_config_path ();
-    GError   *err  = NULL;
-
     np->square_button  = DEFAULT_SQUARE_BUTTON;
     np->plugin_size    = DEFAULT_PLUGIN_SIZE;
     np->use_panel_icon = DEFAULT_USE_PANEL_ICON;
@@ -237,106 +253,156 @@ load_config (NetPlugin *np)
         np->disabled_ifaces = g_hash_table_new_full (g_str_hash, g_str_equal,
                                                      g_free, NULL);
     g_hash_table_remove_all (np->disabled_ifaces);
+}
 
-    if (!g_key_file_load_from_file (kf, path, G_KEY_FILE_NONE, &err)) {
-        g_clear_error (&err);
-        goto out;
+/* Valores fuera de rango (configuración editada a mano o de una versión
+ * futura) vuelven a los de por defecto. */
+static void
+config_validate (NetPlugin *np)
+{
+    if (np->popup_style < NET_POPUP_STYLE_AUTO || np->popup_style > NET_POPUP_STYLE_ATTACHED)
+        np->popup_style = DEFAULT_POPUP_STYLE;
+    if (np->plugin_size  <= 0) np->plugin_size  = DEFAULT_PLUGIN_SIZE;
+    if (np->icon_size    <= 0) np->icon_size    = DEFAULT_ICON_SIZE;
+    if (np->popup_width  <= 0) np->popup_width  = DEFAULT_POPUP_WIDTH;
+    if (np->popup_height <= 0) np->popup_height = DEFAULT_POPUP_HEIGHT;
+}
+
+/* Lee el .ini viejo (solo para importarlo). FALSE si no existe. */
+static gboolean
+load_config_ini (NetPlugin *np, const gchar *path)
+{
+    GKeyFile *kf = g_key_file_new ();
+    if (!g_key_file_load_from_file (kf, path, G_KEY_FILE_NONE, NULL)) {
+        g_key_file_free (kf);
+        return FALSE;
     }
 
-    np->square_button  = g_key_file_get_boolean (kf, "appearance", "square_button",  NULL);
-    np->plugin_size    = g_key_file_get_integer  (kf, "appearance", "plugin_size",    NULL);
-    np->use_panel_icon = g_key_file_get_boolean  (kf, "appearance", "use_panel_icon", NULL);
-    np->icon_size      = g_key_file_get_integer  (kf, "appearance", "icon_size",      NULL);
-    np->popup_width    = g_key_file_get_integer  (kf, "appearance", "popup_width",    NULL);
-    np->popup_height    = g_key_file_get_integer  (kf, "appearance", "popup_height",    NULL);
-    np->show_separators = g_key_file_get_boolean  (kf, "appearance", "show_separators", NULL);
-    if (!g_key_file_has_key (kf, "appearance", "show_separators", NULL))
-        np->show_separators = DEFAULT_SHOW_SEPARATORS;
-    np->show_notifications = g_key_file_get_boolean (kf, "appearance", "show_notifications", NULL);
-    if (!g_key_file_has_key (kf, "appearance", "show_notifications", NULL))
-        np->show_notifications = DEFAULT_SHOW_NOTIFICATIONS;
-    np->show_forget_active = g_key_file_get_boolean (kf, "appearance", "show_forget_active", NULL);
-    if (!g_key_file_has_key (kf, "appearance", "show_forget_active", NULL))
-        np->show_forget_active = DEFAULT_SHOW_FORGET_ACTIVE;
-    if (g_key_file_has_key (kf, "appearance", "prefer_nm_icons", NULL))
-        np->prefer_nm_icons = g_key_file_get_boolean (kf, "appearance",
-                                                      "prefer_nm_icons", NULL);
-    if (g_key_file_has_key (kf, "appearance", "popup_style", NULL)) {
-        gint v = g_key_file_get_integer (kf, "appearance", "popup_style", NULL);
-        /* Validar: un valor fuera de rango (archivo editado a mano o de una
-         * versión futura) vuelve al automático. */
-        np->popup_style = (v >= NET_POPUP_STYLE_AUTO && v <= NET_POPUP_STYLE_ATTACHED)
-                          ? v : DEFAULT_POPUP_STYLE;
-    }
-    if (g_key_file_has_key (kf, "network", "secret_agent", NULL))
-        np->secret_agent_enabled = g_key_file_get_boolean (kf, "network",
-                                                           "secret_agent", NULL);
-    if (g_key_file_has_key (kf, "network", "remember_disabled", NULL))
-        np->remember_disabled = g_key_file_get_boolean (kf, "network",
-                                                        "remember_disabled", NULL);
-    {
-        gsize  n = 0;
-        gchar **names = g_key_file_get_string_list (kf, "network",
-                                                    "disabled_devices", &n, NULL);
-        for (gsize i = 0; names && i < n; i++)
-            if (names[i] && *names[i])
-                g_hash_table_add (np->disabled_ifaces, g_strdup (names[i]));
-        g_strfreev (names);
-    }
+#define INI_BOOL(grp, key, field) \
+    if (g_key_file_has_key (kf, grp, key, NULL)) \
+        np->field = g_key_file_get_boolean (kf, grp, key, NULL)
+#define INI_INT(grp, key, field) \
+    if (g_key_file_has_key (kf, grp, key, NULL)) \
+        np->field = g_key_file_get_integer (kf, grp, key, NULL)
 
-    if (np->plugin_size  == 0) np->plugin_size  = DEFAULT_PLUGIN_SIZE;
-    if (np->icon_size    == 0) np->icon_size    = DEFAULT_ICON_SIZE;
-    if (np->popup_width  == 0) np->popup_width  = DEFAULT_POPUP_WIDTH;
-    if (np->popup_height == 0) np->popup_height = DEFAULT_POPUP_HEIGHT;
+    INI_BOOL ("appearance", "square_button",      square_button);
+    INI_INT  ("appearance", "plugin_size",        plugin_size);
+    INI_BOOL ("appearance", "use_panel_icon",     use_panel_icon);
+    INI_INT  ("appearance", "icon_size",          icon_size);
+    INI_INT  ("appearance", "popup_width",        popup_width);
+    INI_INT  ("appearance", "popup_height",       popup_height);
+    INI_BOOL ("appearance", "show_separators",    show_separators);
+    INI_BOOL ("appearance", "show_notifications", show_notifications);
+    INI_BOOL ("appearance", "show_forget_active", show_forget_active);
+    INI_BOOL ("appearance", "prefer_nm_icons",    prefer_nm_icons);
+    INI_INT  ("appearance", "popup_style",        popup_style);
+    INI_BOOL ("network",    "secret_agent",       secret_agent_enabled);
+    INI_BOOL ("network",    "remember_disabled",  remember_disabled);
+#undef INI_BOOL
+#undef INI_INT
 
-out:
+    gsize   n = 0;
+    gchar **names = g_key_file_get_string_list (kf, "network", "disabled_devices",
+                                                &n, NULL);
+    for (gsize i = 0; names && i < n; i++)
+        if (names[i] && *names[i])
+            g_hash_table_add (np->disabled_ifaces, g_strdup (names[i]));
+    g_strfreev (names);
+
     g_key_file_free (kf);
+    config_validate (np);
+    return TRUE;
+}
+
+static void
+load_config_xfconf (NetPlugin *np)
+{
+    XfconfChannel *ch = np->channel;
+
+    np->square_button   = xfconf_channel_get_bool (ch, "/square-button",   DEFAULT_SQUARE_BUTTON);
+    np->plugin_size     = xfconf_channel_get_int  (ch, "/plugin-size",     DEFAULT_PLUGIN_SIZE);
+    np->use_panel_icon  = xfconf_channel_get_bool (ch, "/use-panel-size",  DEFAULT_USE_PANEL_ICON);
+    np->icon_size       = xfconf_channel_get_int  (ch, "/icon-size",       DEFAULT_ICON_SIZE);
+    np->popup_width     = xfconf_channel_get_int  (ch, "/popup-width",     DEFAULT_POPUP_WIDTH);
+    np->popup_height    = xfconf_channel_get_int  (ch, "/popup-height",    DEFAULT_POPUP_HEIGHT);
+    np->show_separators = xfconf_channel_get_bool (ch, "/show-separators", DEFAULT_SHOW_SEPARATORS);
+    np->show_notifications = xfconf_channel_get_bool (ch, "/show-notifications",
+                                                      DEFAULT_SHOW_NOTIFICATIONS);
+    np->show_forget_active = xfconf_channel_get_bool (ch, "/show-forget-active",
+                                                      DEFAULT_SHOW_FORGET_ACTIVE);
+    np->prefer_nm_icons = xfconf_channel_get_bool (ch, "/prefer-nm-icons", DEFAULT_PREFER_NM_ICONS);
+    np->popup_style     = xfconf_channel_get_int  (ch, "/popup-style",     DEFAULT_POPUP_STYLE);
+    np->secret_agent_enabled = xfconf_channel_get_bool (ch, "/secret-agent", DEFAULT_SECRET_AGENT);
+    np->remember_disabled    = xfconf_channel_get_bool (ch, "/remember-disabled",
+                                                        DEFAULT_REMEMBER_DISABLED);
+
+    gchar **names = xfconf_channel_get_string_list (ch, "/disabled-devices");
+    for (gchar **p = names; p && *p; p++)
+        if (**p)
+            g_hash_table_add (np->disabled_ifaces, g_strdup (*p));
+    g_strfreev (names);
+
+    config_validate (np);
+}
+
+static void
+load_config (NetPlugin *np)
+{
+    config_defaults (np);
+
+    gchar *path = get_config_path ();
+    if (!np->channel) {
+        /* Xfconf no respondió: usar al menos lo guardado antes, sin borrarlo.
+         * Los cambios no se guardan hasta que Xfconf vuelva. */
+        load_config_ini (np, path);
+    } else if (xfconf_channel_has_property (np->channel, "/plugin-size")) {
+        load_config_xfconf (np);
+    } else if (load_config_ini (np, path)) {
+        /* Primera vez con Xfconf: importar el .ini viejo y borrarlo, solo si
+         * quedó guardado de verdad. */
+        save_config (np);
+        if (xfconf_channel_has_property (np->channel, "/plugin-size"))
+            g_unlink (path);
+    }
     g_free (path);
 }
 
 static void
 save_config (NetPlugin *np)
 {
-    GKeyFile *kf   = g_key_file_new ();
-    gchar    *path = get_config_path ();
-    gchar    *dir  = g_path_get_dirname (path);
-    GError   *err  = NULL;
+    XfconfChannel *ch = np->channel;
+    if (!ch)
+        return;
 
-    g_mkdir_with_parents (dir, 0755);
+    xfconf_channel_set_bool (ch, "/square-button",      np->square_button);
+    xfconf_channel_set_int  (ch, "/plugin-size",        np->plugin_size);
+    xfconf_channel_set_bool (ch, "/use-panel-size",     np->use_panel_icon);
+    xfconf_channel_set_int  (ch, "/icon-size",          np->icon_size);
+    xfconf_channel_set_int  (ch, "/popup-width",        np->popup_width);
+    xfconf_channel_set_int  (ch, "/popup-height",       np->popup_height);
+    xfconf_channel_set_bool (ch, "/show-separators",    np->show_separators);
+    xfconf_channel_set_bool (ch, "/show-notifications", np->show_notifications);
+    xfconf_channel_set_bool (ch, "/show-forget-active", np->show_forget_active);
+    xfconf_channel_set_bool (ch, "/prefer-nm-icons",    np->prefer_nm_icons);
+    xfconf_channel_set_int  (ch, "/popup-style",        np->popup_style);
+    xfconf_channel_set_bool (ch, "/secret-agent",       np->secret_agent_enabled);
+    xfconf_channel_set_bool (ch, "/remember-disabled",  np->remember_disabled);
 
-    g_key_file_set_boolean (kf, "appearance", "square_button",  np->square_button);
-    g_key_file_set_integer  (kf, "appearance", "plugin_size",    np->plugin_size);
-    g_key_file_set_boolean (kf, "appearance", "use_panel_icon", np->use_panel_icon);
-    g_key_file_set_integer  (kf, "appearance", "icon_size",      np->icon_size);
-    g_key_file_set_integer  (kf, "appearance", "popup_width",    np->popup_width);
-    g_key_file_set_integer  (kf, "appearance", "popup_height",    np->popup_height);
-    g_key_file_set_boolean  (kf, "appearance", "show_separators",    np->show_separators);
-    g_key_file_set_boolean  (kf, "appearance", "show_notifications", np->show_notifications);
-    g_key_file_set_boolean  (kf, "appearance", "show_forget_active",  np->show_forget_active);
-    g_key_file_set_boolean  (kf, "appearance", "prefer_nm_icons",     np->prefer_nm_icons);
-    g_key_file_set_integer  (kf, "appearance", "popup_style",         np->popup_style);
-    g_key_file_set_boolean  (kf, "network",    "secret_agent",        np->secret_agent_enabled);
-    g_key_file_set_boolean  (kf, "network",    "remember_disabled",   np->remember_disabled);
+    /* Xfconf no guarda listas vacías: sin adaptadores, se borra la clave. */
     if (np->disabled_ifaces && g_hash_table_size (np->disabled_ifaces) > 0) {
-        GPtrArray *arr = g_ptr_array_new ();
+        GPtrArray     *arr = g_ptr_array_new ();
         GHashTableIter it;
-        gpointer key;
+        gpointer       key;
         g_hash_table_iter_init (&it, np->disabled_ifaces);
         while (g_hash_table_iter_next (&it, &key, NULL))
             g_ptr_array_add (arr, key);
-        g_key_file_set_string_list (kf, "network", "disabled_devices",
-                                    (const gchar * const *) arr->pdata, arr->len);
+        g_ptr_array_add (arr, NULL);
+        xfconf_channel_set_string_list (ch, "/disabled-devices",
+                                        (const gchar * const *) arr->pdata);
         g_ptr_array_free (arr, TRUE);
+    } else {
+        xfconf_channel_reset_property (ch, "/disabled-devices", FALSE);
     }
-
-    if (!g_key_file_save_to_file (kf, path, &err)) {
-        g_warning ("xfce-net-plugin: no se pudo guardar config: %s", err->message);
-        g_error_free (err);
-    }
-
-    g_key_file_free (kf);
-    g_free (dir);
-    g_free (path);
 }
 
 /* ---------- ventana de propiedades ---------- */
@@ -497,7 +563,7 @@ all_switchable_devices (GDBusConnection *conn)
  * equivocado. Por eso se guarda la dirección física de fábrica, que no
  * cambia. Solo si el adaptador no informa una se usa el nombre, como antes.
  * Una dirección física siempre tiene ':' y un nombre de interfaz no, así se
- * distinguen al leer el .ini. */
+ * distinguen al leer la configuración. */
 static const gchar *
 device_key (NmDevice *dev)
 {
@@ -1140,6 +1206,19 @@ net_plugin_new (XfcePanelPlugin *plugin)
     np->last_wired     = FALSE;
     np->notif_ready    = FALSE;
 
+    /* Canal de Xfconf con la ruta propia de esta copia del plugin. */
+    {
+        GError *xerr = NULL;
+        if (xfconf_init (&xerr))
+            np->channel = xfconf_channel_new_with_property_base (
+                              "xfce4-panel", xfce_panel_plugin_get_property_base (plugin));
+        else {
+            g_warning ("xfce-net-plugin: Xfconf no responde, la configuración "
+                       "no se va a guardar: %s", xerr ? xerr->message : "?");
+            g_clear_error (&xerr);
+        }
+    }
+
     load_config (np);
     popup_set_prefer_nm_icons (np->prefer_nm_icons);
 
@@ -1236,6 +1315,10 @@ net_plugin_free (XfcePanelPlugin *plugin, NetPlugin *np)
     g_free (np->last_ssid);
     if (np->disabled_ifaces)
         g_hash_table_destroy (np->disabled_ifaces);
+    if (np->channel) {
+        g_object_unref (np->channel);
+        xfconf_shutdown ();
+    }
     g_free (np);
 }
 

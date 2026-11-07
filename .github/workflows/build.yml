@@ -33,14 +33,14 @@ jobs:
             build-essential meson ninja-build cmake pkg-config gettext \
             dpkg-dev fakeroot \
             libglib2.0-dev-bin libgtk-3-dev libxfce4panel-2.0-dev \
-            libxfce4ui-2-dev libnotify-dev libqrencode-dev
+            libxfconf-0-dev libxfce4ui-2-dev libnotify-dev libqrencode-dev
 
       - name: Instalar dependencias (Arch)
         if: startsWith(matrix.imagen, 'archlinux')
         run: |
           pacman -Syu --noconfirm --needed \
             base-devel meson ninja cmake pkgconf gettext \
-            gtk3 xfce4-panel libnotify qrencode
+            gtk3 xfce4-panel xfconf libnotify qrencode
 
       - name: Bajar el código
         uses: actions/checkout@v4
@@ -77,7 +77,7 @@ jobs:
           Priority: optional
           Architecture: $ARCH
           Maintainer: Tu Nombre <tu@email.com>
-          Depends: libgtk-3-0, libxfce4panel-2.0-4, libxfce4ui-2-0, libnotify4, libqrencode4
+          Depends: libgtk-3-0, libxfce4panel-2.0-4, libxfconf-0-3, libxfce4ui-2-0, libnotify4, libqrencode4
           Description: $PKG_DESC
           EOF
 

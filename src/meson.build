@@ -17,6 +17,8 @@ gnome = import('gnome')
 # Dependencias
 gtk3       = dependency('gtk+-3.0',         version : '>= 3.24')
 xfce4panel = dependency('libxfce4panel-2.0', version : '>= 4.18')
+# Configuración por copia del plugin, como los nativos (Debian: libxfconf-0-dev).
+xfconf     = dependency('libxfconf-0',       version : '>= 4.18')
 intl       = dependency('intl')
 libnotify  = dependency('libnotify',         version : '>= 0.7', required : false)
 libqrencode = dependency('libqrencode',                                required : false)
@@ -61,7 +63,7 @@ add_project_arguments(
   language : 'c',
 )
 
-plugin_deps = [gtk3, xfce4panel, intl]
+plugin_deps = [gtk3, xfce4panel, xfconf, intl]
 if libnotify.found()
   plugin_deps += libnotify
   add_project_arguments('-DHAVE_LIBNOTIFY', language : 'c')
