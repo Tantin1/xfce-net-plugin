@@ -30,6 +30,11 @@
  * y a esos tamaños las esquinas se ven rectas; Adwaita da 9. */
 #define POPUP_ROUND_MIN 6
 
+/* Margen izquierdo y derecho del contenido de las filas de la lista. Al
+ * derecho se le suma el ancho de la barra de desplazamiento, que se dibuja
+ * encima de la lista (popup_end_margin). */
+#define POPUP_ROW_MARGIN 12
+
 /* Cooldown del botón Actualizar (ms) entre escaneos. */
 #define SCAN_COOLDOWN_MS 5000
 
@@ -159,6 +164,10 @@ void      on_search_button_clicked (GtkWidget *btn, NetPopup *popup);
 /* Ajusta el alto de la lista para que la franja de búsqueda (y su aviso)
  * no agranden el popup: el alto total queda siempre igual. */
 void      search_sync_height       (NetPopup *popup);
+/* Margen derecho del contenido de una fila de la lista: POPUP_ROW_MARGIN
+ * más el ancho de la barra de desplazamiento (0 con barras flotantes). Así
+ * la barra, que va encima de la lista, nunca tapa botones ni textos. */
+gint      popup_end_margin         (NetPopup *popup);
 
 /* ---- popup-rows.c (fila de red, expand y sus callbacks) ---- */
 gchar    *row_fingerprint (NetPopup *popup, NmAccessPoint *ap,

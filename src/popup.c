@@ -1880,22 +1880,24 @@ on_button_press (GtkWidget *widget, GdkEventButton *event, NetPopup *popup)
     return GDK_EVENT_PROPAGATE;
 }
 
-/* ---------- hueco reservado para la barra de desplazamiento ----------
+/* ---------- barra de desplazamiento propia, encima de la lista ----------
  *
- * Con barras clásicas (las que ocupan lugar), al aparecer la barra la lista
- * se angostaba y todo lo alineado a la derecha (interruptores, "Conectado",
- * botones) se corría unos píxeles. Por ejemplo, al abrir un expand con pocas
- * redes.
+ * Historia: con barras clásicas (las que ocupan lugar), al aparecer la barra
+ * la lista se angostaba y lo alineado a la derecha se corría (parches 02 y
+ * 03: primero un margen, después la barra siempre presente e invisible).
+ * Con eso nada se movía, pero las líneas separadoras y el resaltado de la
+ * fila abierta terminaban antes del borde, donde empezaba la franja de la
+ * barra.
  *
- * Primera versión (parche 02): un margen a la derecha mientras la barra no
- * se veía. Tenía un parpadeo: el margen se sacaba un instante DESPUÉS de que
- * aparecía la barra, y en ese instante estaban los dos y todo se corría.
+ * Ahora la lista ocupa TODO el ancho y la barra es una capa encima de ella
+ * (GtkOverlay), del lado derecho: se muestra cuando hay algo que desplazar y
+ * se oculta cuando no. Como está encima, aparecer o desaparecer no cambia el
+ * ancho de nada. Para que nunca tape un botón o un texto, el contenido de
+ * cada fila deja a la derecha su margen de siempre MÁS el ancho de la barra
+ * (popup_end_margin); el fondo y las líneas sí llegan al borde.
  *
- * Ahora: la barra está SIEMPRE (GTK le guarda su lugar) y cuando no hace
- * falta se la vuelve invisible con la clase "net-noscroll" (opacidad 0).
- * Mostrarla u ocultarla no cambia ningún tamaño, así que nada se mueve,
- * ni siquiera un instante. Con barras flotantes (se dibujan encima del
- * contenido, no ocupan lugar) se deja como antes: aparece cuando hace falta. */
+ * Con barras flotantes del sistema (se dibujan encima del contenido) se usa
+ * la de GTK como siempre y la propia queda oculta; el margen extra es 0. */
 
 /* ¿Las barras de esta lista son flotantes? Mismo criterio que usa GTK:
  * la propiedad de la lista, el ajuste del sistema y la variable de entorno. */
@@ -1914,45 +1916,103 @@ scroll_uses_overlay (GtkWidget *scroll)
     return overlay;
 }
 
+/* Ancho de una barra vertical en el tema actual. GTK da 0 al medir un widget
+ * oculto, así que no se puede medir la barra propia cuando no se ve: se mide
+ * una barra de muestra que nunca se dibuja. Se rehace si cambia el tema. */
+static gint
+scrollbar_width (NetPopup *popup)
+{
+    GObject *win   = G_OBJECT (popup->window);
+    gchar   *theme = NULL;
+    g_object_get (gtk_widget_get_settings (popup->window),
+                  "gtk-theme-name", &theme, NULL);
+
+    GtkWidget *probe = g_object_get_data (win, "net-vbar-probe");
+    if (!probe || g_strcmp0 (g_object_get_data (win, "net-vbar-theme"), theme) != 0) {
+        probe = gtk_scrollbar_new (GTK_ORIENTATION_VERTICAL, NULL);
+        gtk_style_context_add_class (gtk_widget_get_style_context (probe),
+                                     GTK_STYLE_CLASS_RIGHT);
+        gtk_widget_show (probe);
+        g_object_set_data_full (win, "net-vbar-probe",
+                                g_object_ref_sink (probe), g_object_unref);
+        g_object_set_data_full (win, "net-vbar-theme", g_strdup (theme), g_free);
+    }
+    g_free (theme);
+
+    gint w = 0;
+    gtk_widget_get_preferred_width (probe, &w, NULL);
+    return w;
+}
+
+/* Margen derecho del contenido de una fila de la lista: el de siempre más
+ * el ancho de la barra, que se dibuja encima (ver arriba). */
+gint
+popup_end_margin (NetPopup *popup)
+{
+    if (!popup->scroll || !popup->window || scroll_uses_overlay (popup->scroll))
+        return POPUP_ROW_MARGIN;
+    return POPUP_ROW_MARGIN + scrollbar_width (popup);
+}
+
 static void
-scroll_reserve_sync (NetPopup *popup)
+scroll_bar_sync (NetPopup *popup)
 {
     if (!popup->scroll)
         return;
 
     GtkScrolledWindow *sw      = GTK_SCROLLED_WINDOW (popup->scroll);
     gboolean           overlay = scroll_uses_overlay (popup->scroll);
+    GtkWidget         *bar     = g_object_get_data (G_OBJECT (popup->scroll), "net-vbar");
 
-    /* Barras clásicas: siempre presente (lugar guardado). Flotantes: solo
-     * cuando hace falta, como siempre. Solo cambia si cambió el ajuste del
-     * sistema, y eso se mira al abrir el popup. */
-    GtkPolicyType want = overlay ? GTK_POLICY_AUTOMATIC : GTK_POLICY_ALWAYS;
+    /* Barras clásicas: la lista se desplaza pero sin barra propia de GTK
+     * (EXTERNAL); se ve la nuestra. Flotantes: la de GTK, como siempre. */
+    GtkPolicyType want = overlay ? GTK_POLICY_AUTOMATIC : GTK_POLICY_EXTERNAL;
     GtkPolicyType hpol, vpol;
     gtk_scrolled_window_get_policy (sw, &hpol, &vpol);
     if (vpol != want)
         gtk_scrolled_window_set_policy (sw, GTK_POLICY_NEVER, want);
 
-    /* ¿Hace falta desplazarse? (el contenido es más alto que lo visible) */
+    /* ¿Hay algo que desplazar? (el contenido es más alto que lo visible) */
     GtkAdjustment *adj    = gtk_scrolled_window_get_vadjustment (sw);
     gboolean       needed = gtk_adjustment_get_upper (adj) - gtk_adjustment_get_lower (adj)
                             > gtk_adjustment_get_page_size (adj);
 
-    GtkStyleContext *ctx = gtk_widget_get_style_context (popup->scroll);
-    if (!overlay && !needed)
-        gtk_style_context_add_class    (ctx, "net-noscroll");
-    else
-        gtk_style_context_remove_class (ctx, "net-noscroll");
+    if (bar && gtk_widget_get_visible (bar) != (!overlay && needed))
+        gtk_widget_set_visible (bar, !overlay && needed);
 }
 
 /* Diferido: el aviso de cambio llega en medio del acomodo de la ventana.
- * La demora ya no mueve nada: como mucho la barra se ve un instante tarde. */
+ * La demora no mueve nada: como mucho la barra aparece un instante tarde. */
 static gboolean
 scroll_reserve_idle (gpointer user_data)
 {
     NetPopup *popup = user_data;
     popup->reserve_idle_id = 0;
-    scroll_reserve_sync (popup);
+    scroll_bar_sync (popup);
     return G_SOURCE_REMOVE;
+}
+
+/* Antes de dibujar la barra propia, se pinta debajo de ella el fondo del
+ * popup (el del marco "menu"). Muchos temas dibujan la barra con fondo
+ * transparente, y se veían a través de ella las líneas separadoras y el
+ * resaltado de la fila abierta. Así, con barra, terminan donde empieza la
+ * barra; sin barra siguen llegando al borde. No cambia ningún tamaño.
+ * Se pinta el fondo del marco entero corrido a la posición de la barra (el
+ * dibujo queda recortado a la barra): un degradado del tema queda alineado
+ * con el resto del popup. */
+static gboolean
+on_vbar_draw (GtkWidget *bar, cairo_t *cr, NetPopup *popup)
+{
+    if (!popup->frame)
+        return FALSE;
+    gint x = 0, y = 0;
+    if (!gtk_widget_translate_coordinates (bar, popup->frame, 0, 0, &x, &y))
+        return FALSE;
+    gtk_render_background (gtk_widget_get_style_context (popup->frame), cr,
+                           -x, -y,
+                           gtk_widget_get_allocated_width  (popup->frame),
+                           gtk_widget_get_allocated_height (popup->frame));
+    return FALSE;   /* después la barra se dibuja como siempre, encima */
 }
 
 /* Cambió el alto del contenido o el de la zona visible. */
@@ -2016,9 +2076,6 @@ popup_create (XfcePanelPlugin *plugin, GtkWidget *button)
                 /* Marco de menú: sin margen ni sombra (quedaría cortada) y
                  * recto salvo con la clase net-round (popup_set_round). */
                 "menu.net-popup-frame { margin: 0; box-shadow: none; border-radius: 0; }"
-                /* Barra de desplazamiento sin nada que desplazar: invisible
-                 * pero en su lugar (ver scroll_reserve_sync). */
-                "scrolledwindow.net-noscroll > scrollbar { opacity: 0; }"
                 /* Separadores: sin margen (quedaba una franja sin resaltar
                  * junto a la fila) y con color propio relativo a la letra
                  * del menú: muchos temas los pintan casi del color del fondo
@@ -2109,11 +2166,36 @@ popup_create (XfcePanelPlugin *plugin, GtkWidget *button)
         gtk_widget_hide (popup->search_bar);
     }
 
+    /* Lista desplazable dentro de una capa (GtkOverlay) que lleva encima la
+     * barra propia, del lado derecho (ver popup_end_margin). */
+    GtkWidget *list_overlay = gtk_overlay_new ();
+    gtk_box_pack_start (GTK_BOX (outer_box), list_overlay, TRUE, TRUE, 0);
+
     scroll = gtk_scrolled_window_new (NULL, NULL);
     gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll),
                                     GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-    gtk_box_pack_start (GTK_BOX (outer_box), scroll, TRUE, TRUE, 0);
+    gtk_container_add (GTK_CONTAINER (list_overlay), scroll);
     popup->scroll = scroll;
+
+    {
+        GtkWidget *vbar = gtk_scrollbar_new (
+            GTK_ORIENTATION_VERTICAL,
+            gtk_scrolled_window_get_vadjustment (GTK_SCROLLED_WINDOW (scroll)));
+        /* Clase de posición, igual que la barra de una lista común: los
+         * temas dibujan el borde del lado que corresponde. */
+        gtk_style_context_add_class (gtk_widget_get_style_context (vbar),
+            gtk_widget_get_default_direction () == GTK_TEXT_DIR_RTL
+                ? GTK_STYLE_CLASS_LEFT : GTK_STYLE_CLASS_RIGHT);
+        gtk_widget_set_halign (vbar, GTK_ALIGN_END);   /* END: a la izquierda en RTL */
+        gtk_widget_set_valign (vbar, GTK_ALIGN_FILL);
+        gtk_widget_set_can_focus (vbar, FALSE);
+        g_signal_connect (vbar, "draw", G_CALLBACK (on_vbar_draw), popup);
+        gtk_overlay_add_overlay (GTK_OVERLAY (list_overlay), vbar);
+        /* La muestra o la oculta scroll_bar_sync, no el show_all de popup_show. */
+        gtk_widget_set_no_show_all (vbar, TRUE);
+        gtk_widget_hide (vbar);
+        g_object_set_data (G_OBJECT (scroll), "net-vbar", vbar);
+    }
 
     popup->content_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
     gtk_container_add (GTK_CONTAINER (scroll), popup->content_box);
@@ -2236,7 +2318,7 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
     popup_apply_style (popup);
     gtk_widget_set_size_request (popup->window, popup_width, -1);
     search_sync_height (popup);   /* lista = alto configurado − borde del tema */
-    scroll_reserve_sync (popup);  /* hueco de la barra desde el primer dibujo */
+    scroll_bar_sync (popup);      /* barra propia: tipo de barra del sistema */
 
     /* Procesar intentos pendientes de la sesión anterior del popup: para cada
      * SSID que tenía un intento de conexión sin resolver al cerrarse, mirar

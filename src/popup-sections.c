@@ -51,8 +51,9 @@ make_device_section (NetPopup *popup, NmDevice *dev, gboolean show_header)
 
     if (show_header) {
         GtkWidget *header_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-        gtk_widget_set_margin_start  (header_row, 12);
-        gtk_widget_set_margin_end    (header_row, 12);
+        gtk_widget_set_margin_start  (header_row, POPUP_ROW_MARGIN);
+        /* + ancho de la barra de desplazamiento, que va encima de la lista. */
+        gtk_widget_set_margin_end    (header_row, popup_end_margin (popup));
         gtk_widget_set_margin_top    (header_row, 8);
         gtk_widget_set_margin_bottom (header_row, 4);
 
@@ -254,8 +255,8 @@ fill_vpn_section (NetPopup *popup)
     }
 
     GtkWidget *header_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_set_margin_start  (header_row, 12);
-    gtk_widget_set_margin_end    (header_row, 12);
+    gtk_widget_set_margin_start  (header_row, POPUP_ROW_MARGIN);
+    gtk_widget_set_margin_end    (header_row, popup_end_margin (popup));
     gtk_widget_set_margin_top    (header_row, 8);
     gtk_widget_set_margin_bottom (header_row, 4);
 
@@ -269,8 +270,8 @@ fill_vpn_section (NetPopup *popup)
         NmVpnConnection *vpn = l->data;
 
         GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
-        gtk_widget_set_margin_start  (row, 12);
-        gtk_widget_set_margin_end    (row, 12);
+        gtk_widget_set_margin_start  (row, POPUP_ROW_MARGIN);
+        gtk_widget_set_margin_end    (row, popup_end_margin (popup));
         gtk_widget_set_margin_top    (row, 4);
         gtk_widget_set_margin_bottom (row, 4);
 
@@ -358,8 +359,8 @@ fill_eth_section (NetPopup *popup)
         }
 
         GtkWidget *eth_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-        gtk_widget_set_margin_start  (eth_row, 12);
-        gtk_widget_set_margin_end    (eth_row, 12);
+        gtk_widget_set_margin_start  (eth_row, POPUP_ROW_MARGIN);
+        gtk_widget_set_margin_end    (eth_row, popup_end_margin (popup));
         gtk_widget_set_margin_top    (eth_row, 8);
         gtk_widget_set_margin_bottom (eth_row, 8);
 

@@ -1209,8 +1209,9 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path,
     gtk_container_add (GTK_CONTAINER (event_box), outer);
 
     row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
-    gtk_widget_set_margin_start  (row, 12);
-    gtk_widget_set_margin_end    (row, 12);
+    gtk_widget_set_margin_start  (row, POPUP_ROW_MARGIN);
+    /* + ancho de la barra de desplazamiento, que va encima de la lista. */
+    gtk_widget_set_margin_end    (row, popup_end_margin (popup));
     gtk_widget_set_margin_top    (row, 8);
     gtk_widget_set_margin_bottom (row, 8);
 
@@ -1281,8 +1282,8 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path,
 
     /* ---- área expandible ---- */
     expand_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
-    gtk_widget_set_margin_start  (expand_box, 12);
-    gtk_widget_set_margin_end    (expand_box, 12);
+    gtk_widget_set_margin_start  (expand_box, POPUP_ROW_MARGIN);
+    gtk_widget_set_margin_end    (expand_box, popup_end_margin (popup));
     gtk_widget_set_margin_top    (expand_box, 4);
     gtk_widget_set_margin_bottom (expand_box, 8);
     
