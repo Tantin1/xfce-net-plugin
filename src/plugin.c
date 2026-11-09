@@ -1203,6 +1203,13 @@ on_button_toggled (GtkToggleButton *btn, NetPlugin *np)
         return;
     }
     if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (np->button))) {
+#ifdef HAVE_LIBNOTIFY
+        /* Una notificación que todavía esté a la vista se cierra al abrir el
+         * popup, así no lo tapa (con el popup abierto tampoco salen nuevas,
+         * ver notify_show). Si ya se había ido sola, no pasa nada. */
+        if (np->notif)
+            notify_notification_close (np->notif, NULL);
+#endif
         np->popup->show_separators   = np->show_separators;
         np->popup->show_forget_active = np->show_forget_active;
         np->popup->popup_style        = np->popup_style;
