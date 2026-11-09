@@ -55,14 +55,6 @@ msgstr "Knop Vergeten tonen bij actieve netwerken"
 msgid "Show notifications"
 msgstr "Meldingen weergeven"
 
-#: plugin.c:475
-msgid ""
-"If the popup and the notification overlap, the notification will partially "
-"cover the popup."
-msgstr ""
-"Als het popup en de melding overlappen, zal de melding het popup "
-"gedeeltelijk bedekken."
-
 #: plugin.c:585 plugin.c:620
 #, c-format
 msgid "Connected to %s"
@@ -419,6 +411,10 @@ msgstr "De verbinding duurde te lang"
 #: popup.c
 msgid "Connection failed"
 msgstr "Verbinding mislukt"
+
+#: plugin.c
+msgid "Could not connect"
+msgstr "Kan geen verbinding maken"
 
 #~ msgid "Saved network"
 #~ msgstr "Opgeslagen netwerk"

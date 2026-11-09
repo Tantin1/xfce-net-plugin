@@ -422,85 +422,13 @@ update_top_status (NetPopup *popup)
 
     gchar *primary_ssid = get_primary_ssid (popup->conn);
 
-    /* Si NM dice "conectado" pero hay un CONNECT en curso para ese mismo SSID,
-     * ignorarlo — NM miente brevemente antes de confirmar el fallo de auth.
-     * Verificar tanto ops_in_progress (popup abierto) como pending_attempts
-     * (popup reabierto con op en curso). */
-    if (primary_ssid && g_hash_table_size (popup->ops_in_progress) > 0) {
-        GHashTableIter iter;
-        gpointer key, value;
-        g_hash_table_iter_init (&iter, popup->ops_in_progress);
-        while (g_hash_table_iter_next (&iter, &key, &value)) {
-            OpInProgress *op = value;
-            if (op->kind == OP_CONNECT &&
-                g_strcmp0 (op->ssid, primary_ssid) == 0) {
-                g_free (primary_ssid);
-                primary_ssid = NULL;
-                break;
-            }
-        }
-    }
-    if (primary_ssid && popup->pending_attempts &&
-        g_hash_table_size (popup->pending_attempts) > 0) {
-        GHashTableIter iter;
-        gpointer key, value;
-        g_hash_table_iter_init (&iter, popup->pending_attempts);
-        while (g_hash_table_iter_next (&iter, &key, &value)) {
-            gint64 *ts  = value;
-            gint64  age = (g_get_monotonic_time () - *ts) / 1000;
-            if (age < OP_TIMEOUT_MS) {
-                const gchar *k   = key;
-                const gchar *sep = strrchr (k, '|');
-                if (sep) {
-                    gchar *pending_ssid = g_strndup (k, sep - k);
-                    if (g_strcmp0 (pending_ssid, primary_ssid) == 0) {
-                        g_free (primary_ssid);
-                        primary_ssid = NULL;
-                        g_free (pending_ssid);
-                        break;
-                    }
-                    g_free (pending_ssid);
-                }
-            }
-        }
-    }
-
-    /* Buscar SSID conectando: primero en ops_in_progress (popup abierto),
-     * luego en pending_attempts (popup reabierto con op en curso). */
-    const gchar *connecting_ssid = NULL;
-    gchar       *connecting_ssid_pending = NULL; /* para liberar si viene de pending */
-
-    if (g_hash_table_size (popup->ops_in_progress) > 0) {
-        GHashTableIter iter;
-        gpointer key, value;
-        g_hash_table_iter_init (&iter, popup->ops_in_progress);
-        while (g_hash_table_iter_next (&iter, &key, &value)) {
-            OpInProgress *op = value;
-            if (op->kind == OP_CONNECT && op->ssid) {
-                connecting_ssid = op->ssid;
-                break;
-            }
-        }
-    } else if (popup->pending_attempts &&
-               g_hash_table_size (popup->pending_attempts) > 0) {
-        GHashTableIter iter;
-        gpointer key, value;
-        g_hash_table_iter_init (&iter, popup->pending_attempts);
-        while (g_hash_table_iter_next (&iter, &key, &value)) {
-            gint64 *ts  = value;
-            gint64  age = (g_get_monotonic_time () - *ts) / 1000;
-            if (age < OP_TIMEOUT_MS) {
-                /* La clave es "ssid|device_path" — extraer ssid. */
-                const gchar *k   = key;
-                const gchar *sep = strrchr (k, '|');
-                if (sep) {
-                    connecting_ssid_pending = g_strndup (k, sep - k);
-                    connecting_ssid = connecting_ssid_pending;
-                }
-                break;
-            }
-        }
-    }
+    /* Intento de conexión en curso (lo sigue attempts.c, también con el
+     * popup cerrado). Mientras dura, la red pedida todavía no cuenta como
+     * conectada aunque NM ya la muestre como activa. */
+    const gchar *connecting_ssid = attempts_connecting_ssid ();
+    if (primary_ssid && connecting_ssid &&
+        g_strcmp0 (primary_ssid, connecting_ssid) == 0)
+        g_clear_pointer (&primary_ssid, g_free);
 
     /* Ícono superior: spinner si hay operación en curso, ícono si no. */
     if (connecting_ssid) {
@@ -536,8 +464,6 @@ update_top_status (NetPopup *popup)
     } else {
         gtk_label_set_text (GTK_LABEL (popup->status_label), _("Enabled – not connected"));
     }
-
-    g_free (connecting_ssid_pending);
 
     g_free (primary_ssid);
 
@@ -581,17 +507,6 @@ update_vpn_section (NetPopup *popup)
  *     sobreviven, y no hay parpadeo;
  *   - huella distinta → se recrea solo esa fila;
  *   - AP desaparecido → se elimina su fila; AP nuevo → se agrega su fila. */
-
-/* Si hay una operación en curso cuyos widgets viven en una fila que está por
- * destruirse, descartar la entrada para no dejar punteros colgando. (La
- * reconstrucción completa hace lo mismo, pero con TODAS las operaciones.) */
-static void
-drop_op_for_row (NetPopup *popup, const gchar *device_path, const gchar *ssid)
-{
-    OpInProgress *op = g_hash_table_lookup (popup->ops_in_progress, device_path);
-    if (op && g_strcmp0 (op->ssid, ssid) == 0)
-        g_hash_table_remove (popup->ops_in_progress, device_path);
-}
 
 /* Actualiza en el lugar lo volátil de una fila reutilizada: la ruta del
  * objeto AP (rota entre escaneos aunque la red sea la misma; si quedara
@@ -726,7 +641,6 @@ diff_refresh_one_section (NetPopup *popup, GtkWidget *section, NmDevice *dev)
                 row_w = old_row;
             } else {
                 /* El estado cambió: recrear solo esta fila. */
-                drop_op_for_row (popup, dev->object_path, ap->ssid);
                 forget_expand_if_inside (popup, old_row);
                 gtk_widget_destroy (old_row);
                 row_w = make_ap_row (ap, popup, dev->object_path, saved_ssids);
@@ -764,9 +678,6 @@ diff_refresh_one_section (NetPopup *popup, GtkWidget *section, NmDevice *dev)
     g_hash_table_iter_init (&it, existing);
     while (g_hash_table_iter_next (&it, &k2, &v2)) {
         GtkWidget   *row      = v2;
-        const gchar *row_ssid = g_object_get_data (G_OBJECT (row), "ssid");
-        if (row_ssid)
-            drop_op_for_row (popup, dev->object_path, row_ssid);
         forget_expand_if_inside (popup, row);
         GtkWidget *sep = g_object_get_data (G_OBJECT (row), "own-separator");
         if (sep)
@@ -944,47 +855,33 @@ apply_search_filter (NetPopup *popup)
     g_free (query);
 }
 
+/* Reabre el expand pedido por on_attempt_event (un intento que falló con
+ * su expand abierto se muestra de nuevo, ya en estado A). */
+static void
+reopen_requested_expand (NetPopup *popup)
+{
+    if (!popup->reopen_ssid)
+        return;
+    if (!popup->current_expand_box)
+        reopen_expand_for_ssid (popup, popup->reopen_ssid, popup->reopen_dev);
+    g_clear_pointer (&popup->reopen_ssid, g_free);
+    g_clear_pointer (&popup->reopen_dev, g_free);
+}
+
 void
 update_devices_section (NetPopup *popup)
 {
     if (!popup->ui_built) return;
 
-    /* Si hay un expand abierto NO reconstruimos la lista de filas
-     * (regla 1A: congelar filas mientras el usuario interactúa).
-     * EXCEPCIÓN: si el expand actual es "pasivo" (solo muestra "Conectando…"
-     * sin botones ni entry), no hay nada que el usuario esté tocando, así
-     * que sí reconstruimos y después reabrimos esa misma fila. */
-    /* Menú contextual abierto: sus opciones apuntan a los datos de una fila,
-     * así que no se reconstruye nada hasta que se cierre (al cerrarse se
-     * agenda un refresco). */
-    if (popup->ctx_menu) {
-        check_ops_progress (popup);
+    /* Regla 1A: con un expand abierto NO se reconstruye la lista de filas
+     * (el usuario puede estar escribiendo una contraseña). Cuando un intento
+     * termina, on_attempt_event cierra antes ese expand, así el refresco
+     * puede rearmar la fila con su estado nuevo.
+     * Menú contextual abierto: sus opciones apuntan a los datos de una fila,
+     * así que tampoco se reconstruye nada hasta que se cierre (al cerrarse
+     * se agenda un refresco). */
+    if (popup->ctx_menu || popup->current_expand_box)
         return;
-    }
-
-    gchar    *passive_ssid = NULL;
-    gchar    *passive_dev  = NULL;
-    gboolean  passive      = FALSE;
-    if (popup->current_expand_box) {
-        passive = (g_object_get_data (G_OBJECT (popup->current_expand_box),
-                                      "passive-connecting") != NULL);
-        if (!passive) {
-            check_ops_progress (popup);
-            return;
-        }
-        /* Sacar ssid + device_path del expand abierto antes de destruirlo.
-         * El expand_box está dentro de outer, que está dentro del event_box. */
-        GtkWidget *outer_w = gtk_widget_get_parent (popup->current_expand_box);
-        if (outer_w) {
-            GtkWidget *evb = gtk_widget_get_parent (outer_w);
-            if (evb) {
-                const gchar *s = g_object_get_data (G_OBJECT (evb), "ssid");
-                const gchar *d = g_object_get_data (G_OBJECT (evb), "device-path");
-                if (s) passive_ssid = g_strdup (s);
-                if (d) passive_dev  = g_strdup (d);
-            }
-        }
-    }
 
     /* ---- Refresco por diferencia ----
      * Si el conjunto de adaptadores no cambió, actualizar las filas en el
@@ -994,13 +891,7 @@ update_devices_section (NetPopup *popup)
      * descarta puntualmente las de filas destruidas). */
     if (diff_refresh_sections (popup)) {
         reorder_fixed_sections (popup);
-        /* Si veníamos de un expand "Conectando…" pasivo y su fila fue
-         * recreada (cambió de estado), reabrirlo en la fila nueva. Si la
-         * fila sobrevivió, el expand sigue abierto y no hay nada que hacer. */
-        if (passive_ssid && !popup->current_expand_box)
-            reopen_expand_for_ssid (popup, passive_ssid, passive_dev);
-        g_free (passive_ssid);
-        g_free (passive_dev);
+        reopen_requested_expand (popup);
         /* Las filas nuevas salen visibles: volver a aplicar la búsqueda. */
         apply_search_filter (popup);
         return;
@@ -1041,17 +932,7 @@ update_devices_section (NetPopup *popup)
     /* Tras reconstruir, los expand_boxes vuelven a no_show_all + hidden por make_ap_row,
      * así que no quedan abiertos. */
     popup->current_expand_box = NULL;
-
-    /* Las operaciones en curso ya no tienen sus widgets antiguos, las descartamos. */
-    g_hash_table_remove_all (popup->ops_in_progress);
-
-    /* Si veníamos de un expand "Conectando…" pasivo, reabrir esa misma fila
-     * para que el usuario siga viendo el estado actualizado sin reclickear. */
-    if (passive_ssid) {
-        reopen_expand_for_ssid (popup, passive_ssid, passive_dev);
-        g_free (passive_ssid);
-        g_free (passive_dev);
-    }
+    reopen_requested_expand (popup);
 
     /* gtk_widget_show_all mostró todas las filas: volver a aplicar la búsqueda. */
     apply_search_filter (popup);
@@ -1072,15 +953,6 @@ refresh_ui_cb (gpointer user_data)
     /* Instantánea: todo el refresco lee de una sola foto del bus. */
     nm_cache_begin (popup->conn);
 
-    /* Primero chequear si alguna operación en curso ya se confirmó. */
-    check_ops_progress (popup);
-
-    /* Promover a failed_ssids los SSIDs cuya ventana de pending_attempts
-     * ya expiró sin que NM haya confirmado conexión. Así el próximo
-     * update_devices_section construye estado A en vez de "Conectando…". */
-    process_pending_attempts (popup);
-
-    /* Después refrescar las partes que no dependen del expand abierto. */
     update_top_status     (popup);
     update_eth_section    (popup);
     update_vpn_section    (popup);
@@ -1108,6 +980,55 @@ void
 on_nm_signal_popup (gpointer user_data)
 {
     NetPopup *popup = user_data;
+    schedule_refresh_ui (popup);
+}
+
+/* ---------- avisos del seguidor de intentos ----------
+ *
+ * Todo lo que el popup muestra de un intento sale de attempts.c al armar
+ * cada fila. Acá solo se decide qué hacer con el expand abierto cuando un
+ * intento termina, y se agenda el refresco que rearma las filas:
+ *   - conectó o terminó la desconexión: se cierra el expand de esa red;
+ *   - falló: se cierra y se reabre después del refresco, ya con el motivo
+ *     y los botones de "Reintentar" / "Probar otra contraseña". */
+
+/* ¿El expand abierto es el de esta red en este adaptador? */
+static gboolean
+open_expand_is (NetPopup *popup, const gchar *ssid, const gchar *device_path)
+{
+    if (!popup->current_expand_box)
+        return FALSE;
+    GtkWidget *outer = gtk_widget_get_parent (popup->current_expand_box);
+    GtkWidget *evb   = outer ? gtk_widget_get_parent (outer) : NULL;
+    if (!evb)
+        return FALSE;
+    return g_strcmp0 (g_object_get_data (G_OBJECT (evb), "ssid"), ssid) == 0 &&
+           g_strcmp0 (g_object_get_data (G_OBJECT (evb), "device-path"),
+                      device_path) == 0;
+}
+
+void
+on_attempt_event (const gchar *ssid, const gchar *device_path,
+                  AttemptEvent event, gpointer user_data)
+{
+    NetPopup *popup = user_data;
+    if (!popup->ui_built || !gtk_widget_get_visible (popup->window))
+        return;   /* al abrirse, las filas se arman con el estado actual */
+
+    gboolean ends = (event == ATTEMPT_EVENT_CONNECTED ||
+                     event == ATTEMPT_EVENT_FAILED ||
+                     event == ATTEMPT_EVENT_DISCONNECTED);
+    if (ends && open_expand_is (popup, ssid, device_path) && !popup->ctx_menu) {
+        gtk_widget_hide (popup->current_expand_box);
+        popup->current_expand_box = NULL;
+        clear_open_highlight (popup);
+        if (event == ATTEMPT_EVENT_FAILED) {
+            g_free (popup->reopen_ssid);
+            g_free (popup->reopen_dev);
+            popup->reopen_ssid = g_strdup (ssid);
+            popup->reopen_dev  = g_strdup (device_path);
+        }
+    }
     schedule_refresh_ui (popup);
 }
 

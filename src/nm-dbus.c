@@ -10,6 +10,7 @@
 #define NM_SETTINGS_PATH  "/org/freedesktop/NetworkManager/Settings"
 #define NM_SETTINGS_IFACE "org.freedesktop.NetworkManager.Settings"
 #define NM_CONN_IFACE     "org.freedesktop.NetworkManager.Settings.Connection"
+#define NM_ACTIVE_IFACE   "org.freedesktop.NetworkManager.Connection.Active"
 
 #define NM_DEVICE_TYPE_WIFI 2
 
@@ -1252,38 +1253,54 @@ nm_forget_connection (GDBusConnection *conn, const gchar *ssid)
     return deleted_any;
 }
 
-/* ---------- ACCIÓN ASYNC: activar conexión guardada ---------- */
+/* ---------- ACCIÓN ASYNC: activar conexión guardada ----------
+ *
+ * Al pedir una conexión, NM contesta con la ruta de la "conexión activa": el
+ * objeto que representa ESE intento y que avisa cada cambio de estado
+ * (activándose, activada, terminada) con su motivo. Quien pide la conexión
+ * (el seguidor de intentos, attempts.c) recibe esa ruta en `cb` y la sigue.
+ * Si NM rechaza el pedido de entrada (adaptador no disponible, red que ya no
+ * está...), `cb` recibe el error en vez de la ruta. */
 
-static void failure_record (const gchar *device_path, guint32 reason);
+typedef struct {
+    NmActivateCallback cb;
+    gpointer           user_data;
+    gchar             *new_profile;   /* perfil recién creado (AddConnection), o NULL */
+} ActivateReply;
 
-/* Si NM rechaza el pedido de entrada (adaptador no disponible, red que ya
- * no está...), no hay cambio de estado que avise: se anota como fallo del
- * adaptador para que el popup lo muestre enseguida, sin esperar a que venza
- * el tiempo. */
+static void
+activate_reply_finish (ActivateReply *ar, const gchar *active_path, const gchar *error)
+{
+    if (ar->cb)
+        ar->cb (active_path, ar->new_profile, error, ar->user_data);
+    g_free (ar->new_profile);
+    g_free (ar);
+}
+
 static void
 on_activate_done (GObject *src, GAsyncResult *res, gpointer user_data)
 {
-    gchar    *device_path = user_data;
-    GError   *err = NULL;
-    GVariant *out = g_dbus_connection_call_finish (G_DBUS_CONNECTION (src), res, &err);
+    ActivateReply *ar  = user_data;
+    GError        *err = NULL;
+    GVariant      *out = g_dbus_connection_call_finish (G_DBUS_CONNECTION (src), res, &err);
     if (out) {
+        const gchar *active_path = NULL;
+        g_variant_get (out, "(&o)", &active_path);
+        activate_reply_finish (ar, active_path, NULL);
         g_variant_unref (out);
     } else {
         g_warning ("nm-dbus async: ActivateConnection falló: %s",
                    err ? err->message : "?");
+        activate_reply_finish (ar, NULL, err ? err->message : "?");
         g_clear_error (&err);
-        failure_record (device_path, NM_FAIL_UNKNOWN);
     }
-    g_free (device_path);
 }
 
-void
-nm_activate_profile_async (GDBusConnection *conn,
-                           const gchar     *profile_path,
-                           const gchar     *device_path,
-                           const gchar     *ap_path)
+static void
+activate_profile_with_reply (GDBusConnection *conn, const gchar *profile_path,
+                             const gchar *device_path, const gchar *ap_path,
+                             ActivateReply *ar)
 {
-    if (!profile_path) return;
     g_dbus_connection_call (
         conn, NM_BUS_NAME, NM_OBJECT_PATH, NM_IFACE,
         "ActivateConnection",
@@ -1291,22 +1308,25 @@ nm_activate_profile_async (GDBusConnection *conn,
                        ap_path ? ap_path : "/"),
         G_VARIANT_TYPE ("(o)"),
         G_DBUS_CALL_FLAGS_NONE, 10000, NULL,
-        on_activate_done, g_strdup (device_path));
+        on_activate_done, ar);
 }
 
 void
-nm_activate_connection_async (GDBusConnection *conn,
-                              const gchar     *device_path,
-                              const gchar     *ap_path,
-                              const gchar     *ssid)
+nm_activate_profile_async (GDBusConnection   *conn,
+                           const gchar       *profile_path,
+                           const gchar       *device_path,
+                           const gchar       *ap_path,
+                           NmActivateCallback cb,
+                           gpointer           user_data)
 {
-    gchar *conn_path = find_connection_path_by_ssid (conn, ssid);
-    if (!conn_path) {
-        g_warning ("nm-dbus: ActivateConnection: no se encontró perfil para %s", ssid);
+    ActivateReply *ar = g_new0 (ActivateReply, 1);
+    ar->cb        = cb;
+    ar->user_data = user_data;
+    if (!profile_path || !device_path) {
+        activate_reply_finish (ar, NULL, "sin perfil o sin adaptador");
         return;
     }
-    nm_activate_profile_async (conn, conn_path, device_path, ap_path);
-    g_free (conn_path);
+    activate_profile_with_reply (conn, profile_path, device_path, ap_path, ar);
 }
 
 /* ---------- ACCIÓN ASYNC: añadir y activar conexión nueva ---------- */
@@ -1316,6 +1336,7 @@ typedef struct {
     GDBusConnection *conn;
     gchar           *device_path;
     gchar           *ap_path;
+    ActivateReply   *ar;
 } AddThenActivate;
 
 /* Perfil nuevo guardado: descartar la lista de perfiles en memoria (la
@@ -1331,14 +1352,15 @@ on_add_then_activate (GObject *src, GAsyncResult *res, gpointer user_data)
     if (out) {
         const gchar *profile_path = NULL;
         g_variant_get (out, "(&o)", &profile_path);
-        nm_activate_profile_async (ta->conn, profile_path,
-                                   ta->device_path, ta->ap_path);
+        ta->ar->new_profile = g_strdup (profile_path);
+        activate_profile_with_reply (ta->conn, profile_path,
+                                     ta->device_path, ta->ap_path, ta->ar);
         g_variant_unref (out);
     } else {
         g_warning ("nm-dbus async: AddConnection falló: %s",
                    err ? err->message : "?");
+        activate_reply_finish (ta->ar, NULL, err ? err->message : "?");
         g_clear_error (&err);
-        failure_record (ta->device_path, NM_FAIL_UNKNOWN);
     }
     g_object_unref (ta->conn);
     g_free (ta->device_path);
@@ -1346,15 +1368,71 @@ on_add_then_activate (GObject *src, GAsyncResult *res, gpointer user_data)
     g_free (ta);
 }
 
+/* ---------- conexión activa: estado y avisos ---------- */
+
+guint32
+nm_get_active_state (GDBusConnection *conn, const gchar *active_path)
+{
+    if (!active_path || g_strcmp0 (active_path, "/") == 0)
+        return 0;
+    GVariant *v = get_property (conn, active_path, NM_ACTIVE_IFACE, "State");
+    if (!v) return 0;
+    guint32 state = g_variant_get_uint32 (v);
+    g_variant_unref (v);
+    return state;
+}
+
+typedef struct {
+    NmActiveStateCallback cb;
+    gpointer              user_data;
+} ActiveWatch;
+
+static void
+on_active_state_changed (GDBusConnection *c, const gchar *sender,
+                         const gchar *path, const gchar *iface,
+                         const gchar *signal, GVariant *params, gpointer data)
+{
+    (void) c; (void) sender; (void) iface; (void) signal;
+    ActiveWatch *w = data;
+    if (!g_variant_is_of_type (params, G_VARIANT_TYPE ("(uu)")))
+        return;
+    guint32 state = 0, reason = 0;
+    g_variant_get (params, "(uu)", &state, &reason);
+    w->cb (path, state, reason, w->user_data);
+}
+
+guint
+nm_watch_active_connection (GDBusConnection      *conn,
+                            const gchar          *active_path,
+                            NmActiveStateCallback cb,
+                            gpointer              user_data)
+{
+    ActiveWatch *w = g_new0 (ActiveWatch, 1);
+    w->cb        = cb;
+    w->user_data = user_data;
+    return g_dbus_connection_signal_subscribe (
+        conn, NM_BUS_NAME, NM_ACTIVE_IFACE, "StateChanged", active_path, NULL,
+        G_DBUS_SIGNAL_FLAGS_NONE, on_active_state_changed, w, g_free);
+}
+
 void
-nm_add_and_activate_connection_async (GDBusConnection *conn,
-                                      const gchar     *device_path,
-                                      const gchar     *ap_path,
-                                      const gchar     *ssid,
-                                      const gchar     *password,
-                                      const gchar     *key_mgmt,
-                                      gboolean         autoconnect,
-                                      gboolean         hidden)
+nm_unwatch_active_connection (GDBusConnection *conn, guint watch_id)
+{
+    if (watch_id)
+        g_dbus_connection_signal_unsubscribe (conn, watch_id);
+}
+
+void
+nm_add_and_activate_connection_async (GDBusConnection   *conn,
+                                      const gchar       *device_path,
+                                      const gchar       *ap_path,
+                                      const gchar       *ssid,
+                                      const gchar       *password,
+                                      const gchar       *key_mgmt,
+                                      gboolean           autoconnect,
+                                      gboolean           hidden,
+                                      NmActivateCallback cb,
+                                      gpointer           user_data)
 {
     GVariantBuilder conn_builder, wifi_builder, ipv4_builder, ipv6_builder,
                     meta_builder;
@@ -1431,6 +1509,9 @@ nm_add_and_activate_connection_async (GDBusConnection *conn,
     ta->conn        = g_object_ref (conn);
     ta->device_path = g_strdup (device_path);
     ta->ap_path     = g_strdup (ap_path ? ap_path : "/");
+    ta->ar          = g_new0 (ActivateReply, 1);
+    ta->ar->cb        = cb;
+    ta->ar->user_data = user_data;
     g_dbus_connection_call (
         conn, NM_BUS_NAME, NM_SETTINGS_PATH, NM_SETTINGS_IFACE,
         "AddConnection",
@@ -2203,26 +2284,6 @@ nm_device_last_failure (const gchar *device_path, gint64 since)
     return (f && f->when >= since) ? f->reason : 0;
 }
 
-/* Suscripciones vivas (para avisarles de un fallo que no trae señal). */
-static GSList *live_signal_data = NULL;
-
-static void
-failure_record (const gchar *device_path, guint32 reason)
-{
-    if (!dev_failures || !device_path || g_strcmp0 (device_path, "/") == 0)
-        return;
-    DevFailure *f = g_new (DevFailure, 1);
-    f->reason = reason;
-    f->when   = g_get_monotonic_time ();
-    g_hash_table_replace (dev_failures, g_strdup (device_path), f);
-    /* Avisar como si hubiera llegado una señal: cada suscriptor agenda su
-     * propio refresco (ninguno se desuscribe dentro del aviso). */
-    for (GSList *l = live_signal_data; l; l = l->next) {
-        SignalData *sd = l->data;
-        sd->callback (sd->user_data);
-    }
-}
-
 guint *
 nm_subscribe_signals (GDBusConnection *conn,
                       NmSignalCallback callback,
@@ -2313,7 +2374,6 @@ nm_subscribe_signals (GDBusConnection *conn,
     gchar *key = g_strdup_printf ("nm-signal-data-%p", (void *) ids);
     g_object_set_data_full (G_OBJECT (conn), key, sd, g_free);
     g_free (key);
-    live_signal_data = g_slist_prepend (live_signal_data, sd);
 
     return ids;
 }
@@ -2326,8 +2386,6 @@ nm_unsubscribe_signals (GDBusConnection *conn, guint *ids)
         g_dbus_connection_signal_unsubscribe (conn, ids[i]);
 
     gchar *key = g_strdup_printf ("nm-signal-data-%p", (void *) ids);
-    live_signal_data = g_slist_remove (live_signal_data,
-                                       g_object_get_data (G_OBJECT (conn), key));
     g_object_set_data (G_OBJECT (conn), key, NULL);
     g_free (key);
 

@@ -55,14 +55,6 @@ msgstr "Schaltfläche \"Vergessen\" bei aktiven Netzwerken anzeigen"
 msgid "Show notifications"
 msgstr "Benachrichtigungen anzeigen"
 
-#: plugin.c:475
-msgid ""
-"If the popup and the notification overlap, the notification will partially "
-"cover the popup."
-msgstr ""
-"Wenn sich das Popup und die Benachrichtigung überschneiden, wird die "
-"Benachrichtigung das Popup teilweise verdecken."
-
 #: plugin.c:585 plugin.c:620
 #, c-format
 msgid "Connected to %s"
@@ -419,6 +411,10 @@ msgstr "Die Verbindung hat zu lange gedauert"
 #: popup.c
 msgid "Connection failed"
 msgstr "Verbindung fehlgeschlagen"
+
+#: plugin.c
+msgid "Could not connect"
+msgstr "Keine Verbindung möglich"
 
 #~ msgid "Saved network"
 #~ msgstr "Gespeichertes Netzwerk"

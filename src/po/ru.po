@@ -55,13 +55,6 @@ msgstr "Показывать кнопку «Забыть» для активны
 msgid "Show notifications"
 msgstr "Показывать уведомления"
 
-#: plugin.c:475
-msgid ""
-"If the popup and the notification overlap, the notification will partially "
-"cover the popup."
-msgstr ""
-"Если popup и уведомление перекрываются, уведомление частично закроет popup."
-
 #: plugin.c:585 plugin.c:620
 #, c-format
 msgid "Connected to %s"
@@ -418,6 +411,10 @@ msgstr "Подключение заняло слишком много време
 #: popup.c
 msgid "Connection failed"
 msgstr "Не удалось подключиться"
+
+#: plugin.c
+msgid "Could not connect"
+msgstr "Ошибка подключения"
 
 #~ msgid "Saved network"
 #~ msgstr "Сохранённая сеть"

@@ -218,13 +218,6 @@ reopen_expand_for_ssid (NetPopup *popup, const gchar *ssid, const gchar *device_
             if (inner && inner->data) {
                 RowData *rd = g_object_get_data (G_OBJECT (inner->data), "row-data");
                 if (rd && rd->expand_box) {
-                    if (g_object_get_data (G_OBJECT (rd->expand_box),
-                                           "passive-connecting")) {
-                        if (rd->retry_btn)
-                            gtk_widget_set_sensitive (rd->retry_btn, FALSE);
-                        if (rd->try_other_btn)
-                            gtk_widget_set_sensitive (rd->try_other_btn, FALSE);
-                    }
                     gtk_widget_set_no_show_all (rd->expand_box, FALSE);
                     gtk_widget_show_all (rd->expand_box);
                     gtk_widget_set_no_show_all (rd->expand_box, TRUE);
@@ -233,6 +226,9 @@ reopen_expand_for_ssid (NetPopup *popup, const gchar *ssid, const gchar *device_
                         gtk_widget_hide (rd->state_b_box);
                     }
                     popup->current_expand_box = rd->expand_box;
+                    if (rd->row_box)
+                        gtk_style_context_add_class (
+                            gtk_widget_get_style_context (rd->row_box), "net-row-open");
                 }
             }
             g_list_free (inner);
@@ -255,87 +251,13 @@ row_data_free (RowData *rd)
     g_free (rd);
 }
 
-/* ¿Hay un intento de conexión a esta red, desde este adaptador, todavía
- * dentro de su ventana de espera (OP_TIMEOUT_MS)? Si `remaining_ms` no es
- * NULL, devuelve ahí cuánto le falta. Antes este cálculo estaba copiado tres
- * veces (dos dentro de make_ap_row y una en row_fingerprint). */
+/* ¿La red está conectada de verdad en este adaptador? NM marca el punto
+ * de acceso como activo apenas empieza a conectar; "Conectado" se muestra
+ * recién con el adaptador activado (estado 100). */
 static gboolean
-pending_attempt_fresh (NetPopup *popup, const gchar *ssid,
-                       const gchar *device_path, gint64 *remaining_ms)
+ap_is_connected (NetPopup *popup, NmAccessPoint *ap, const gchar *device_path)
 {
-    if (!popup->pending_attempts || !ssid || !device_path)
-        return FALSE;
-    gchar  *key = make_ssid_dev_key (ssid, device_path);
-    gint64 *ts  = g_hash_table_lookup (popup->pending_attempts, key);
-    g_free (key);
-    if (!ts)
-        return FALSE;
-    gint64 age_ms = (g_get_monotonic_time () - *ts) / 1000;
-    if (age_ms >= OP_TIMEOUT_MS)
-        return FALSE;
-    if (remaining_ms)
-        *remaining_ms = OP_TIMEOUT_MS - age_ms;
-    return TRUE;
-}
-
-/* ---------- temporizador del expand pasivo "Conectando…" ----------
- *
- * Un solo temporizador por popup (passive_timeout_id), apuntado siempre al
- * intento pendiente que vence primero. Al disparar, agenda un refresco (que
- * pasa a estado A las redes vencidas) y se reprograma para el siguiente
- * intento todavía vigente. popup_hide y popup_destroy lo cancelan. Antes cada
- * fila dejaba un temporizador suelto que nunca se cancelaba y podía disparar
- * con el popup ya liberado. */
-
-static void arm_passive_timer (NetPopup *popup);
-
-static gboolean
-passive_timer_cb (gpointer user_data)
-{
-    NetPopup *popup = user_data;
-    popup->passive_timeout_id = 0;
-    schedule_refresh_ui (popup);
-    arm_passive_timer (popup);
-    return G_SOURCE_REMOVE;
-}
-
-static void
-arm_passive_timer (NetPopup *popup)
-{
-    if (popup->passive_timeout_id) {
-        g_source_remove (popup->passive_timeout_id);
-        popup->passive_timeout_id = 0;
-    }
-    if (!popup->pending_attempts)
-        return;
-
-    gint64         now = g_get_monotonic_time ();
-    gint64         min_remaining = -1;
-    GHashTableIter it;
-    gpointer       key, value;
-    g_hash_table_iter_init (&it, popup->pending_attempts);
-    while (g_hash_table_iter_next (&it, &key, &value)) {
-        gint64 remaining = OP_TIMEOUT_MS - (now - *(gint64 *) value) / 1000;
-        if (remaining > 0 && (min_remaining < 0 || remaining < min_remaining))
-            min_remaining = remaining;
-    }
-    if (min_remaining < 0)
-        return;
-
-    /* +50 ms de margen para que al disparar el intento ya esté vencido. */
-    popup->passive_timeout_id =
-        g_timeout_add ((guint) MAX (min_remaining, 100) + 50,
-                       passive_timer_cb, popup);
-}
-
-/* Borra la red de las tablas de fallos y de intentos pendientes. */
-static void
-forget_row_marks (RowData *rd)
-{
-    gchar *key = make_ssid_dev_key (rd->ssid, rd->device_path);
-    g_hash_table_remove (rd->popup->failed_ssids,     key);
-    g_hash_table_remove (rd->popup->pending_attempts, key);
-    g_free (key);
+    return ap->active && nm_get_device_state (popup->conn, device_path) == 100;
 }
 
 static gboolean
@@ -533,30 +455,11 @@ static void
 on_disconnect_clicked (GtkWidget *btn, gpointer rd_ptr)
 {
     RowData *rd = rd_ptr;
-
     gtk_widget_set_sensitive (btn, FALSE);
     gtk_button_set_label (GTK_BUTTON (btn), _("Disconnecting…"));
-
-    OpInProgress *op = g_new0 (OpInProgress, 1);
-    op->kind        = OP_DISCONNECT;
-    op->started     = g_get_monotonic_time ();
-    op->ssid        = g_strdup (rd->ssid);
-    op->device_path = g_strdup (rd->device_path);
-    op->expand_box  = rd->expand_box;
-    op->action_btn  = btn;
-    op->popup       = rd->popup;
-    op->timeout_id  = g_timeout_add (OP_TIMEOUT_MS, op_timeout_cb, op);
-    g_hash_table_replace (rd->popup->ops_in_progress,
-                          g_strdup (rd->device_path), op);
-
-    /* Limpiar intento pendiente: la desconexión es voluntaria, no un fallo. */
-    if (rd->popup->pending_attempts && rd->ssid && rd->device_path) {
-        gchar *attempt_key = make_ssid_dev_key (rd->ssid, rd->device_path);
-        g_hash_table_remove (rd->popup->pending_attempts, attempt_key);
-        g_free (attempt_key);
-    }
-
-    nm_disconnect_device_async (rd->popup->conn, rd->device_path);
+    /* El seguidor avisa cuando terminó (o se rinde a los 20 s): ahí se
+     * cierra el expand y la fila se rearma con el estado real. */
+    attempts_disconnect (rd->ssid, rd->device_path);
 }
 
 static void
@@ -599,7 +502,8 @@ on_forget_confirm_clicked (GtkWidget *btn, gpointer rd_ptr)
     if (rd->active)
         nm_disconnect_device_async (rd->popup->conn, rd->device_path);
     nm_forget_connection (rd->popup->conn, rd->ssid);
-    forget_row_marks (rd);
+    /* Olvidar borra los perfiles de esa red en todos los adaptadores. */
+    attempts_clear_ssid (rd->ssid);
     if (rd->expand_box) {
         gtk_widget_hide (rd->expand_box);
         if (rd->popup->current_expand_box == rd->expand_box)
@@ -664,18 +568,12 @@ do_connect (RowData *rd)
      * Si estamos en estado A (state_a_box visible), el botón principal es
      * "Reintentar con la contraseña guardada"; si estamos en estado B (o en
      * el expand simple sin fallo), es el "Conectar" normal. */
-    GtkWidget   *primary_btn  = rd->action_btn;
-    const gchar *primary_text = NULL;
-    if (rd->state_a_box && gtk_widget_get_visible (rd->state_a_box)) {
-        primary_btn  = rd->retry_btn;
-        primary_text = _("Retry with saved password");
-    } else if (rd->connect_btn_b && rd->state_b_box &&
-               gtk_widget_get_visible (rd->state_b_box)) {
-        primary_btn  = rd->connect_btn_b;
-        primary_text = _("Connect");
-    } else {
-        primary_text = _("Connect");
-    }
+    GtkWidget *primary_btn = rd->action_btn;
+    if (rd->state_a_box && gtk_widget_get_visible (rd->state_a_box))
+        primary_btn = rd->retry_btn;
+    else if (rd->connect_btn_b && rd->state_b_box &&
+             gtk_widget_get_visible (rd->state_b_box))
+        primary_btn = rd->connect_btn_b;
 
     /* UI inmediata: botón a "Conectando…", deshabilitado. Entry también. */
     gtk_widget_set_sensitive (primary_btn, FALSE);
@@ -683,91 +581,51 @@ do_connect (RowData *rd)
     if (rd->pass_entry)
         gtk_widget_set_sensitive (rd->pass_entry, FALSE);
 
-    /* Deshabilitar los otros botones del expand para evitar acciones cruzadas. */
-    GSList *extras = NULL;
-    if (rd->try_other_btn && gtk_widget_get_sensitive (rd->try_other_btn)) {
-        gtk_widget_set_sensitive (rd->try_other_btn, FALSE);
-        extras = g_slist_prepend (extras, rd->try_other_btn);
-    }
-    if (rd->back_btn && gtk_widget_get_sensitive (rd->back_btn)) {
-        gtk_widget_set_sensitive (rd->back_btn, FALSE);
-        extras = g_slist_prepend (extras, rd->back_btn);
-    }
-    if (rd->forget_btn && gtk_widget_get_sensitive (rd->forget_btn)) {
-        gtk_widget_set_sensitive (rd->forget_btn, FALSE);
-        extras = g_slist_prepend (extras, rd->forget_btn);
-    }
-
-    /* Registrar operación en curso. */
-    OpInProgress *op = g_new0 (OpInProgress, 1);
-    op->kind        = OP_CONNECT;
-    op->started     = g_get_monotonic_time ();
-    op->ssid        = g_strdup (rd->ssid);
-    op->device_path = g_strdup (rd->device_path);
-    op->expand_box  = rd->expand_box;
-    op->action_btn  = primary_btn;
-    op->action_label = g_strdup (primary_text);
-    op->pass_entry  = rd->pass_entry;
-    op->extra_disabled = extras;
-    op->popup       = rd->popup;
-    op->timeout_id  = g_timeout_add (OP_TIMEOUT_MS, op_timeout_cb, op);
-    g_hash_table_replace (rd->popup->ops_in_progress,
-                          g_strdup (rd->device_path), op);
-
-    /* Registrar intento pendiente con timestamp. Si el usuario cierra el popup
-     * antes de que la op se resuelva, al reabrir lo procesamos para decidir
-     * si marcar como fallido o no según el estado real de la conexión. */
-    {
-        gint64 *ts = g_new (gint64, 1);
-        *ts = g_get_monotonic_time ();
-        g_hash_table_replace (rd->popup->pending_attempts,
-                              make_ssid_dev_key (rd->ssid, rd->device_path), ts);
-    }
-
-    /* Activar spinner en el botón del panel mientras conecta. */
-    if (rd->popup->plugin_ref)
-        net_plugin_set_connecting (rd->popup->plugin_ref, TRUE);
+    /* Deshabilitar los otros botones del expand para evitar acciones
+     * cruzadas. No hace falta recordarlos: cuando el intento termina, la
+     * fila se rearma entera con su estado nuevo. */
+    GtkWidget *others[] = { rd->try_other_btn, rd->back_btn, rd->forget_btn };
+    for (gsize i = 0; i < G_N_ELEMENTS (others); i++)
+        if (others[i])
+            gtk_widget_set_sensitive (others[i], FALSE);
 
     /* Regla: conectar NUNCA borra perfiles ni les cambia otra cosa que la
      * clave (si se tipeó una) y la casilla "Conectar automáticamente".
-     * Antes se borraban "duplicados" y se le sacaba al perfil la atadura a
-     * un adaptador: se perdían perfiles con ajustes propios (IP fija, DNS).
      * Con varios adaptadores, cada fila ya elige un perfil que SU adaptador
-     * puede usar (nm_find_profile_for_ap), así que no hace falta tocarlos. */
-
-    /* Clave nueva sobre un perfil existente: cambiar solo la clave. Si no se
-     * puede (perfil de otro tipo de seguridad), se crea uno nuevo y el viejo
-     * queda como estaba. */
+     * puede usar (nm_find_profile_for_ap), así que no hace falta tocarlos.
+     *
+     * Clave nueva sobre un perfil existente: cambiar solo la clave y
+     * guardar la anterior, que el seguidor le devuelve si el intento falla.
+     * Si no se puede (perfil de otro tipo de seguridad), se crea uno nuevo y
+     * el viejo queda como estaba. */
+    gchar   *old_pw     = NULL;
+    gboolean pw_changed = FALSE;
     if (rd->profile_path && typed) {
-        /* Guardar la clave anterior: si el intento falla se le devuelve. */
-        gchar *old_pw = nm_get_profile_password (rd->popup->conn, rd->profile_path);
-        if (nm_set_profile_password (rd->popup->conn, rd->profile_path, password)) {
-            gchar *bk = make_ssid_dev_key (rd->ssid, rd->device_path);
-            pw_backup_save (rd->popup, bk, rd->profile_path, old_pw);
-            g_free (bk);
-        } else {
+        old_pw = nm_get_profile_password (rd->popup->conn, rd->profile_path);
+        if (nm_set_profile_password (rd->popup->conn, rd->profile_path, password))
+            pw_changed = TRUE;
+        else
             g_clear_pointer (&rd->profile_path, g_free);
-        }
-        secure_wipe_free (old_pw);
     }
-
-    if (rd->profile_path) {
-        /* Perfil de la fila: activar ESE perfil. Si le falta la clave (por
-         * ejemplo, está en "preguntar siempre"), NM se la pide al agente de
-         * secretos. */
+    if (rd->profile_path)
         nm_set_profile_autoconnect (rd->popup->conn, rd->profile_path, autoconnect);
-        nm_activate_profile_async (rd->popup->conn, rd->profile_path,
-                                   rd->device_path, rd->ap_path);
-    } else {
-        /* Sin perfil usable: AddAndActivate crea uno nuevo, libre (sin
-         * atadura a un adaptador). */
-        nm_add_and_activate_connection_async (rd->popup->conn, rd->device_path,
-                                              rd->ap_path, rd->ssid,
-                                              typed ? password : saved_pw,
-                                              rd->key_mgmt,
-                                              autoconnect, FALSE);
-    }
 
+    /* Con perfil: se activa ESE perfil (si le falta la clave, NM se la pide
+     * al agente de secretos). Sin perfil: se crea uno nuevo, libre (sin
+     * atadura a un adaptador). Si el intento falla, el perfil creado se
+     * conserva: la fila pasa a "red guardada" con Reintentar / Probar otra. */
+    AttemptRequest req = { 0 };
+    req.ssid             = rd->ssid;
+    req.device_path      = rd->device_path;
+    req.ap_path          = rd->ap_path;
+    req.profile_path     = rd->profile_path;
+    req.password         = typed ? password : saved_pw;
+    req.key_mgmt         = rd->key_mgmt;
+    req.autoconnect      = autoconnect;
+    req.restore_password = pw_changed ? old_pw : NULL;
+    attempts_connect (&req);
+
+    secure_wipe_free (old_pw);
     secure_wipe_free (saved_pw);
 }
 
@@ -982,6 +840,7 @@ on_menu_details (GtkMenuItem *item, gpointer rd_ptr)
         on_details_clicked (NULL, rd);
 }
 
+#ifdef HAVE_LIBQRENCODE
 static void
 on_menu_qr (GtkMenuItem *item, gpointer rd_ptr)
 {
@@ -992,6 +851,7 @@ on_menu_qr (GtkMenuItem *item, gpointer rd_ptr)
         !gtk_widget_get_visible (rd->qr_drawing_area))
         on_qr_clicked (rd->qr_btn, rd);
 }
+#endif
 
 static void
 on_menu_autoconnect (GtkCheckMenuItem *item, gpointer rd_ptr)
@@ -1033,8 +893,8 @@ row_show_menu (RowData *rd, GdkEvent *event)
     if (popup->ctx_menu)
         return;
 
-    gboolean passive = rd->expand_box &&
-        g_object_get_data (G_OBJECT (rd->expand_box), "passive-connecting") != NULL;
+    /* Intento de conexión en curso en este adaptador. */
+    gboolean busy = attempts_device_busy (rd->device_path);
     /* "Guardada" también para la red activa (rd->saved es FALSE en ese caso). */
     gboolean saved   = rd->active || rd->saved ||
                        nm_has_saved_connection (popup->conn, rd->ssid);
@@ -1047,10 +907,8 @@ row_show_menu (RowData *rd, GdkEvent *event)
     } else {
         /* Deshabilitado si ya hay un intento en curso o si el botón del
          * expand está deshabilitado (red empresarial sin perfil). */
-        gboolean can = !passive && rd->action_btn &&
-                       gtk_widget_get_sensitive (rd->action_btn) &&
-                       !g_hash_table_contains (popup->ops_in_progress,
-                                               rd->device_path);
+        gboolean can = !busy && rd->action_btn &&
+                       gtk_widget_get_sensitive (rd->action_btn);
         menu_add (menu, _("Connect"), G_CALLBACK (on_menu_connect), rd, can);
     }
 
@@ -1076,7 +934,7 @@ row_show_menu (RowData *rd, GdkEvent *event)
         if (rd->confirm_box) {
             gtk_menu_shell_append (GTK_MENU_SHELL (menu),
                                    gtk_separator_menu_item_new ());
-            menu_add (menu, _("Forget"), G_CALLBACK (on_menu_forget), rd, !passive);
+            menu_add (menu, _("Forget"), G_CALLBACK (on_menu_forget), rd, !busy);
         }
     }
 
@@ -1102,34 +960,27 @@ row_show_menu (RowData *rd, GdkEvent *event)
  * menos la intensidad de señal (que se actualiza en el lugar). Si la huella
  * no cambió entre refrescos, la fila existente se reutiliza tal cual; si
  * cambió, se recrea solo esa fila. Tiene que reflejar exactamente las
- * decisiones que toma make_ap_row al construir: activo (con la corrección
- * por intento pendiente), conectando, guardada, con fallo previo, y las
+ * decisiones que toma make_ap_row al construir: conectada, el estado del
+ * intento (conectando, desconectando, falló y por qué), guardada, y las
  * banderas de seguridad (de las que derivan empresarial y wpa-psk/sae). */
 gchar *
 row_fingerprint (NetPopup *popup, NmAccessPoint *ap, const gchar *device_path,
                  GHashTable *saved_ssids)
 {
-    gboolean ap_active     = ap->active;
-    gboolean is_connecting = FALSE;
-
-    if (pending_attempt_fresh (popup, ap->ssid, device_path, NULL)) {
-        /* Igual que en make_ap_row: con intento pendiente no se le
-         * cree a NM el "activo", y la fila muestra "Conectando…". */
-        ap_active     = FALSE;
-        is_connecting = TRUE;
-    }
-
+    Attempt  att;
+    gboolean has  = attempts_lookup (ap->ssid, device_path, &att);
+    gboolean conn = has && att.state == ATTEMPT_CONNECTING;
+    gboolean disc = has && att.state == ATTEMPT_DISCONNECTING;
+    gboolean fail = has && att.state == ATTEMPT_FAILED;
+    /* Igual que en make_ap_row: con un intento en curso la red todavía no
+     * cuenta como conectada. */
+    gboolean ap_active = !conn && ap_is_connected (popup, ap, device_path);
     gboolean saved = (saved_ssids &&
                       g_hash_table_contains (saved_ssids, ap->ssid));
 
-    gchar   *fk = make_ssid_dev_key (ap->ssid, device_path);
-    gboolean had_failure = saved && ap->secure &&
-                           g_hash_table_contains (popup->failed_ssids, fk);
-    g_free (fk);
-
-    return g_strdup_printf ("%d|%d|%d|%d|%d|%u",
-                            ap_active, is_connecting, saved, had_failure,
-                            ap->secure, ap->wpa_flags | ap->rsn_flags);
+    return g_strdup_printf ("%d|%d|%d|%d|%u|%d|%d|%u",
+                            ap_active, conn, disc, fail, fail ? att.reason : 0,
+                            saved, ap->secure, ap->wpa_flags | ap->rsn_flags);
 }
 
 GtkWidget *
@@ -1167,14 +1018,15 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path,
         ap_key_mgmt = "owe";
     }
 
-    /* Si hay un intento de conexión pendiente para este SSID y aún estamos
-     * dentro de la ventana del timeout (OP_TIMEOUT_MS), NO confiar en lo que
-     * dice NM sobre ap->active: NM puede reportar "activado" varios segundos
-     * antes de que el AP rechace la auth con clave mala. Forzamos active=FALSE
-     * para que la fila no muestre "Conectado" falsamente. */
-    gboolean ap_active = ap->active;
-    if (ap_active && pending_attempt_fresh (popup, ap->ssid, device_path, NULL))
-        ap_active = FALSE;
+    /* Estado del intento de conexión de esta red en este adaptador, según
+     * el seguidor (attempts.c). Mientras hay un intento en curso la red
+     * todavía no cuenta como conectada, aunque NM ya la muestre activa. */
+    Attempt  att;
+    gboolean has_att          = attempts_lookup (ap->ssid, device_path, &att);
+    gboolean is_connecting    = has_att && att.state == ATTEMPT_CONNECTING;
+    gboolean is_disconnecting = has_att && att.state == ATTEMPT_DISCONNECTING;
+    gboolean att_failed       = has_att && att.state == ATTEMPT_FAILED;
+    gboolean ap_active        = !is_connecting && ap_is_connected (popup, ap, device_path);
 
     /* Perfil guardado de esta fila. En la red activa, el que el adaptador
      * está usando de verdad; en las demás, el de la misma red con seguridad
@@ -1187,13 +1039,6 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path,
         profile_path = nm_find_profile_for_ap (conn, ap->ssid,
                                                ap->wpa_flags, ap->rsn_flags,
                                                device_path);
-
-    /* is_connecting: hay un intento de conexión a esta red desde este
-     * adaptador, todavía dentro de la ventana de 20s. La fila muestra
-     * "Conectando…" y el expand es pasivo (solo un texto, sin botones, para
-     * no ofrecer "Conectar" cuando ya hay un intento en curso). */
-    gboolean is_connecting = !ap_active &&
-        pending_attempt_fresh (popup, ap->ssid, device_path, NULL);
 
     outer     = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
     event_box = gtk_event_box_new ();
@@ -1300,32 +1145,20 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path,
             gtk_box_pack_start (GTK_BOX (expand_box), sig_label, FALSE, FALSE, 0);
             gtk_widget_show (sig_label);
         }
-    } else if (is_connecting) {
-        GtkWidget *connecting_label = gtk_label_new (_("Connecting…"));
-        gtk_label_set_xalign (GTK_LABEL (connecting_label), 0.0);
-        gtk_box_pack_start (GTK_BOX (expand_box), connecting_label, FALSE, FALSE, 0);
-        gtk_widget_show (connecting_label);
-        /* Botón "Connect" creado oculto: no rompe la lógica de action_row. */
-        action_btn = gtk_button_new_with_label (_("Connect"));
-        gtk_widget_set_no_show_all (action_btn, TRUE);
-        /* Marca: este expand es pasivo (solo muestra "Conectando…"), no hay
-         * interacción del usuario que proteger. update_devices_section puede
-         * reconstruirlo libremente y reabrirlo después. */
-        g_object_set_data (G_OBJECT (expand_box), "passive-connecting",
-                           GINT_TO_POINTER (1));
-        /* Agendar refresh para cuando expire la ventana de pending_attempts.
-         * Si NM no emitió ninguna señal hasta entonces, queremos transicionar
-         * el expand a estado A sin esperar a que el usuario interactúe. */
-        arm_passive_timer (popup);
+        /* Desconexión pedida y todavía en curso (por ejemplo, el popup se
+         * cerró y se volvió a abrir mientras tanto). */
+        if (is_disconnecting) {
+            gtk_button_set_label (GTK_BUTTON (action_btn), _("Disconnecting…"));
+            gtk_widget_set_sensitive (action_btn, FALSE);
+        }
     } else {
         /* Set precalculado: antes se enumeraban TODOS los perfiles guardados
          * una vez por fila (nm_has_saved_connection). */
         gboolean saved = (saved_ssids &&
                           g_hash_table_contains (saved_ssids, ap->ssid));
-        gchar   *fk_row = make_ssid_dev_key (ap->ssid, device_path);
-        gboolean had_failure = saved && ap->secure &&
-            g_hash_table_contains (popup->failed_ssids, fk_row);
-        g_free (fk_row);
+        /* Red guardada y con clave cuyo último intento falló: el expand
+         * ofrece "Reintentar con la contraseña guardada" / "Probar otra". */
+        gboolean had_failure = saved && ap->secure && att_failed;
 
         /* Label de información: señal siempre, + "Red guardada" si aplica. */
         {
@@ -1345,6 +1178,19 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path,
             g_object_set_data (G_OBJECT (event_box), "info-label", info_label);
             g_object_set_data (G_OBJECT (event_box), "info-saved",
                                GINT_TO_POINTER (saved));
+        }
+
+        /* Falló y no hay estado A/B (red abierta, o sin perfil guardado):
+         * el motivo va arriba, en rojo. */
+        if (att_failed && !had_failure) {
+            GtkWidget *err_label = gtk_label_new (failure_text (att.reason));
+            gtk_style_context_add_class (gtk_widget_get_style_context (err_label),
+                                         "error");
+            gtk_label_set_xalign (GTK_LABEL (err_label), 0.0);
+            gtk_label_set_line_wrap (GTK_LABEL (err_label), TRUE);
+            gtk_box_pack_start (GTK_BOX (expand_box), err_label, FALSE, FALSE, 0);
+            gtk_widget_show (err_label);
+            g_object_set_data (G_OBJECT (expand_box), "error-label", err_label);
         }
 
         if (saved) {
@@ -1659,11 +1505,8 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path,
      * (estado A = botones de reintentar/probar otra; estado B = entry de
      * reescribir contraseña + Volver/Conectar). Se intercalan después del
      * autoconnect_check y antes del action_row (que solo tiene "Olvidar"). */
-    gchar   *fk_exp      = make_ssid_dev_key (ap->ssid, device_path);
-    gboolean had_fail_exp = g_hash_table_contains (popup->failed_ssids, fk_exp);
-    guint32  fail_reason  = GPOINTER_TO_UINT (g_hash_table_lookup (popup->failed_ssids, fk_exp));
-    g_free (fk_exp);
-    if (!ap_active && rd->saved && ap->secure && had_fail_exp) {
+    guint32 fail_reason = att_failed ? att.reason : 0;
+    if (!ap_active && rd->saved && ap->secure && att_failed) {
 
         /* ---- Estado A ---- */
         rd->state_a_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
@@ -1692,12 +1535,6 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path,
         /* Insertar state_a_box justo antes del action_row. */
         gtk_box_pack_start (GTK_BOX (expand_box), rd->state_a_box,
                             FALSE, FALSE, 0);
-        /* Si hay un intento de conexión en curso (conectando B), deshabilitar
-         * los botones antes de mostrarlos para evitar el destello habilitado. */
-        if (is_connecting) {
-            gtk_widget_set_sensitive (rd->retry_btn,     FALSE);
-            gtk_widget_set_sensitive (rd->try_other_btn, FALSE);
-        }
         gtk_widget_show_all (rd->state_a_box);
 
         /* ---- Estado B (oculto inicialmente) ---- */
@@ -1760,6 +1597,19 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path,
                           G_CALLBACK (on_pass_entry_b_changed), rd);
         g_signal_connect_swapped (eye_btn_b, "clicked",
                                   G_CALLBACK (on_eye_clicked), pass_entry);
+    }
+
+    /* Intento de conexión en curso (pedido ahora o antes de cerrar el
+     * popup): el mismo expand de siempre, pero con "Conectando…" y sin nada
+     * que se pueda tocar hasta que termine. */
+    if (is_connecting) {
+        gtk_button_set_label (GTK_BUTTON (action_btn), _("Connecting…"));
+        gtk_widget_set_sensitive (action_btn, FALSE);
+        GtkWidget *locked[] = { rd->pass_entry, rd->forget_btn,
+                                rd->autoconnect_check };
+        for (gsize i = 0; i < G_N_ELEMENTS (locked); i++)
+            if (locked[i])
+                gtk_widget_set_sensitive (locked[i], FALSE);
     }
 
     g_object_set_data_full (G_OBJECT (outer), "row-data", rd,

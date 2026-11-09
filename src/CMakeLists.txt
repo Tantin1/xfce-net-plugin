@@ -46,6 +46,7 @@ add_library(xfce-net-plugin MODULE
     popup-sections.c
     nm-dbus.c
     secret-agent.c
+    attempts.c
     ${CMAKE_BINARY_DIR}/lock-icons-resource.c
 )
 

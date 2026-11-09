@@ -55,14 +55,6 @@ msgstr "Pokaż przycisk Zapomnij dla aktywnych sieci"
 msgid "Show notifications"
 msgstr "Pokaż powiadomienia"
 
-#: plugin.c:475
-msgid ""
-"If the popup and the notification overlap, the notification will partially "
-"cover the popup."
-msgstr ""
-"Jeśli popup i powiadomienie nakładają się, powiadomienie częściowo zasłoni "
-"popup."
-
 #: plugin.c:585 plugin.c:620
 #, c-format
 msgid "Connected to %s"
@@ -419,6 +411,10 @@ msgstr "Połączenie trwało zbyt długo"
 #: popup.c
 msgid "Connection failed"
 msgstr "Połączenie nie powiodło się"
+
+#: plugin.c
+msgid "Could not connect"
+msgstr "Nie udało się połączyć"
 
 #~ msgid "Saved network"
 #~ msgstr "Zapisana sieć"

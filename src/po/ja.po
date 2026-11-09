@@ -55,12 +55,6 @@ msgstr "アクティブなネットワークに「忘れる」ボタンを表示
 msgid "Show notifications"
 msgstr "通知を表示"
 
-#: plugin.c:475
-msgid ""
-"If the popup and the notification overlap, the notification will partially "
-"cover the popup."
-msgstr "ポップアップと通知が重なる場合、通知がポップアップを部分的に覆います。"
-
 #: plugin.c:585 plugin.c:620
 #, c-format
 msgid "Connected to %s"
@@ -417,6 +411,10 @@ msgstr "接続に時間がかかりすぎました"
 #: popup.c
 msgid "Connection failed"
 msgstr "接続に失敗しました"
+
+#: plugin.c
+msgid "Could not connect"
+msgstr "接続できませんでした"
 
 #~ msgid "Saved network"
 #~ msgstr "保存済みネットワーク"

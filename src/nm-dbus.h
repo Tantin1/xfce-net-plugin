@@ -85,8 +85,6 @@ gchar   *nm_get_profile_password      (GDBusConnection *conn, const gchar *profi
 gboolean nm_get_profile_autoconnect   (GDBusConnection *conn, const gchar *profile_path);
 gboolean nm_set_profile_autoconnect   (GDBusConnection *conn, const gchar *profile_path,
                                        gboolean autoconnect);
-void     nm_activate_profile_async    (GDBusConnection *conn, const gchar *profile_path,
-                                       const gchar *device_path, const gchar *ap_path);
 /* Cambia solo la contraseña del perfil (WPA2/WPA3 o WEP) y conserva el
  * resto de sus ajustes. FALSE si no se pudo; el perfil queda intacto. */
 gboolean nm_set_profile_password      (GDBusConnection *conn, const gchar *profile_path,
@@ -152,18 +150,29 @@ void    nm_vpn_list_free        (GSList *list);
  * ACCIONES ASYNC
  *
  * Estas funciones no bloquean el hilo principal. Envían el pedido
- * a NM y vuelven enseguida. Si querés saber si tuvo éxito o falló,
- * suscribite a las señales DBus de NM y reaccionar al cambio de
- * estado del dispositivo o de la conexión.
+ * a NM y vuelven enseguida.
  * ============================================================ */
 
 void nm_disconnect_device_async (GDBusConnection *conn,
                                  const gchar     *device_path);
 
-void nm_activate_connection_async (GDBusConnection *conn,
-                                   const gchar     *device_path,
-                                   const gchar     *ap_path,
-                                   const gchar     *ssid);
+/* Resultado de pedir una conexión. active_path: la "conexión activa" que
+ * representa este intento (seguirla con nm_watch_active_connection), o NULL
+ * si NM rechazó el pedido; en ese caso error trae el motivo. new_profile: el
+ * perfil que se creó para este intento (solo nm_add_and_activate_connection_async),
+ * o NULL. Las cadenas valen solo durante la llamada. */
+typedef void (*NmActivateCallback) (const gchar *active_path,
+                                    const gchar *new_profile,
+                                    const gchar *error,
+                                    gpointer     user_data);
+
+/* Activa un perfil guardado en device_path (ap_path puede ser NULL). */
+void nm_activate_profile_async (GDBusConnection   *conn,
+                                const gchar       *profile_path,
+                                const gchar       *device_path,
+                                const gchar       *ap_path,
+                                NmActivateCallback cb,
+                                gpointer           user_data);
 
 /* Guarda un perfil nuevo LIBRE (sin atarlo a ningún adaptador) y después
  * lo activa en device_path. No usa "crear y activar" en un paso porque NM
@@ -173,14 +182,40 @@ void nm_activate_connection_async (GDBusConnection *conn,
  * contraseña, NM pide la clave al agente de secretos al conectar.
  * hidden: TRUE para redes ocultas (que no anuncian su nombre). Marca el
  * perfil como oculto para que NM salga a buscarla activamente. */
-void nm_add_and_activate_connection_async (GDBusConnection *conn,
-                                           const gchar     *device_path,
-                                           const gchar     *ap_path,
-                                           const gchar     *ssid,
-                                           const gchar     *password,
-                                           const gchar     *key_mgmt,
-                                           gboolean         autoconnect,
-                                           gboolean         hidden);
+void nm_add_and_activate_connection_async (GDBusConnection   *conn,
+                                           const gchar       *device_path,
+                                           const gchar       *ap_path,
+                                           const gchar       *ssid,
+                                           const gchar       *password,
+                                           const gchar       *key_mgmt,
+                                           gboolean           autoconnect,
+                                           gboolean           hidden,
+                                           NmActivateCallback cb,
+                                           gpointer           user_data);
+
+/* ---------- Conexión activa (un intento de conexión en curso) ----------
+ * Estados (NMActiveConnectionState): 0 = desconocido o ya no existe,
+ * 1 = activándose, 2 = activada, 3 = desactivándose, 4 = desactivada. */
+#define NM_ACTIVE_STATE_UNKNOWN      0
+#define NM_ACTIVE_STATE_ACTIVATING   1
+#define NM_ACTIVE_STATE_ACTIVATED    2
+#define NM_ACTIVE_STATE_DEACTIVATING 3
+#define NM_ACTIVE_STATE_DEACTIVATED  4
+
+guint32 nm_get_active_state (GDBusConnection *conn, const gchar *active_path);
+
+/* Avisa cada cambio de estado de la conexión activa, con el motivo
+ * (NMActiveConnectionStateReason). Devuelve un número para dejar de seguirla
+ * con nm_unwatch_active_connection. */
+typedef void (*NmActiveStateCallback) (const gchar *active_path,
+                                       guint32      state,
+                                       guint32      reason,
+                                       gpointer     user_data);
+guint nm_watch_active_connection   (GDBusConnection      *conn,
+                                    const gchar          *active_path,
+                                    NmActiveStateCallback cb,
+                                    gpointer              user_data);
+void  nm_unwatch_active_connection (GDBusConnection *conn, guint watch_id);
 
 void nm_set_device_enabled_async (GDBusConnection *conn,
                                   const gchar     *device_path,

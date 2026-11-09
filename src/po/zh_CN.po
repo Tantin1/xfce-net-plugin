@@ -55,12 +55,6 @@ msgstr "在活动网络上显示忘记按钮"
 msgid "Show notifications"
 msgstr "显示通知"
 
-#: plugin.c:475
-msgid ""
-"If the popup and the notification overlap, the notification will partially "
-"cover the popup."
-msgstr "如果弹出窗口与通知重叠，通知将部分遮挡弹出窗口。"
-
 #: plugin.c:585 plugin.c:620
 #, c-format
 msgid "Connected to %s"
@@ -417,6 +411,10 @@ msgstr "连接耗时过长"
 #: popup.c
 msgid "Connection failed"
 msgstr "连接失败"
+
+#: plugin.c
+msgid "Could not connect"
+msgstr "无法连接"
 
 #~ msgid "Saved network"
 #~ msgstr "已保存的网络"

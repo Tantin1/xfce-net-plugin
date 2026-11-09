@@ -4,6 +4,7 @@
 #include <gtk/gtk.h>
 #include <libxfce4panel/libxfce4panel.h>
 #include "nm-dbus.h"
+#include "attempts.h"
 
 typedef struct {
     GtkWidget *window;
@@ -54,40 +55,23 @@ typedef struct {
     /* IDs de suscripción a señales DBus de NM. */
     guint     *signal_ids;
 
-    /* Tabla de operaciones en curso, indexada por device_path (ruta del
-     * adaptador). Cada entrada apunta a una OpInProgress con su temporizador
-     * y los widgets afectados. */
-    GHashTable *ops_in_progress;
-
     /* Temporizadores propios. Todos se cancelan en popup_hide y en
      * popup_destroy, para que ninguno dispare con el popup ya liberado. */
     guint      scan_timeout_id;     /* reactivar el botón Actualizar */
-    guint      pending_timeout_id;  /* evaluar intentos pendientes al reabrir */
-    guint      passive_timeout_id;  /* expand pasivo "Conectando…" */
     guint      refresh_idle_id;     /* refresco agendado (coalescido) */
     guint      reserve_idle_id;     /* reacomodo del hueco de la barra de desplazamiento */
     gboolean   show_separators;
 
-    /* Redes cuya última operación CONNECT falló, clave "ssid|device_path"
-     * (ver make_ssid_dev_key). Se setea en op_timeout_cb
-     * y se limpia al conectar exitosamente o al olvidar la red manualmente.
-     * Sirve para que el expand de red guardada muestre campo "Reescribir contraseña"
-     * después de un fallo, sin obligar al usuario a clickear Olvidar y reabrir. */
-    GHashTable *failed_ssids;
+    /* Seguimiento de intentos de conexión: lo lleva el seguidor común
+     * (attempts.c). El popup solo escucha sus avisos para redibujar. */
+    guint      attempts_listener;
+    /* Fila cuyo expand hay que reabrir después del próximo refresco (un
+     * intento que falló con su expand abierto: se reabre en estado A). */
+    gchar     *reopen_ssid;
+    gchar     *reopen_dev;
 
-    /* Intentos de conexión en curso. Clave "ssid|device_path" (ver
-     * make_ssid_dev_key) → marca de tiempo monotónica (gint64*). Al reabrir
-     * el popup se consulta: si el adaptador no quedó conectado, la red pasa a
-     * failed_ssids; si quedó conectado, se descarta. Sirve para no perder el
-     * rastro de fallos cuando el usuario cierra el popup antes de los 20s. */
-    GHashTable *pending_attempts;
-
-    /* Clave anterior de un perfil al que se le cambió la clave para conectar.
-     * Clave "ssid|device_path" → PwBackup (popup.c). Si el intento falla se
-     * le devuelve; si conecta, se descarta. */
-    GHashTable *pw_backups;
-
-    /* Puntero opaco al NetPlugin del panel. Usado para controlar el spinner. */
+    /* Puntero opaco al NetPlugin del panel (para avisarle de adaptadores
+     * prendidos o apagados a mano). */
     gpointer plugin_ref;
 
     /* Filtro GDK para detectar clicks en el área vacía del panel (cuando grab falla). */
@@ -126,16 +110,6 @@ typedef struct {
 #define NET_POPUP_STYLE_FLOATING  1   /* siempre separada del panel */
 #define NET_POPUP_STYLE_ATTACHED  2   /* pegada al panel, esquinas rectas: el aspecto de antes */
 
-/* Arma la clave "ssid|device_path" que usan pending_attempts y failed_ssids.
- * Un solo lugar para armarla, así nunca queda inconsistente. Liberar con
- * g_free(). */
-static inline gchar *
-make_ssid_dev_key (const gchar *ssid, const gchar *device_path)
-{
-    return g_strdup_printf ("%s|%s", ssid ? ssid : "",
-                            device_path ? device_path : "");
-}
-
 /* Íconos con reserva: arma un ícono que prueba dos nombres en orden. Por
  * defecto primero el estándar del tema (freedesktop) y después el de
  * nm-applet; con la opción "Preferir íconos de nm-applet" activada, al revés.
@@ -146,8 +120,6 @@ void   popup_set_prefer_nm_icons (gboolean prefer);
 /* Crea un widget con ícono de señal Wi-Fi. Si secure=TRUE superpone un candado. */
 GtkWidget *make_signal_icon (gint strength, gboolean secure, gint icon_size);
 
-/* Controlado desde popup.c para mostrar/ocultar el spinner del panel. */
-void net_plugin_set_connecting (gpointer np_ptr, gboolean connecting);
 /* Avisa al plugin que el usuario prendió o apagó un adaptador, para poder
  * recordarlo al reiniciar. */
 void net_plugin_device_toggled (gpointer np_ptr, const gchar *iface, gboolean enabled);

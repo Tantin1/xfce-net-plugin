@@ -18,10 +18,6 @@
 #define NM_WIFI_IFACE  "org.freedesktop.NetworkManager.Device.Wireless"
 #define NM_AP_IFACE    "org.freedesktop.NetworkManager.AccessPoint"
 
-/* Timeout de seguridad (ms) para operaciones conectar/desconectar.
- * Si NM no confirma en este tiempo, asumimos fallo. */
-#define OP_TIMEOUT_MS 20000
-
 /* Separación del popup flotante: del panel y de los bordes de la pantalla
  * (en todas las direcciones o en ninguna). */
 #define POPUP_FLOAT_GAP 6
@@ -38,60 +34,15 @@
 /* Cooldown del botón Actualizar (ms) entre escaneos. */
 #define SCAN_COOLDOWN_MS 5000
 
-/* Edad máxima (en segundos) de un intento "pendiente" para que cuente como
- * candidato a marcar fallo al reabrir el popup. Si pasó más tiempo que esto,
- * descartamos el intento sin marcar — asumimos que ya pasó suficiente y
- * cualquier marca tardía sería confusa. */
-#define PENDING_ATTEMPT_MAX_AGE_SECS 60
-
 /* Bits de gestión de claves en WpaFlags/RsnFlags del gestor de red. */
 #define NM_AP_SEC_KEY_MGMT_PSK    0x00000100
 #define NM_AP_SEC_KEY_MGMT_802_1X 0x00000200
 #define NM_AP_SEC_KEY_MGMT_SAE    0x00000400
 #define NM_AP_SEC_KEY_MGMT_SUITEB 0x00002000
 
-/* ================================================================
- * Operaciones en curso
- *
- * Cuando el usuario aprieta Conectar o Desconectar, registramos
- * la operación en popup->ops_in_progress, indexada por device_path.
- * El handler reactivo, cuando llega una señal DBus, mira la tabla
- * y decide si tiene que cerrar el expand, restaurar el botón, etc.
- * ================================================================ */
-
-typedef enum {
-    OP_CONNECT,
-    OP_DISCONNECT
-} OpKind;
-
-typedef struct {
-    OpKind     kind;
-    gchar     *ssid;          /* SSID destino (para CONNECT) o el actualmente conectado (DISCONNECT) */
-    gchar     *device_path;
-    GtkWidget *expand_box;    /* Expand a cerrar al confirmar (puede ser NULL si la fila se destruye antes). */
-    GtkWidget *action_btn;    /* Botón a restaurar si falla. */
-    gchar     *action_label;  /* Texto original del action_btn a restaurar en caso de fallo. */
-    GtkWidget *pass_entry;    /* Entry de contraseña, si aplica (para mostrar error inline). */
-    GtkWidget *error_label;   /* Label de error reusable, si se crea. */
-    GSList    *extra_disabled;/* Lista de GtkWidget* extra que se deshabilitaron y hay que rehabilitar al fallar. */
-    guint      timeout_id;    /* Fuente de timeout de 20s. */
-    gboolean   extended;      /* TRUE si ya se le dio la prórroga única por "sigue intentando". */
-    gint64     started;       /* g_get_monotonic_time() al empezar. */
-    guint32    fail_reason;   /* Motivo del fallo (código de NM o NM_FAIL_*), 0 = no falló. */
-    NetPopup  *popup;
-} OpInProgress;
-
-/* Texto corto para el usuario según el motivo del fallo (código de NM o
- * NM_FAIL_*). Nunca NULL. */
-const gchar *failure_text (guint32 reason);
-
-/* Respaldo de la clave anterior de un perfil (ver NetPopup.pw_backups).
- * pw_backup_save: anota (perfil, clave vieja) para el intento `key`.
- * pw_backup_resolve: failed=TRUE le devuelve la clave vieja al perfil;
- * FALSE la descarta. En los dos casos borra el respaldo. */
-void pw_backup_save    (NetPopup *popup, const gchar *key,
-                        const gchar *profile_path, const gchar *old_password);
-void pw_backup_resolve (NetPopup *popup, const gchar *key, gboolean failed);
+/* Los intentos de conexión los sigue attempts.c (incluido por popup.h):
+ * estado de cada red en cada adaptador, motivo del fallo (failure_text) y
+ * qué deshacer si falla. */
 
 typedef struct {
     GDBusConnection *conn;
@@ -140,12 +91,7 @@ typedef struct {
 /* ---- popup.c (núcleo: ventana, operaciones, helpers) ---- */
 void      secure_wipe_free          (gchar *s);
 gchar    *get_primary_ssid          (GDBusConnection *conn);
-gboolean  op_timeout_cb             (gpointer user_data);
 gboolean  device_is_activated      (GDBusConnection *conn, const gchar *device_path);
-gboolean  device_is_disconnected   (GDBusConnection *conn, const gchar *device_path);
-gboolean  device_is_connecting     (GDBusConnection *conn, const gchar *device_path);
-void      process_pending_attempts (NetPopup *popup);
-void      check_ops_progress       (NetPopup *popup);
 gboolean  on_wifi_switch_toggled   (GtkSwitch *sw, gboolean state, gpointer user_data);
 void      device_switch_data_free  (DeviceSwitchData *d);
 gboolean  on_device_switch_toggled (GtkSwitch *sw, gboolean state, gpointer user_data);
@@ -186,6 +132,10 @@ void      update_vpn_section     (NetPopup *popup);
 void      update_devices_section (NetPopup *popup);
 void      schedule_refresh_ui    (NetPopup *popup);
 void      on_nm_signal_popup     (gpointer user_data);
+/* Aviso del seguidor de intentos (attempts.c): cierra o reabre el expand de
+ * la red que terminó y agenda el refresco. */
+void      on_attempt_event       (const gchar *ssid, const gchar *device_path,
+                                  AttemptEvent event, gpointer user_data);
 /* Búsqueda: oculta las filas Wi-Fi cuyo nombre no contiene el texto del
  * campo de búsqueda. Se llama al escribir y al final de cada refresco. */
 void      apply_search_filter    (NetPopup *popup);

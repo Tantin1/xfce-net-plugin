@@ -13,6 +13,7 @@
 #include "popup.h"
 #include "nm-dbus.h"
 #include "secret-agent.h"
+#include "attempts.h"
 
 #define DEFAULT_SQUARE_BUTTON   FALSE
 #define DEFAULT_PLUGIN_SIZE     24
@@ -73,6 +74,12 @@ typedef struct {
 
     gboolean        connecting;
     gboolean        notif_ready;
+    guint           attempts_listener;   /* avisos del seguidor de intentos */
+#ifdef HAVE_LIBNOTIFY
+    /* Una sola notificación, que se reemplaza en el lugar: los avisos
+     * nuevos no se apilan. NULL hasta el primer aviso. */
+    NotifyNotification *notif;
+#endif
     gboolean        show_notifications;
     gboolean        show_forget_active;
     gboolean        prefer_nm_icons;   /* íconos de nm-applet antes que los estándar */
@@ -483,12 +490,14 @@ on_separators_toggled (GtkToggleButton *btn, PropsDialog *pd)
     pd->np->popup->ui_built = FALSE;
 }
 
+#ifdef HAVE_LIBNOTIFY
 static void
 on_notifications_toggled (GtkToggleButton *btn, PropsDialog *pd)
 {
     pd->np->show_notifications = gtk_toggle_button_get_active (btn);
     save_config (pd->np);
 }
+#endif
 
 static void
 on_forget_active_toggled (GtkToggleButton *btn, PropsDialog *pd)
@@ -832,13 +841,6 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
     gtk_grid_attach (GTK_GRID (grid), pd->notifications_check, 0, row, 2, 1);
     row++;
 
-    GtkWidget *notif_hint = gtk_label_new (_("If the popup and the notification overlap, the notification will partially cover the popup."));
-    gtk_label_set_xalign (GTK_LABEL (notif_hint), 0.0);
-    gtk_label_set_line_wrap (GTK_LABEL (notif_hint), TRUE);
-    gtk_label_set_max_width_chars (GTK_LABEL (notif_hint), 35);
-    gtk_widget_set_margin_start (notif_hint, 24);
-    gtk_style_context_add_class (gtk_widget_get_style_context (notif_hint), "dim-label");
-    gtk_grid_attach (GTK_GRID (grid), notif_hint, 0, row, 2, 1);
 #endif
 
     gtk_notebook_append_page (GTK_NOTEBOOK (notebook), grid,
@@ -922,10 +924,9 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
 
 /* ---------- control del spinner del panel ---------- */
 
-void
-net_plugin_set_connecting (gpointer np_ptr, gboolean connecting)
+static void
+net_plugin_set_connecting (NetPlugin *np, gboolean connecting)
 {
-    NetPlugin *np = np_ptr;
     np->connecting = connecting;
     if (connecting) {
         gtk_spinner_start (GTK_SPINNER (np->spinner));
@@ -935,6 +936,82 @@ net_plugin_set_connecting (gpointer np_ptr, gboolean connecting)
         gtk_stack_set_visible_child_name (GTK_STACK (np->stack), "icon");
     }
 }
+
+/* ---------- notificaciones ----------
+ *
+ * Una sola notificación que se reemplaza en el lugar (antes cada aviso era
+ * una nueva y se apilaban). Los cambios que llegan juntos en un mismo
+ * refresco van en un solo mensaje, una línea por cambio.
+ *
+ * Con el popup abierto no se muestra nada: el usuario ya está viendo el
+ * estado (y casi siempre lo provocó desde ahí), y así la notificación nunca
+ * tapa el popup. No se lo cierra para mostrarla, como hace nm-applet: se
+ * cortaría lo que el usuario estuviera haciendo (escribir una contraseña,
+ * leer los detalles). */
+
+#ifdef HAVE_LIBNOTIFY
+typedef struct {
+    const gchar *summary;   /* "Wi-Fi", "Ethernet", "VPN" */
+    gchar       *text;      /* "Conectado a Casa" */
+    const gchar *icon;
+} NotifyEvent;
+
+typedef struct {
+    NotifyEvent ev[6];
+    gint        n;
+} NotifyBatch;
+
+static void
+batch_add (NotifyBatch *b, const gchar *summary, const gchar *text,
+           const gchar *icon)
+{
+    if (b->n >= (gint) G_N_ELEMENTS (b->ev))
+        return;
+    b->ev[b->n].summary = summary;
+    b->ev[b->n].text    = g_strdup (text);
+    b->ev[b->n].icon    = icon;
+    b->n++;
+}
+
+static gboolean
+popup_is_open (NetPlugin *np)
+{
+    return np->popup && gtk_widget_get_visible (np->popup->window);
+}
+
+static void
+notify_show (NetPlugin *np, const gchar *summary, const gchar *body,
+             const gchar *icon)
+{
+    if (!np->show_notifications || popup_is_open (np))
+        return;
+    if (!np->notif)
+        np->notif = notify_notification_new (summary, body, icon);
+    else
+        notify_notification_update (np->notif, summary, body, icon);
+    notify_notification_show (np->notif, NULL);
+}
+
+/* Un cambio: su título y su texto. Varios: título general ("Red") y una
+ * línea por cambio con su título ("Wi-Fi: Conectado a Casa"). */
+static void
+batch_send (NetPlugin *np, NotifyBatch *b)
+{
+    if (b->n == 1) {
+        notify_show (np, b->ev[0].summary, b->ev[0].text, b->ev[0].icon);
+    } else if (b->n > 1) {
+        GString *body = g_string_new (NULL);
+        for (gint i = 0; i < b->n; i++)
+            g_string_append_printf (body, "%s%s: %s", i ? "\n" : "",
+                                    b->ev[i].summary, b->ev[i].text);
+        notify_show (np, _("Network"), body->str, b->ev[0].icon);
+        g_string_free (body, TRUE);
+    }
+    for (gint i = 0; i < b->n; i++)
+        g_free (b->ev[i].text);
+    b->n = 0;
+}
+#endif
 
 /* ---------- callback de refresco por señales DBus ---------- */
 
@@ -982,101 +1059,61 @@ on_nm_changed_cb (gpointer user_data)
     gboolean prev_wired     = np->last_wired;
 #endif
 
-    /* Apagar spinner solo cuando NM confirma conexión exitosa. */
-    if (np->connecting && connected)
-        net_plugin_set_connecting (np, FALSE);
-
-    /* Spinner: prender si NM reporta algún adaptador conectando, apagar si no. */
-    gboolean any_connecting = nm_any_wifi_device_connecting (np->conn);
+    /* Spinner: un intento de conexión pedido desde el plugin (lo sigue
+     * attempts.c) o cualquier adaptador conectando por su cuenta (por
+     * ejemplo, la conexión automática al arrancar). */
+    gboolean any_connecting = attempts_any_connecting () ||
+                              nm_any_wifi_device_connecting (np->conn);
     if (any_connecting != np->connecting)
         net_plugin_set_connecting (np, any_connecting);
 
     update_panel_icon (np, connected, strength, secure, vpn, wired);
 
 #ifdef HAVE_LIBNOTIFY
-    /* Notificaciones: solo si ya hubo un estado previo (evita notif al arrancar) */
-    if (np->notif_ready && np->show_notifications) {
-        /* Wi-Fi y Ethernet se evalúan por separado: antes iban en una sola
-         * cadena de "si no, si no" y un cambio de Wi-Fi tapaba uno de cable
-         * que ocurriera al mismo tiempo. */
-        NotifyNotification *notif  = NULL;
-        NotifyNotification *enotif = NULL;
-
-        if (connected && !prev_connected) {
-            /* Wi-Fi conectado */
-            gchar *body = g_strdup_printf (_("Connected to %s"), ai->ssid ? ai->ssid : "Wi-Fi");
-            notif = notify_notification_new (_("Wi-Fi"), body, "network-wireless-symbolic");
-            g_free (body);
-        } else if (!connected && prev_connected) {
-            /* Wi-Fi desconectado */
-            notif = notify_notification_new (_("Wi-Fi"), _("Disconnected"), "network-wireless-disconnected-symbolic");
-        } else if (connected && prev_connected && ai->ssid &&
-                   np->last_ssid && g_strcmp0 (ai->ssid, np->last_ssid) != 0) {
-            /* Pasó de una red Wi-Fi a otra sin quedar desconectado en el
-             * medio: antes no se avisaba nada. */
-            gchar *body = g_strdup_printf (_("Connected to %s"), ai->ssid);
-            notif = notify_notification_new (_("Wi-Fi"), body, "network-wireless-symbolic");
-            g_free (body);
+    {
+        NotifyBatch b = { 0 };
+        if (np->notif_ready) {
+            /* Wi-Fi y Ethernet se evalúan por separado: un cambio de Wi-Fi
+             * no tapa uno de cable que ocurra al mismo tiempo. */
+            if (connected && (!prev_connected ||
+                              (ai->ssid && np->last_ssid &&
+                               g_strcmp0 (ai->ssid, np->last_ssid) != 0))) {
+                /* Conectado, o pasó de una red a otra sin quedar desconectado. */
+                gchar *t = g_strdup_printf (_("Connected to %s"),
+                                            ai->ssid ? ai->ssid : "Wi-Fi");
+                batch_add (&b, _("Wi-Fi"), t, "network-wireless-symbolic");
+                g_free (t);
+            } else if (!connected && prev_connected) {
+                batch_add (&b, _("Wi-Fi"), _("Disconnected"),
+                           "network-wireless-disconnected-symbolic");
+            }
+            if (wired && !prev_wired)
+                batch_add (&b, _("Ethernet"), _("Cable connected"), "network-wired-symbolic");
+            else if (!wired && prev_wired)
+                batch_add (&b, _("Ethernet"), _("Cable disconnected"),
+                           "network-wired-disconnected-symbolic");
+            if (vpn && !prev_vpn)
+                batch_add (&b, _("VPN"), _("Connected"), "network-vpn-symbolic");
+            else if (!vpn && prev_vpn)
+                batch_add (&b, _("VPN"), _("Disconnected"), "network-vpn-symbolic");
+            if (portal && !np->last_portal)
+                batch_add (&b, connected ? _("Wi-Fi") : _("Ethernet"),
+                           _("This network requires you to sign in"),
+                           "dialog-warning-symbolic");
+        } else {
+            /* Estado al arrancar. */
+            if (connected) {
+                gchar *t = g_strdup_printf (_("Connected to %s"),
+                                            ai->ssid ? ai->ssid : "Wi-Fi");
+                batch_add (&b, _("Wi-Fi"), t, "network-wireless-symbolic");
+                g_free (t);
+            }
+            if (wired)
+                batch_add (&b, _("Ethernet"), _("Cable connected"), "network-wired-symbolic");
+            if (vpn)
+                batch_add (&b, _("VPN"), _("Connected"), "network-vpn-symbolic");
         }
-
-        if (wired && !prev_wired) {
-            /* Ethernet conectado */
-            enotif = notify_notification_new (_("Ethernet"), _("Cable connected"), "network-wired-symbolic");
-        } else if (!wired && prev_wired) {
-            /* Ethernet desconectado */
-            enotif = notify_notification_new (_("Ethernet"), _("Cable disconnected"), "network-wired-disconnected-symbolic");
-        }
-        if (enotif) {
-            notify_notification_show (enotif, NULL);
-            g_object_unref (enotif);
-        }
-
-        if (vpn && !prev_vpn) {
-            /* VPN conectada (puede coincidir con otro evento, se envía aparte) */
-            NotifyNotification *vnotif = notify_notification_new (_("VPN"), _("Connected"), "network-vpn-symbolic");
-            notify_notification_show (vnotif, NULL);
-            g_object_unref (vnotif);
-        } else if (!vpn && prev_vpn) {
-            /* VPN desconectada */
-            NotifyNotification *vnotif = notify_notification_new (_("VPN"), _("Disconnected"), "network-vpn-symbolic");
-            notify_notification_show (vnotif, NULL);
-            g_object_unref (vnotif);
-        }
-
-        if (notif) {
-            notify_notification_show (notif, NULL);
-            g_object_unref (notif);
-        }
-
-        if (portal && !np->last_portal) {
-            NotifyNotification *pnotif = notify_notification_new (
-                connected ? _("Wi-Fi") : _("Ethernet"),
-                _("This network requires you to sign in"),
-                "dialog-warning-symbolic");
-            notify_notification_show (pnotif, NULL);
-            g_object_unref (pnotif);
-        }
-    }
-    if (!np->notif_ready && np->show_notifications) {
-        /* Notificación de estado inicial al arrancar */
-        NotifyNotification *inotif = NULL;
-        if (connected) {
-            gchar *body = g_strdup_printf (_("Connected to %s"), ai->ssid ? ai->ssid : "Wi-Fi");
-            inotif = notify_notification_new (_("Wi-Fi"), body, "network-wireless-symbolic");
-            g_free (body);
-            notify_notification_show (inotif, NULL);
-            g_object_unref (inotif);
-        }
-        if (wired) {
-            inotif = notify_notification_new (_("Ethernet"), _("Cable connected"), "network-wired-symbolic");
-            notify_notification_show (inotif, NULL);
-            g_object_unref (inotif);
-        }
-        if (vpn) {
-            NotifyNotification *vnotif = notify_notification_new (_("VPN"), _("Connected"), "network-vpn-symbolic");
-            notify_notification_show (vnotif, NULL);
-            g_object_unref (vnotif);
-        }
+        batch_send (np, &b);
     }
     np->notif_ready = TRUE;
 #endif
@@ -1130,6 +1167,29 @@ on_nm_changed (gpointer user_data)
     if (np->refresh_timeout_id)
         return;
     np->refresh_timeout_id = g_timeout_add (100, on_nm_changed_cb, np);
+}
+
+/* Aviso del seguidor de intentos: actualizar el spinner y, si un intento
+ * falló con el popup cerrado, avisar por qué. Los fallos del diálogo de red
+ * oculta no se notifican: el diálogo ya lo muestra. */
+static void
+on_plugin_attempt (const gchar *ssid, const gchar *device_path,
+                   AttemptEvent event, gpointer user_data)
+{
+    NetPlugin *np = user_data;
+    on_nm_changed (np);
+#ifdef HAVE_LIBNOTIFY
+    Attempt a;
+    if (event == ATTEMPT_EVENT_FAILED &&
+        attempts_lookup (ssid, device_path, &a) && !a.from_hidden) {
+        gchar *body = g_strdup_printf ("%s\n%s", ssid, failure_text (a.reason));
+        notify_show (np, _("Could not connect"), body,
+                     "network-wireless-disconnected-symbolic");
+        g_free (body);
+    }
+#else
+    (void) ssid; (void) device_path; (void) event;
+#endif
 }
 
 /* ---------- callbacks del panel ---------- */
@@ -1245,6 +1305,11 @@ net_plugin_new (XfcePanelPlugin *plugin)
     gtk_container_add (GTK_CONTAINER (np->button), np->stack);
     gtk_widget_show_all (np->button);
 
+    /* Seguidor de intentos de conexión: antes que el popup, que también lo
+     * escucha. Es uno solo por proceso, compartido por todas las copias. */
+    attempts_acquire (np->conn);
+    np->attempts_listener = attempts_add_listener (on_plugin_attempt, np);
+
     np->popup = popup_create (plugin, np->button);
     np->popup->plugin_ref = np;
 
@@ -1307,7 +1372,12 @@ net_plugin_free (XfcePanelPlugin *plugin, NetPlugin *np)
         net_secret_agent_free (np->agent);
         np->agent = NULL;
     }
+    attempts_remove_listener (np->attempts_listener);
     popup_destroy (np->popup);
+    attempts_release ();
+#ifdef HAVE_LIBNOTIFY
+    g_clear_object (&np->notif);
+#endif
     if (np->conn)
         g_object_unref (np->conn);
     if (np->button_css)

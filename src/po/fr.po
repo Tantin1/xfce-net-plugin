@@ -55,14 +55,6 @@ msgstr "Afficher le bouton Oublier sur les réseaux actifs"
 msgid "Show notifications"
 msgstr "Afficher les notifications"
 
-#: plugin.c:475
-msgid ""
-"If the popup and the notification overlap, the notification will partially "
-"cover the popup."
-msgstr ""
-"Si le popup et la notification se chevauchent, la notification couvrira "
-"partiellement le popup."
-
 #: plugin.c:585 plugin.c:620
 #, c-format
 msgid "Connected to %s"
@@ -419,6 +411,10 @@ msgstr "La connexion a pris trop de temps"
 #: popup.c
 msgid "Connection failed"
 msgstr "Échec de la connexion"
+
+#: plugin.c
+msgid "Could not connect"
+msgstr "Impossible de se connecter"
 
 #~ msgid "Saved network"
 #~ msgstr "Réseau enregistré"
