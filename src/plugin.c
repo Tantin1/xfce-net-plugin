@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later
+ * Copyright (C) 2026 Tantin1 <juanperez33840@gmail.com>
+ */
 #include <libxfce4panel/libxfce4panel.h>
 #include <gtk/gtk.h>
 /* gi18n-lib: _() busca siempre en NUESTRO dominio de traducción
@@ -1345,19 +1348,23 @@ net_plugin_new (XfcePanelPlugin *plugin)
 static void
 net_plugin_about (XfcePanelPlugin *plugin, NetPlugin *np)
 {
-    (void) plugin;
     (void) np;
-    const gchar *authors[] = { "Tantin", NULL };
+    const gchar *authors[] = { "Tantin1", NULL };
     GdkPixbuf *logo = gtk_icon_theme_load_icon (
                           gtk_icon_theme_get_default (),
                           "network-wireless-symbolic",
                           48, 0, NULL);
     gtk_show_about_dialog (NULL,
-        "program-name", "xfce-net-plugin",
+        "program-name", "Network Connections",
         "version",      PACKAGE_VERSION,
-        "comments",     _("Network manager plugin for the XFCE panel"),
+        "comments",     xfce_panel_plugin_get_comment (plugin),
         "authors",      authors,
-        "license-type", GTK_LICENSE_GPL_2_0,
+        "copyright",   "Copyright © 2026 Tantin1",
+        "license-type", GTK_LICENSE_CUSTOM,
+        "license",      "This program is licensed under the GNU General Public "
+                        "License, version 2 or (at your option) any later "
+                        "version (GPL-2.0-or-later). See the LICENSE file "
+                        "distributed with the source code.",
         "website",      "https://github.com/Tantin1/xfce-net-plugin",
         "logo",         logo,
         NULL);

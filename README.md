@@ -1,213 +1,197 @@
-# xfce-net-plugin
+# Network Connections for Xfce
 
-*[Español abajo](#español)*
+**Network Connections** (`xfce-net-plugin`) is an Xfce panel plugin for managing Wi-Fi and Ethernet connections through NetworkManager. It provides a panel-based alternative to `nm-applet` for common connection tasks and can handle NetworkManager password requests when enabled.
 
----
+[Leer en español](#español)
 
-An Xfce panel plugin that replaces `nm-applet`. Shows Wi-Fi status and lets you connect, disconnect, and manage networks directly from the panel, without relying on external tools.
+## Features
 
-### Screenshot
+- Connect to, disconnect from, and manage Wi-Fi networks through the panel.
+- Support for multiple Wi-Fi adapters, hidden networks, and per-adapter Wi-Fi controls.
+- WPA2/WPA3 indicators and 2.4 / 5 / 6 GHz band information.
+- Ethernet connections, including USB tethering where exposed by NetworkManager.
+- NetworkManager connection profiles, including VPN and WireGuard profiles.
+- Search available networks using the search button, `Ctrl+F`, or by typing.
+- Context actions for connection details, automatic connection, sharing and forgetting saved networks.
+- Connection information including IP addresses, gateway, DNS, IPv6, channel and BSSID.
+- Optional QR codes for sharing a connected Wi-Fi network (requires libqrencode at build time).
+- Optional desktop notifications (requires libnotify at build time).
+- Captive-portal notice when NetworkManager connectivity checking is enabled.
+- Configurable panel button, icon appearance, popup size and popup style.
+- Optional password agent for NetworkManager and optional restoration of disabled adapters.
+- Keyboard navigation and translation catalogs for 11 languages.
 
-![Plugin](screenshots/plugin.png)
-*GTK theme: Qogir-dark — Icon theme: Papirus*
+The plugin communicates with NetworkManager over D-Bus, without a direct dependency on `libnm`. **NetworkManager remains required**; the plugin does not replace the NetworkManager service.
 
-### Features
+## Requirements
 
-- Direct NetworkManager communication via DBus (no libnm)
-- Multiple Wi-Fi adapter support
-- Secure network detection (WPA2/WPA3)
-- Band indicator (2.4G / 5G / 6G)
-- Connect to hidden networks
-- VPN support (WireGuard and NM profiles)
-- Ethernet section, also for USB tethering (visible when a cable is plugged in or the adapter is turned off)
-- Global Wi-Fi switch and per-adapter switch
-- Remembers turned-off adapters across reboots (optional)
-- Answers NetworkManager password requests (replaces that part of `nm-applet`)
-- Network search inside the popup (magnifier button, Ctrl+F, or just start typing)
-- Right-click menu on each network: connect, details, QR, auto-connect, forget
-- Keyboard navigation
-- Forget saved networks, with inline confirmation
-- Network details: IP, gateway, DNS, IPv6, channel, BSSID
-- QR code to share the connected network (optional, requires libqrencode)
-- Captive portal notice with a "Sign in" button (hotels, cafés, airports)
-- Desktop notifications (optional, requires libnotify)
-- Option to prefer `nm-applet` icons when your icon theme provides them
-- Configurable popup size from Properties
-- Persistent config at `~/.config/xfce4/panel/xfce-net-plugin.ini`
-- Internationalization: es, en, de, fr, pt_BR, it, nl, pl, ru, zh_CN, ja
+- Xfce panel 4.18 or later, GTK 3.24 or later, and Xfconf 4.18 or later.
+- NetworkManager running and managing the relevant network interfaces.
+- A working D-Bus session and the appropriate system permissions for network management.
 
-### Installation
+The project has been tested in X11 and Wayland sessions (including labwc and xfwl4). Actual behavior can depend on the distribution, panel and compositor versions.
 
-#### Pre-built packages
+## Installation
 
-| Distro | Package |
-|--------|---------|
-| Debian 12 / Debian 13 (amd64) | [xfce-net-plugin_1.0.0-1_amd64.deb](https://github.com/Tantin1/xfce-net-plugin/releases/tag/v1.0.0) |
-| Arch Linux and derivatives (x86_64) | [xfce-net-plugin-1.0.0-1-x86_64.pkg.tar.zst](https://github.com/Tantin1/xfce-net-plugin/releases/tag/v1.0.0) |
+### Published packages
 
-#### Build from source
+See [GitHub Releases](https://github.com/Tantin1/xfce-net-plugin/releases) for available packages and their supported distributions. Development builds use the version declared in [`src/VERSION`](src/VERSION), which may differ from the latest release.
 
-**Arch Linux (CachyOS, Manjaro, EndeavourOS, Garuda, etc.)**
+### Build from source
+
+Install the required development tools and libraries:
+
+**Arch Linux and derivatives:**
 
 ```bash
-sudo pacman -S git cmake pkgconf gtk3 xfce4-panel gettext
-# optional / opcional: QR, notifications / notificaciones, Meson
-sudo pacman -S qrencode libnotify meson
+sudo pacman -S --needed base-devel git cmake pkgconf gettext gtk3 xfce4-panel xfconf
+# Optional features and Meson builds:
+sudo pacman -S --needed qrencode libnotify meson ninja
 ```
 
-**Debian 12 / Debian 13**
+**Debian 12 / Debian 13:**
 
 ```bash
-sudo apt install git cmake pkg-config libgtk-3-dev libxfce4panel-2.0-dev gettext
-# optional / opcional: QR, notifications / notificaciones, Meson
+sudo apt install build-essential git cmake pkg-config gettext \
+  libgtk-3-dev libxfce4panel-2.0-dev libxfconf-0-dev
+# Optional features and Meson builds:
 sudo apt install libqrencode-dev libnotify-dev meson ninja-build
 ```
 
-**Build & install (all distros)**
+Clone the repository:
 
-Using CMake:
 ```bash
 git clone https://github.com/Tantin1/xfce-net-plugin.git
 cd xfce-net-plugin
+```
+
+**Using CMake:**
+
+```bash
 cmake -S src -B build
 cmake --build build
 sudo cmake --install build
 xfce4-panel -r
 ```
 
-Using Meson:
+**Or, using Meson:**
+
 ```bash
-git clone https://github.com/Tantin1/xfce-net-plugin.git
-cd xfce-net-plugin
-meson setup build src
+meson setup build src --prefix=/usr
 meson compile -C build
 sudo meson install -C build
 xfce4-panel -r
 ```
 
-### Notes
+Then open **Panel Preferences → Items → Add** and select **Network Connections**.
 
-- **Running alongside `nm-applet`:** if `nm-applet` is still running, turn off *Respond to password requests* in Properties → Network, or remove `nm-applet` from autostart. Otherwise both will try to show the password dialog.
-- **Captive portal notice:** requires NetworkManager's connectivity check. On Debian, install `network-manager-config-connectivity-debian`; without it the notice never appears.
+## Configuration and notes
 
-### Compatibility
+- **Settings:** each panel instance stores its own settings in Xfconf, in the `xfce4-panel` channel under its instance-specific `/plugins/plugin-N` path. Earlier `~/.config/xfce4/panel/xfce-net-plugin.ini` settings are imported once for migration; that file is no longer the active settings store.
+- **Using `nm-applet` simultaneously:** if both programs act as NetworkManager password agents, password prompts may compete. Disable **Respond to password requests** in this plugin's Properties → Network, or disable the `nm-applet` autostart entry.
+- **Captive portals:** the notice relies on NetworkManager connectivity checking. On Debian, the `network-manager-config-connectivity-debian` package can enable the distribution's connectivity-check configuration.
+- **Optional features:** QR sharing and desktop notifications are available only when their respective libraries were present during compilation.
 
-- Arch Linux (CachyOS, Manjaro, EndeavourOS, Garuda, etc.)
-- Debian 12 (Bookworm)
-- Debian 13 (Trixie)
-- Xfce 4.18+ on X11
+## License and author
 
-### License
+Copyright © 2026 [Tantin1](https://github.com/Tantin1) ([contact](mailto:juanperez33840@gmail.com)).
 
-GPL v2. See [LICENSE](LICENSE).
-
-### Credits
-
-Developed by [Tantin1](https://github.com/Tantin1).
+Licensed under the **GNU General Public License, version 2 or (at your option) any later version** (`GPL-2.0-or-later`). See [LICENSE](LICENSE).
 
 ---
 
 ## Español
 
-<a name="español"></a>
+**Network Connections** (`xfce-net-plugin`) es un complemento para el panel de Xfce que permite gestionar conexiones Wi-Fi y Ethernet mediante NetworkManager. Es una alternativa a `nm-applet` para las tareas habituales de conexión y, si se habilita la opción, puede responder a las solicitudes de contraseña de NetworkManager.
 
-Plugin de panel para Xfce que reemplaza a `nm-applet`. Muestra el estado de la red Wi-Fi y permite conectarse, desconectarse y gestionar redes directamente desde el panel, sin depender de herramientas externas.
+## Características
 
-### Captura
+- Conectar, desconectar y administrar redes Wi-Fi desde el panel.
+- Varios adaptadores Wi-Fi, redes ocultas e interruptores independientes por adaptador.
+- Indicadores WPA2/WPA3 y bandas de 2,4 / 5 / 6 GHz.
+- Conexiones Ethernet, incluida la conexión compartida por USB cuando NetworkManager la detecta.
+- Perfiles de conexión de NetworkManager, incluidas VPN y WireGuard.
+- Búsqueda de redes mediante el botón, `Ctrl+F` o escribiendo directamente.
+- Acciones contextuales para detalles, conexión automática, compartir y olvidar redes guardadas.
+- Información de IP, puerta de enlace, DNS, IPv6, canal y BSSID.
+- Códigos QR opcionales para compartir redes Wi-Fi (requiere libqrencode al compilar).
+- Notificaciones opcionales (requiere libnotify al compilar).
+- Avisos de portal cautivo si NetworkManager tiene habilitada la comprobación de conectividad.
+- Personalización del botón, icono, tamaño y estilo de la ventana emergente.
+- Agente de contraseñas opcional y opción de recordar los adaptadores desactivados.
+- Navegación con teclado y catálogos de traducción para 11 idiomas.
 
-![Plugin](screenshots/plugin.png)
-*Tema GTK: Qogir-dark — Tema de íconos: Papirus*
+El complemento se comunica con NetworkManager mediante D-Bus, sin depender directamente de `libnm`. **NetworkManager sigue siendo necesario**: el complemento no sustituye su servicio.
 
-### Características
+## Requisitos
 
-- Comunicación directa con NetworkManager vía DBus (sin libnm)
-- Soporte para múltiples adaptadores Wi-Fi
-- Detección de redes seguras (WPA2/WPA3)
-- Indicador de banda (2.4G / 5G / 6G)
-- Conexión a redes ocultas
-- Soporte VPN (WireGuard y perfiles NM)
-- Sección Ethernet, también para conexión compartida por USB (visible cuando hay cable enchufado o el adaptador está apagado)
-- Interruptor global de Wi-Fi e interruptor por adaptador
-- Recuerda los adaptadores apagados entre reinicios (opcional)
-- Responde a los pedidos de contraseña de NetworkManager (reemplaza esa parte de `nm-applet`)
-- Búsqueda de redes dentro del popup (botón de lupa, Ctrl+F o simplemente empezar a escribir)
-- Menú con clic derecho sobre cada red: conectar, detalles, QR, conexión automática, olvidar
-- Navegación con teclado
-- Olvidar redes guardadas, con confirmación en el mismo popup
-- Detalles de la red: IP, puerta de enlace, DNS, IPv6, canal, BSSID
-- Código QR para compartir la red conectada (opcional, requiere libqrencode)
-- Aviso de portal cautivo con botón "Iniciar sesión" (hoteles, bares, aeropuertos)
-- Notificaciones de escritorio (opcional, requiere libnotify)
-- Opción para preferir los íconos de `nm-applet` cuando el tema de íconos los trae
-- Tamaño del popup configurable desde Propiedades
-- Configuración persistente en `~/.config/xfce4/panel/xfce-net-plugin.ini`
-- Internacionalización: es, en, de, fr, pt_BR, it, nl, pl, ru, zh_CN, ja
+- Panel de Xfce 4.18 o superior, GTK 3.24 o superior y Xfconf 4.18 o superior.
+- NetworkManager ejecutándose y gestionando las interfaces de red correspondientes.
+- Sesión D-Bus y permisos del sistema adecuados para administrar las conexiones.
 
-### Instalación
+El proyecto se probó en sesiones X11 y Wayland (incluidos labwc y xfwl4). El resultado puede variar según las versiones de la distribución, el panel y el compositor.
 
-#### Paquetes pre-compilados
+## Instalación
 
-| Distro | Paquete |
-|--------|---------|
-| Debian 12 / Debian 13 (amd64) | [xfce-net-plugin_1.0.0-1_amd64.deb](https://github.com/Tantin1/xfce-net-plugin/releases/tag/v1.0.0) |
-| Arch Linux y derivadas (x86_64) | [xfce-net-plugin-1.0.0-1-x86_64.pkg.tar.zst](https://github.com/Tantin1/xfce-net-plugin/releases/tag/v1.0.0) |
+### Paquetes publicados
 
-#### Compilar desde fuente
+Consultá [GitHub Releases](https://github.com/Tantin1/xfce-net-plugin/releases) para ver qué paquetes hay disponibles y para qué distribuciones. Las compilaciones de desarrollo utilizan la versión declarada en [`src/VERSION`](src/VERSION), que puede ser distinta de la última versión publicada.
 
-**Arch Linux (CachyOS, Manjaro, EndeavourOS, Garuda, etc.)**
+### Compilar desde el código fuente
+
+**Arch Linux y derivadas:**
 
 ```bash
-sudo pacman -S git cmake pkgconf gtk3 xfce4-panel gettext
-# optional / opcional: QR, notifications / notificaciones, Meson
-sudo pacman -S qrencode libnotify meson
+sudo pacman -S --needed base-devel git cmake pkgconf gettext gtk3 xfce4-panel xfconf
+# Funciones opcionales y compilación con Meson:
+sudo pacman -S --needed qrencode libnotify meson ninja
 ```
 
-**Debian 12 / Debian 13**
+**Debian 12 / Debian 13:**
 
 ```bash
-sudo apt install git cmake pkg-config libgtk-3-dev libxfce4panel-2.0-dev gettext
-# optional / opcional: QR, notifications / notificaciones, Meson
+sudo apt install build-essential git cmake pkg-config gettext \
+  libgtk-3-dev libxfce4panel-2.0-dev libxfconf-0-dev
+# Funciones opcionales y compilación con Meson:
 sudo apt install libqrencode-dev libnotify-dev meson ninja-build
 ```
 
-**Compilación e instalación (todas las distros)**
+Cloná el repositorio:
 
-Con CMake:
 ```bash
 git clone https://github.com/Tantin1/xfce-net-plugin.git
 cd xfce-net-plugin
+```
+
+**Con CMake:**
+
+```bash
 cmake -S src -B build
 cmake --build build
 sudo cmake --install build
 xfce4-panel -r
 ```
 
-Con Meson:
+**O con Meson:**
+
 ```bash
-git clone https://github.com/Tantin1/xfce-net-plugin.git
-cd xfce-net-plugin
-meson setup build src
+meson setup build src --prefix=/usr
 meson compile -C build
 sudo meson install -C build
 xfce4-panel -r
 ```
 
-### Notas
+Después, abrí **Preferencias del panel → Elementos → Añadir** y seleccioná **Conexiones de red** (o **Network Connections**, según el idioma del panel).
 
-- **Junto a `nm-applet`:** si `nm-applet` sigue corriendo, desactivá *Responder pedidos de contraseña* en Propiedades → Red, o sacá `nm-applet` del inicio automático. Si no, los dos intentan mostrar el diálogo de contraseña.
-- **Aviso de portal cautivo:** necesita la comprobación de conectividad de NetworkManager. En Debian, instalá `network-manager-config-connectivity-debian`; sin eso el aviso nunca aparece.
+## Configuración y notas
 
-### Compatibilidad
+- **Configuración:** cada instancia guarda sus ajustes en Xfconf, en el canal `xfce4-panel`, bajo su ruta `/plugins/plugin-N`. La configuración antigua de `~/.config/xfce4/panel/xfce-net-plugin.ini` se importa una sola vez; ya no es el almacenamiento activo.
+- **Con `nm-applet` en ejecución:** ambos pueden intentar responder a las solicitudes de contraseña. Desactivá **Responder a las solicitudes de contraseña** en Propiedades → Red o quitá `nm-applet` del inicio automático.
+- **Portales cautivos:** el aviso necesita la comprobación de conectividad de NetworkManager. En Debian, el paquete `network-manager-config-connectivity-debian` puede habilitar la configuración de comprobación de conectividad de la distribución.
+- **Funciones opcionales:** los códigos QR y las notificaciones requieren que sus bibliotecas estuvieran presentes al compilar.
 
-- Arch Linux (CachyOS, Manjaro, EndeavourOS, Garuda, etc.)
-- Debian 12 (Bookworm)
-- Debian 13 (Trixie)
-- Xfce 4.18+ sobre X11
+## Licencia y autor
 
-### Licencia
+Copyright © 2026 [Tantin1](https://github.com/Tantin1) ([contacto](mailto:juanperez33840@gmail.com)).
 
-GPL v2. Ver [LICENSE](LICENSE).
-
-### Créditos
-
-Desarrollado por [Tantin1](https://github.com/Tantin1).
+Licencia **GNU General Public License, versión 2 o (a tu elección) cualquier versión posterior** (`GPL-2.0-or-later`). Consultá [LICENSE](LICENSE).
