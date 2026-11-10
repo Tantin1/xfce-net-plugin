@@ -1,3 +1,7 @@
+/* SPDX-FileCopyrightText: 2026 Tantin1 <juanperez33840@gmail.com>
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
 /* attempts.h — seguidor de intentos de conexión (nov-2026).
  *
  * Un solo lugar sabe qué intento de conexión (o desconexión) hay en curso,

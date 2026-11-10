@@ -1,3 +1,7 @@
+/* SPDX-FileCopyrightText: 2026 Tantin1 <juanperez33840@gmail.com>
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
 /* popup.c — núcleo del popup: ventana (crear/mostrar/ocultar/destruir),
  * posicionamiento y grab, helpers compartidos, diálogos (red oculta) y
  * manejadores de la ventana. Los intentos de conexión los sigue attempts.c.

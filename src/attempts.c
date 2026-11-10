@@ -1,3 +1,7 @@
+/* SPDX-FileCopyrightText: 2026 Tantin1 <juanperez33840@gmail.com>
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
 /* attempts.c — seguidor de intentos de conexión. Ver attempts.h.
  *
  * Ciclo de un intento de conexión:

@@ -1,3 +1,7 @@
+/* SPDX-FileCopyrightText: 2026 Tantin1 <juanperez33840@gmail.com>
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
 /* popup-sections.c — secciones del popup (por adaptador, Ethernet, VPN),
  * funciones de actualización, refresco por diferencia, refresco coalescido
  * y reconstrucción completa de la UI.

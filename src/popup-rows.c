@@ -1,3 +1,7 @@
+/* SPDX-FileCopyrightText: 2026 Tantin1 <juanperez33840@gmail.com>
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
 /* popup-rows.c — construcción de la fila de red (make_ap_row), su área
  * expandible y todos los callbacks de interacción con una fila: conectar,
  * desconectar, olvidar, reintentar, QR, detalles, foco y realce.

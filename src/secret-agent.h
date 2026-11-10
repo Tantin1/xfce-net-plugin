@@ -1,3 +1,7 @@
+/* SPDX-FileCopyrightText: 2026 Tantin1 <juanperez33840@gmail.com>
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
 /* secret-agent.h — agente de secretos: responde cuando NetworkManager
  * necesita pedirle una contraseña al usuario (perfil en "preguntar siempre",
  * clave del router que cambió y fue rechazada, etc.).

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Tantin1 <juanperez33840@gmail.com>
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
 # Polish translation of xfce-net-plugin
 msgid ""
 msgstr ""
