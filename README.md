@@ -96,7 +96,9 @@ Then open **Panel Preferences → Items → Add** and select **Network Connectio
 
 Copyright © 2026 [Tantin1](https://github.com/Tantin1) ([contact](mailto:juanperez33840@gmail.com)).
 
-Licensed under the **GNU General Public License, version 2 or (at your option) any later version** (`GPL-2.0-or-later`). See [LICENSE](LICENSE).
+The original plugin source code is licensed under the **GNU General Public License, version 2 or (at your option) any later version** (`GPL-2.0-or-later`). See [LICENSE](LICENSE).
+
+**Third-party icon:** `src/icons/nm-secure-lock.svg` comes from the [Papirus icon theme](https://github.com/PapirusDevelopmentTeam/papirus-icon-theme), maintained by the Papirus Development Team and contributors, and is redistributed under **GPL-3.0-only**. See [the GPLv3 license text](LICENSES/GPL-3.0-only.txt). Distributions containing this icon together with the plugin must comply with GPLv3 for the combined work; the licensing of the original plugin source files remains GPL-2.0-or-later.
 
 ---
 
@@ -194,4 +196,6 @@ Después, abrí **Preferencias del panel → Elementos → Añadir** y seleccion
 
 Copyright © 2026 [Tantin1](https://github.com/Tantin1) ([contacto](mailto:juanperez33840@gmail.com)).
 
-Licencia **GNU General Public License, versión 2 o (a tu elección) cualquier versión posterior** (`GPL-2.0-or-later`). Consultá [LICENSE](LICENSE).
+El código original del complemento se distribuye bajo la **GNU General Public License, versión 2 o (a tu elección) cualquier versión posterior** (`GPL-2.0-or-later`). Consultá [LICENSE](LICENSE).
+
+**Icono de terceros:** `src/icons/nm-secure-lock.svg` procede del [tema de iconos Papirus](https://github.com/PapirusDevelopmentTeam/papirus-icon-theme), mantenido por Papirus Development Team y sus colaboradores, y se redistribuye bajo **GPL-3.0-only**. Consultá el [texto de la licencia GPLv3](LICENSES/GPL-3.0-only.txt). Las distribuciones que combinan este icono con el complemento deben respetar la GPLv3 para el conjunto; los archivos de código originales conservan su licencia GPL-2.0-or-later.

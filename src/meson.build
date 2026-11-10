@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Tantin1 <juanperez33840@gmail.com>
+# SPDX-License-Identifier: GPL-2.0-or-later
+
 project('xfce-net-plugin', 'c',
   # Versión: única fuente en el archivo VERSION (también lo lee CMakeLists.txt
   # y llega al diálogo "Acerca de" como PACKAGE_VERSION).

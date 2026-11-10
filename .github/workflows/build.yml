@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Tantin1 <juanperez33840@gmail.com>
+# SPDX-License-Identifier: GPL-2.0-or-later
+
 name: Compilación y Empaquetado
 
 on:
@@ -106,6 +109,15 @@ jobs:
            .
            On Debian systems, the complete text of the GNU GPL version 2
            is available in /usr/share/common-licenses/GPL-2.
+
+          Files: src/icons/nm-secure-lock.svg
+          Copyright: Papirus Development Team and contributors
+          License: GPL-3.0-only
+           This icon is from the Papirus icon theme:
+           https://github.com/PapirusDevelopmentTeam/papirus-icon-theme
+           .
+           On Debian systems, the complete text of the GNU GPL version 3
+           is available in /usr/share/common-licenses/GPL-3.
           EOF
 
           # 3. Construir el paquete .deb

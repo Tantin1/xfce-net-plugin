@@ -1,14 +1,14 @@
 # SOME DESCRIPTIVE TITLE.
-# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
-# This file is distributed under the same license as the PACKAGE package.
+# Copyright (C) YEAR Tantin1
+# This file is distributed under the same license as the xfce-net-plugin package.
 # FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
 #
 #, fuzzy
 msgid ""
 msgstr ""
-"Project-Id-Version: PACKAGE VERSION\n"
-"Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-05-26 20:33-0300\n"
+"Project-Id-Version: xfce-net-plugin 1.0.1-dev\n"
+"Report-Msgid-Bugs-To: juanperez33840@gmail.com\n"
+"POT-Creation-Date: 2026-11-10 12:20-0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -17,413 +17,402 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: src/plugin.c:369
+#: plugin.c:716
 msgid "Properties — Network"
 msgstr ""
 
-#: src/plugin.c:372
+#: plugin.c:719
 msgid "Close"
 msgstr ""
 
-#: src/plugin.c:379
-msgid "Appearance"
-msgstr ""
-
-#: src/plugin.c:388
+#: plugin.c:737
 msgid "Square button"
 msgstr ""
 
-#: src/plugin.c:394
+#: plugin.c:743
 msgid "Plugin size:"
 msgstr ""
 
-#: src/plugin.c:410
+#: plugin.c:759
 msgid "Use panel size"
 msgstr ""
 
-#: src/plugin.c:416
+#: plugin.c:765
 msgid "Icon size:"
 msgstr ""
 
-#: src/plugin.c:432
+#: plugin.c:781
 msgid "Popup width:"
 msgstr ""
 
-#: src/plugin.c:441
+#: plugin.c:790
 msgid "Popup height:"
 msgstr ""
 
-#: src/plugin.c:456
+#: plugin.c:805
 msgid "Show separators"
 msgstr ""
 
-#: src/plugin.c:462
+#: plugin.c:811
 msgid "Show Forget button on active networks"
 msgstr ""
 
-#: src/plugin.c:469
+#: plugin.c:817
+msgid "Prefer nm-applet icons"
+msgstr ""
+
+#: plugin.c:821
+msgid ""
+"Use the icons your theme provides for nm-applet, if any, instead of the "
+"standard network icons."
+msgstr ""
+
+#. Estilo de la ventana emergente. El orden de las opciones es el de
+#. * NET_POPUP_STYLE_* (0, 1, 2).
+#: plugin.c:827
+msgid "Popup style:"
+msgstr ""
+
+#: plugin.c:830
+msgid "Automatic"
+msgstr ""
+
+#: plugin.c:831
+msgid "Floating"
+msgstr ""
+
+#: plugin.c:832
+msgid "Attached to the panel"
+msgstr ""
+
+#: plugin.c:835
+msgid ""
+"Automatic: rounded corners and a small gap from the panel when the theme has "
+"rounded popovers and a compositor is running; otherwise attached to the "
+"panel."
+msgstr ""
+
+#: plugin.c:841
 msgid "Show notifications"
 msgstr ""
 
-#: src/plugin.c:475
-msgid ""
-"If the popup and the notification overlap, the notification will partially "
-"cover the popup."
+#: plugin.c:850
+msgid "Appearance"
 msgstr ""
 
-#: src/plugin.c:609 src/plugin.c:657
+#: plugin.c:857
+msgid "Respond to password requests"
+msgstr ""
+
+#: plugin.c:862
+msgid ""
+"Turn this off if another network applet (such as nm-applet) is also running."
+msgstr ""
+
+#: plugin.c:870
+msgid "Remember disabled adapters"
+msgstr ""
+
+#: plugin.c:876
+msgid "Adapters you turn off stay off after restarting."
+msgstr ""
+
+#: plugin.c:885 plugin.c:1010
+msgid "Network"
+msgstr ""
+
+#. Conectado, o pasó de una red a otra sin quedar desconectado.
+#: plugin.c:1085 plugin.c:1109
 #, c-format
 msgid "Connected to %s"
 msgstr ""
 
-#: src/plugin.c:610 src/plugin.c:615 src/plugin.c:658 src/popup.c:2659
+#: plugin.c:1087 plugin.c:1090 plugin.c:1103 plugin.c:1111
+#: popup-sections.c:1130
 msgid "Wi-Fi"
 msgstr ""
 
-#: src/plugin.c:615 src/plugin.c:631
+#: plugin.c:1090 plugin.c:1101
 msgid "Disconnected"
 msgstr ""
 
-#: src/plugin.c:618 src/plugin.c:621 src/plugin.c:662
+#: plugin.c:1094 plugin.c:1096 plugin.c:1103 plugin.c:1115
 msgid "Ethernet"
 msgstr ""
 
-#: src/plugin.c:618 src/plugin.c:662
+#: plugin.c:1094 plugin.c:1115
 msgid "Cable connected"
 msgstr ""
 
-#: src/plugin.c:621
+#: plugin.c:1096
 msgid "Cable disconnected"
 msgstr ""
 
-#: src/plugin.c:626 src/plugin.c:631 src/plugin.c:669
+#: plugin.c:1099 plugin.c:1101 plugin.c:1117
 msgid "VPN"
 msgstr ""
 
-#: src/plugin.c:626 src/plugin.c:669 src/popup.c:1504 src/popup.c:2254
+#. "Connected" solo si el estado es 100 (activado de verdad). La
+#. * etiqueta se crea siempre y se muestra u oculta, así el refresco en
+#. * el lugar puede cambiarla sin rearmar la fila.
+#: plugin.c:1099 plugin.c:1117 popup-rows.c:1099 popup-sections.c:403
 msgid "Connected"
 msgstr ""
 
-#: src/plugin.c:682
+#: plugin.c:1104 popup-sections.c:1162
+msgid "This network requires you to sign in"
+msgstr ""
+
+#: plugin.c:1129
 msgid "Not connected"
 msgstr ""
 
-#: src/plugin.c:695
+#: plugin.c:1131
 #, c-format
 msgid "Connected to %s (%s)"
 msgstr ""
 
-#: src/plugin.c:706
+#: plugin.c:1138
 msgid " · VPN active"
 msgstr ""
 
-#: src/plugin.c:708
+#: plugin.c:1140
 msgid "VPN active"
 msgstr ""
 
-#: src/plugin.c:787
+#: plugin.c:1143
+msgid " · Sign-in required"
+msgstr ""
+
+#: plugin.c:1189
+msgid "Could not connect"
+msgstr ""
+
+#: plugin.c:1298
 msgid "Networks"
 msgstr ""
 
-#: src/plugin.c:841
-msgid "Network manager plugin for the XFCE panel"
-msgstr ""
-
-#: src/popup.c:258 src/popup.c:1202 src/popup.c:1204 src/popup.c:1579
-#: src/popup.c:1674 src/popup.c:1944 src/popup.c:2746
-msgid "Connect"
-msgstr ""
-
-#: src/popup.c:258 src/popup.c:1562
-msgid "Disconnect"
-msgstr ""
-
-#: src/popup.c:273
-msgid "Incorrect password"
-msgstr ""
-
-#: src/popup.c:711 src/popup.c:2642
+#: popup.c:804 popup-sections.c:1098
 msgid "Refresh"
 msgstr ""
 
-#: src/popup.c:724 src/popup.c:2642
+#: popup.c:841 popup-sections.c:1098
 msgid "Updating…"
 msgstr ""
 
-#: src/popup.c:868 src/popup.c:1414 src/popup.c:1720
-msgid "Show QR"
+#. Otro pedido en el mismo adaptador lo reemplazó.
+#: popup.c:939 popup.c:943 popup-rows.c:1204
+msgid "Last connection attempt failed"
 msgstr ""
 
-#: src/popup.c:883
-msgid "No saved password"
-msgstr ""
-
-#: src/popup.c:895
-msgid "QR error"
-msgstr ""
-
-#: src/popup.c:911
-msgid "Hide QR"
-msgstr ""
-
-#: src/popup.c:1068
-msgid "Disconnecting…"
-msgstr ""
-
-#: src/popup.c:1198 src/popup.c:1893
-msgid "Retry with saved password"
-msgstr ""
-
-#: src/popup.c:1209 src/popup.c:1518 src/popup.c:1574
+#: popup.c:1018 popup-rows.c:584 popup-rows.c:1113 popup-rows.c:1610
 msgid "Connecting…"
 msgstr ""
 
-#: src/popup.c:1565 src/popup.c:1611
+#: popup.c:1063
+msgid "Connect to hidden network"
+msgstr ""
+
+#: popup.c:1066 popup-rows.c:1449 secret-agent.c:242
+msgid "Cancel"
+msgstr ""
+
+#. action_btn de uso general: "Connect" simple para red guardada sin
+#. * fallo o para red nueva. En el caso "red guardada con fallo" no lo
+#. * usamos como botón principal (creamos retry_btn / connect_btn_b
+#. * abajo), pero lo dejamos creado y oculto para no romper la lógica
+#. * existente de action_row / RowData.
+#: popup.c:1067 popup-rows.c:916 popup-rows.c:1279 popup-rows.c:1571
+#: secret-agent.c:243
+msgid "Connect"
+msgstr ""
+
+#: popup.c:1081
+msgid "Network name:"
+msgstr ""
+
+#: popup.c:1088 popup-rows.c:1404
+msgid "Security:"
+msgstr ""
+
+#: popup.c:1091
+msgid "None"
+msgstr ""
+
+#: popup.c:1097 secret-agent.c:277
+msgid "Password:"
+msgstr ""
+
+#: popup.c:1626 popup-sections.c:1118
+msgid "Search networks"
+msgstr ""
+
+#: popup.c:1633
+msgid "No matching networks"
+msgstr ""
+
+#. Zona fija inferior. OJO: pack_end apila de abajo hacia arriba: de
+#. * abajo hacia arriba quedan Avanzado y Red oculta. Sin línea propia
+#. * arriba de los botones (nov-2026): la línea de debajo de la última red
+#. * ya separa la lista de esta zona.
+#: popup.c:1687
+msgid "Advanced settings…"
+msgstr ""
+
+#: popup.c:1697
+msgid "Connect to hidden network…"
+msgstr ""
+
+#: popup-rows.c:138 popup-rows.c:770 popup-rows.c:925 popup-rows.c:1329
+msgid "Show QR"
+msgstr ""
+
+#: popup-rows.c:158
+msgid "No saved password"
+msgstr ""
+
+#: popup-rows.c:178
+msgid "QR error"
+msgstr ""
+
+#: popup-rows.c:197
+msgid "Hide QR"
+msgstr ""
+
+#: popup-rows.c:463 popup-rows.c:1155
+msgid "Disconnecting…"
+msgstr ""
+
+#: popup-rows.c:910 popup-rows.c:1141
+msgid "Disconnect"
+msgstr ""
+
+#: popup-rows.c:922 popup-rows.c:1345
+msgid "Details"
+msgstr ""
+
+#: popup-rows.c:929 popup-rows.c:1214 popup-rows.c:1267
+msgid "Connect automatically"
+msgstr ""
+
+#: popup-rows.c:941 popup-rows.c:1233 popup-rows.c:1292
+msgid "Forget"
+msgstr ""
+
+#: popup-rows.c:1144 popup-rows.c:1173 popup-sections.c:556
 #, c-format
 msgid "Signal %d%%"
 msgstr ""
 
-#: src/popup.c:1609
+#: popup-rows.c:1171 popup-sections.c:555
 #, c-format
 msgid "Saved network · Signal %d%%"
 msgstr ""
 
-#: src/popup.c:1624
-msgid "Last connection attempt failed"
+#: popup-rows.c:1241
+msgid "Enterprise network (802.1X) — use Advanced settings"
 msgstr ""
 
-#: src/popup.c:1634 src/popup.c:1662
-msgid "Connect automatically"
-msgstr ""
-
-#: src/popup.c:1640 src/popup.c:1684
-msgid "Forget"
-msgstr ""
-
-#: src/popup.c:1647
+#: popup-rows.c:1252
 msgid "Password"
 msgstr ""
 
-#: src/popup.c:1735
-msgid "Details"
-msgstr ""
-
-#: src/popup.c:1772
+#: popup-rows.c:1382
 msgid "IP:"
 msgstr ""
 
-#: src/popup.c:1773
+#: popup-rows.c:1383
 msgid "Gateway:"
 msgstr ""
 
-#: src/popup.c:1774
+#: popup-rows.c:1384
 msgid "DNS:"
 msgstr ""
 
-#: src/popup.c:1775
+#: popup-rows.c:1385
 msgid "IPv6:"
 msgstr ""
 
-#: src/popup.c:1783
+#: popup-rows.c:1393 popup-rows.c:1397
 msgid "Open"
 msgstr ""
 
-#: src/popup.c:1786
+#: popup-rows.c:1394
+msgid "Enterprise (802.1X)"
+msgstr ""
+
+#: popup-rows.c:1403
 msgid "Encrypted"
 msgstr ""
 
-#: src/popup.c:1787 src/popup.c:2766
-msgid "Security:"
-msgstr ""
-
-#: src/popup.c:1791
+#: popup-rows.c:1408
 msgid "Frequency:"
 msgstr ""
 
-#: src/popup.c:1800
+#: popup-rows.c:1417
 msgid "Channel:"
 msgstr ""
 
-#: src/popup.c:1805
+#: popup-rows.c:1422
 msgid "BSSID:"
 msgstr ""
 
-#: src/popup.c:1821
+#: popup-rows.c:1440
 #, c-format
 msgid "Forget network \"%s\"?"
 msgstr ""
 
-#: src/popup.c:1830 src/popup.c:2745
-msgid "Cancel"
-msgstr ""
-
-#: src/popup.c:1831
+#: popup-rows.c:1450
 msgid "Confirm"
 msgstr ""
 
-#: src/popup.c:1900
+#: popup-rows.c:1526
+msgid "Retry with saved password"
+msgstr ""
+
+#: popup-rows.c:1533
 msgid "Try a different password"
 msgstr ""
 
-#: src/popup.c:1923
+#: popup-rows.c:1550
 msgid "Rewrite password"
 msgstr ""
 
-#: src/popup.c:1940
+#: popup-rows.c:1567
 msgid "Back"
 msgstr ""
 
-#: src/popup.c:2378
+#: popup-sections.c:458
 #, c-format
 msgid "Connected to <b>%s</b>"
 msgstr ""
 
-#: src/popup.c:2382
+#: popup-sections.c:462
 msgid "Disabled"
 msgstr ""
 
-#: src/popup.c:2385
+#: popup-sections.c:465
 #, c-format
 msgid "Connecting to <b>%s</b>…"
 msgstr ""
 
-#: src/popup.c:2389
+#: popup-sections.c:469
 msgid "Enabled – not connected"
 msgstr ""
 
-#: src/popup.c:2742
-msgid "Connect to hidden network"
-msgstr ""
-
-#: src/popup.c:2759
-msgid "Network name:"
-msgstr ""
-
-#: src/popup.c:2769
-msgid "None"
-msgstr ""
-
-#: src/popup.c:2775
-msgid "Password:"
-msgstr ""
-
-#: src/popup.c:2915
-msgid "Advanced settings…"
-msgstr ""
-
-#: src/popup.c:2925
-msgid "Connect to hidden network…"
-msgstr ""
-
-#: src/popup-rows.c
-msgid "Enterprise network (802.1X) — use Advanced settings"
-msgstr ""
-
-#: src/popup-rows.c
-msgid "Enterprise (802.1X)"
-msgstr ""
-
-#: src/popup-sections.c
-msgid "This network requires you to sign in"
-msgstr ""
-
-#: src/popup-sections.c
+#: popup-sections.c:1167
 msgid "Sign in"
 msgstr ""
 
-#: src/plugin.c
-msgid " · Sign-in required"
-msgstr ""
-
-#: src/secret-agent.c
+#: secret-agent.c:240
 msgid "Network authentication required"
 msgstr ""
 
-#: src/secret-agent.c
+#: secret-agent.c:258
 #, c-format
 msgid "A password is required to connect to the Wi-Fi network \"%s\"."
 msgstr ""
 
-#: src/secret-agent.c
+#: secret-agent.c:269
 msgid "The previous password was not accepted."
-msgstr ""
-
-#: src/plugin.c
-msgid "Network"
-msgstr ""
-
-#: src/plugin.c
-msgid "Respond to password requests"
-msgstr ""
-
-#: src/plugin.c
-msgid "Turn this off if another network applet (such as nm-applet) is also running."
-msgstr ""
-
-#: src/plugin.c
-msgid "Remember disabled adapters"
-msgstr ""
-
-#: src/plugin.c
-msgid "Adapters you turn off stay off after restarting."
-msgstr ""
-
-#: src/popup.c src/popup-sections.c
-msgid "Search networks"
-msgstr ""
-
-#: src/popup.c src/popup-sections.c
-msgid "No matching networks"
-msgstr ""
-
-#: src/plugin.c
-msgid "Prefer nm-applet icons"
-msgstr ""
-
-#: src/plugin.c
-msgid "Use the icons your theme provides for nm-applet, if any, instead of the standard network icons."
-msgstr ""
-
-#: src/plugin.c
-msgid "Popup style:"
-msgstr ""
-
-#: src/plugin.c
-msgid "Automatic"
-msgstr ""
-
-#: src/plugin.c
-msgid "Floating"
-msgstr ""
-
-#: src/plugin.c
-msgid "Attached to the panel"
-msgstr ""
-
-#: src/plugin.c
-msgid "Automatic: rounded corners and a small gap from the panel when the theme has rounded popovers and a compositor is running; otherwise attached to the panel."
-msgstr ""
-
-#: popup.c
-msgid "The network rejected the connection"
-msgstr ""
-
-#: popup.c
-msgid "The network did not respond"
-msgstr ""
-
-#: popup.c
-msgid "Network not found"
-msgstr ""
-
-#: popup.c
-msgid "Did not get an address from the network"
-msgstr ""
-
-#: popup.c
-msgid "The connection took too long"
-msgstr ""
-
-#: popup.c
-msgid "Connection failed"
 msgstr ""

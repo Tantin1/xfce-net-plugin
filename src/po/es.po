@@ -4,9 +4,12 @@
 # Spanish translation of xfce-net-plugin
 msgid ""
 msgstr ""
-"Report-Msgid-Bugs-To: \n"
+"Project-Id-Version: xfce-net-plugin 1.0.1-dev\n"
+"Report-Msgid-Bugs-To: juanperez33840@gmail.com\n"
+"Last-Translator: Tantin1 <juanperez33840@gmail.com>\n"
 "POT-Creation-Date: 2026-06-12 12:00+0000\n"
 "Language: es\n"
+"MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
