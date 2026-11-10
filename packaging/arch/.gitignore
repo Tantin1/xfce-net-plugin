@@ -1,0 +1,5 @@
+# Local makepkg outputs
+/src/
+/pkg/
+/*.pkg.tar.*
+/*.log

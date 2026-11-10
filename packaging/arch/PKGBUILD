@@ -1,0 +1,51 @@
+# Maintainer: Tantin1 <juanperez33840@gmail.com>
+# Local-checkout PKGBUILD for contributors. See README.md in this directory.
+# This uses the current working tree, NOT a verified release archive.
+
+pkgname=xfce-net-plugin
+pkgver=1.0.1_dev
+pkgrel=1
+pkgdesc='Manage Wi-Fi and Ethernet connections from the Xfce panel using NetworkManager'
+arch=('x86_64')
+url='https://github.com/Tantin1/xfce-net-plugin'
+license=('GPL-2.0-or-later')
+depends=('gtk3' 'xfce4-panel' 'xfconf' 'networkmanager' 'libnotify' 'qrencode')
+makedepends=('meson' 'ninja' 'pkgconf' 'gettext')
+
+# No external downloads: build from the repository containing this file.
+source=()
+sha256sums=()
+
+prepare() {
+  local repository_root source_version
+  repository_root="$(cd -- "$startdir/../.." && pwd)" || return 1
+
+  if [[ ! -f "$repository_root/src/meson.build" || ! -f "$repository_root/LICENSE" || ! -f "$repository_root/README.md" ]]; then
+    printf 'ERROR: PKGBUILD must be in packaging/arch/ inside the source repository.\n' >&2
+    return 1
+  fi
+
+  source_version="$(<"$repository_root/src/VERSION")"
+  if [[ "$source_version" != "${pkgver//_/-}" ]]; then
+    printf 'ERROR: pkgver (%s) does not match src/VERSION (%s).\n' "$pkgver" "$source_version" >&2
+    return 1
+  fi
+
+  install -d "$srcdir/$pkgname"
+  cp -a "$repository_root/src" "$repository_root/README.md" "$repository_root/LICENSE" "$srcdir/$pkgname/"
+}
+
+build() {
+  meson setup "$srcdir/build" "$srcdir/$pkgname/src" \
+    --prefix=/usr \
+    --buildtype=release
+  meson compile -C "$srcdir/build"
+}
+
+package() {
+  DESTDIR="$pkgdir" meson install -C "$srcdir/build" --no-rebuild
+  install -Dm644 "$srcdir/$pkgname/LICENSE" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 "$srcdir/$pkgname/README.md" \
+    "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
