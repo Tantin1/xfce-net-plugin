@@ -41,9 +41,9 @@ simplify_vendor (gchar *vendor)
 
 /* Replica la lógica de nm_device_get_description() de libnm usando
  * los datos de udev en /run/udev/data/n<ifindex>. Sin dependencias nuevas.
- * Liberar con g_free(). */
-gchar *
-nm_get_device_description (const gchar *iface)
+ * Liberar con g_free(). Lectura sin memoria: usar nm_get_device_description. */
+static gchar *
+device_description_read (const gchar *iface)
 {
     gchar *ifindex_path = g_strdup_printf ("/sys/class/net/%s/ifindex", iface);
     gchar *ifindex_str  = NULL;
@@ -162,6 +162,47 @@ nm_get_device_description (const gchar *iface)
 
     g_free (v);
     g_free (p);
+    return desc;
+}
+
+/* Nombre legible del hardware, con memoria. Cada listado de adaptadores lo
+ * pedía de nuevo (varias veces por apertura del popup): leer y recorrer el
+ * archivo de udev y armar una expresión regular, para un dato que no cambia.
+ * Se guarda por número de interfaz (ifindex), no por nombre: el número es
+ * único mientras el adaptador está enchufado y cambia si se enchufa otro,
+ * aunque reciba el mismo nombre (wlan1). Liberar con g_free(). */
+gchar *
+nm_get_device_description (const gchar *iface)
+{
+    static GHashTable *memo = NULL;   /* ifindex → descripción ("" = ninguna) */
+
+    gchar *ifindex_path = g_strdup_printf ("/sys/class/net/%s/ifindex", iface);
+    gchar *ifindex_str  = NULL;
+    gboolean ok = g_file_get_contents (ifindex_path, &ifindex_str, NULL, NULL);
+    g_free (ifindex_path);
+    if (!ok)
+        return NULL;
+    g_strstrip (ifindex_str);
+
+    if (!memo)
+        memo = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
+
+    const gchar *known = g_hash_table_lookup (memo, ifindex_str);
+    if (known) {
+        g_free (ifindex_str);
+        return *known ? g_strdup (known) : NULL;
+    }
+
+    gchar *desc = device_description_read (iface);
+    /* Sin datos de udev todavía (adaptador recién enchufado): no guardar,
+     * así se vuelve a intentar la próxima vez. */
+    gchar *udev_path = g_strdup_printf ("/run/udev/data/n%s", ifindex_str);
+    gboolean udev_ready = g_file_test (udev_path, G_FILE_TEST_EXISTS);
+    g_free (udev_path);
+    if (udev_ready)
+        g_hash_table_replace (memo, ifindex_str, g_strdup (desc ? desc : ""));
+    else
+        g_free (ifindex_str);
     return desc;
 }
 
@@ -504,6 +545,92 @@ nm_active_ap_info_free (NmActiveApInfo *info)
     g_free (info->ssid);
     g_free (info->band);
     g_free (info);
+}
+
+/* ---------- nombre de la red principal ----------
+ *
+ * Antes vivía en popup.c y hacía dos llamadas al bus con espera (sin pasar
+ * por la instantánea) y, además, listaba todos los adaptadores y todas sus
+ * redes solo para encontrar la activa. Acá todo se lee con get_property,
+ * que usa la instantánea si hay una abierta (al abrir el popup y en cada
+ * refresco), y solo se mira el punto de acceso activo. */
+
+/* Nombre de la red a la que está asociado un adaptador Wi-Fi, o NULL si el
+ * adaptador no es Wi-Fi, no está asociado o la red no tiene nombre. */
+static gchar *
+wifi_device_active_ssid (GDBusConnection *conn, const gchar *device_path)
+{
+    GVariant *type_v = get_property (conn, device_path, NM_DEVICE_IFACE, "DeviceType");
+    if (!type_v)
+        return NULL;
+    guint32 dev_type = g_variant_get_uint32 (type_v);
+    g_variant_unref (type_v);
+    if (dev_type != NM_DEVICE_TYPE_WIFI)
+        return NULL;
+
+    gchar *ap_path = get_active_ap_path (conn, device_path);
+    if (!ap_path)
+        return NULL;
+
+    gchar    *ssid   = NULL;
+    GVariant *ssid_v = get_property (conn, ap_path, NM_AP_IFACE, "Ssid");
+    if (ssid_v && g_variant_is_of_type (ssid_v, G_VARIANT_TYPE ("ay"))) {
+        gsize         len;
+        const guchar *bytes = g_variant_get_fixed_array (ssid_v, &len, 1);
+        if (len > 0) {
+            gchar *raw = g_strndup ((const gchar *) bytes, len);
+            if (*raw)
+                ssid = g_utf8_make_valid (raw, -1);
+            g_free (raw);
+        }
+    }
+    if (ssid_v)
+        g_variant_unref (ssid_v);
+    g_free (ap_path);
+    return ssid;
+}
+
+/* Declarada en popup-private.h (la usa la zona superior del popup). */
+gchar *get_primary_ssid (GDBusConnection *conn);
+
+gchar *
+get_primary_ssid (GDBusConnection *conn)
+{
+    gchar *result = NULL;
+
+    /* 1. La conexión primaria de NM, si va por un adaptador Wi-Fi. */
+    GVariant *pc_v = get_property (conn, NM_OBJECT_PATH, NM_IFACE, "PrimaryConnection");
+    if (pc_v) {
+        const gchar *pc_path = g_variant_get_string (pc_v, NULL);
+        if (pc_path && strcmp (pc_path, "/") != 0) {
+            GVariant *devs_v = get_property (conn, pc_path,
+                "org.freedesktop.NetworkManager.Connection.Active", "Devices");
+            if (devs_v) {
+                if (g_variant_n_children (devs_v) > 0) {
+                    const gchar *dev_path = NULL;
+                    g_variant_get_child (devs_v, 0, "&o", &dev_path);
+                    result = wifi_device_active_ssid (conn, dev_path);
+                }
+                g_variant_unref (devs_v);
+            }
+        }
+        g_variant_unref (pc_v);
+    }
+
+    /* 2. Si no: el primer adaptador Wi-Fi asociado a una red. */
+    if (!result) {
+        GVariant *paths_v = get_property (conn, NM_OBJECT_PATH, NM_IFACE, "Devices");
+        if (paths_v) {
+            gsize         n;
+            const gchar **paths = g_variant_get_objv (paths_v, &n);
+            for (gsize i = 0; i < n && !result; i++)
+                result = wifi_device_active_ssid (conn, paths[i]);
+            g_free (paths);
+            g_variant_unref (paths_v);
+        }
+    }
+
+    return result;
 }
 
 /* Banda a partir de la frecuencia, para agrupar duplicados. */

@@ -530,88 +530,10 @@ popup_show_wayland (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button)
     }
 }
 
-/* ---------- SSID de la conexión primaria ---------- */
-
-gchar *
-get_primary_ssid (GDBusConnection *conn)
-{
-    GSList      *devices, *d;
-    gchar       *result       = NULL;
-    const gchar *primary_dev  = NULL;
-    GVariant    *v, *inner;
-
-    v = g_dbus_connection_call_sync (
-            conn, NM_BUS_NAME, NM_OBJECT_PATH,
-            "org.freedesktop.DBus.Properties", "Get",
-            g_variant_new ("(ss)", NM_IFACE, "PrimaryConnection"),
-            G_VARIANT_TYPE ("(v)"),
-            G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
-    if (v) {
-        g_variant_get (v, "(v)", &inner);
-        const gchar *primary_path = g_variant_get_string (inner, NULL);
-
-        if (primary_path && g_strcmp0 (primary_path, "/") != 0) {
-            GVariant *dev_v = g_dbus_connection_call_sync (
-                    conn, NM_BUS_NAME, primary_path,
-                    "org.freedesktop.DBus.Properties", "Get",
-                    g_variant_new ("(ss)",
-                        "org.freedesktop.NetworkManager.Connection.Active",
-                        "Devices"),
-                    G_VARIANT_TYPE ("(v)"),
-                    G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
-            if (dev_v) {
-                GVariant *dev_inner;
-                g_variant_get (dev_v, "(v)", &dev_inner);
-                if (g_variant_n_children (dev_inner) > 0) {
-                    GVariant *dev_path_v = g_variant_get_child_value (dev_inner, 0);
-                    primary_dev = g_variant_get_string (dev_path_v, NULL);
-
-                    devices = nm_get_wifi_devices (conn);
-                    for (d = devices; d && !result; d = d->next) {
-                        NmDevice *dev = d->data;
-                        if (g_strcmp0 (dev->object_path, primary_dev) == 0) {
-                            GSList *aps = nm_get_access_points (conn, dev->object_path);
-                            for (GSList *a = aps; a; a = a->next) {
-                                NmAccessPoint *ap = a->data;
-                                if (ap->active && ap->ssid && *ap->ssid) {
-                                    result = g_strdup (ap->ssid);
-                                    break;
-                                }
-                            }
-                            nm_ap_list_free (aps);
-                        }
-                    }
-                    nm_device_list_free (devices);
-                    g_variant_unref (dev_path_v);
-                }
-                g_variant_unref (dev_inner);
-                g_variant_unref (dev_v);
-            }
-        }
-        g_variant_unref (inner);
-        g_variant_unref (v);
-    }
-
-    /* Fallback: cualquier adaptador Wi-Fi con AP activo */
-    if (!result) {
-        devices = nm_get_wifi_devices (conn);
-        for (d = devices; d && !result; d = d->next) {
-            NmDevice *dev = d->data;
-            GSList   *aps = nm_get_access_points (conn, dev->object_path);
-            for (GSList *a = aps; a; a = a->next) {
-                NmAccessPoint *ap = a->data;
-                if (ap->active && ap->ssid && *ap->ssid) {
-                    result = g_strdup (ap->ssid);
-                    break;
-                }
-            }
-            nm_ap_list_free (aps);
-        }
-        nm_device_list_free (devices);
-    }
-
-    return result;
-}
+/* ---------- SSID de la conexión primaria ----------
+ * get_primary_ssid (nombre de la red principal) vive ahora en nm-dbus.c,
+ * donde puede leer de la instantánea del bus sin llamadas sueltas. Sigue
+ * declarada en popup-private.h. */
 
 /* ---------- estado del adaptador ---------- */
 
@@ -1780,11 +1702,73 @@ popup_apply_style (NetPopup *popup)
     popup->float_gap = floating ? POPUP_FLOAT_GAP : 0;
 }
 
+/* ---------- medición de la apertura ----------
+ *
+ * Mide cuánto tarda el popup desde el clic en el botón del panel (momento
+ * que anota plugin.c en el dato "net-open-t0" de la ventana) hasta que la
+ * ventana se dibuja por primera vez. Separa tres tramos:
+ *   datos:   clic → estado de la red leído y filas actualizadas;
+ *   mostrar: datos → fin de popup_show (ubicar y mostrar la ventana);
+ *   dibujo:  fin de popup_show → primer dibujo en pantalla.
+ * No cambia nada del funcionamiento. El mensaje solo se ve lanzando el
+ * panel con G_MESSAGES_DEBUG=xfce-net-plugin. */
+
+static gint64
+open_mark_get (NetPopup *popup, const gchar *key)
+{
+    gint64 *t = g_object_get_data (G_OBJECT (popup->window), key);
+    return t ? *t : 0;
+}
+
+static void
+open_mark_set (NetPopup *popup, const gchar *key)
+{
+    gint64 *t = g_new (gint64, 1);
+    *t = g_get_monotonic_time ();
+    g_object_set_data_full (G_OBJECT (popup->window), key, t, g_free);
+}
+
+static gboolean
+on_first_draw (GtkWidget *win, cairo_t *cr, NetPopup *popup)
+{
+    (void) cr;
+    g_signal_handlers_disconnect_by_func (win, on_first_draw, popup);
+
+    gint64 now   = g_get_monotonic_time ();
+    gint64 t0    = open_mark_get (popup, "net-open-t0");
+    gint64 tdata = open_mark_get (popup, "net-open-data");
+    gint64 tshow = open_mark_get (popup, "net-open-shown");
+    if (!t0 || !tdata || !tshow)
+        return FALSE;
+
+    g_log ("xfce-net-plugin", G_LOG_LEVEL_DEBUG,
+           "MEDICION apertura=%s datos=%.1f mostrar=%.1f dibujo=%.1f total=%.1f ms",
+           GPOINTER_TO_INT (g_object_get_data (G_OBJECT (win), "net-open-full"))
+               ? "completa" : "normal",
+           (tdata - t0)    / 1000.0,
+           (tshow - tdata) / 1000.0,
+           (now - tshow)   / 1000.0,
+           (now - t0)      / 1000.0);
+
+    /* Una medición por apertura. */
+    g_object_set_data (G_OBJECT (win), "net-open-t0", NULL);
+    return FALSE;   /* no interferir con el dibujo */
+}
+
 void
 popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
             GDBusConnection *conn,
             gint popup_width, gint popup_height)
 {
+    /* Medición: si el clic no anotó su momento, se toma desde acá. */
+    if (!open_mark_get (popup, "net-open-t0"))
+        open_mark_set (popup, "net-open-t0");
+    g_object_set_data (G_OBJECT (popup->window), "net-open-full",
+                       GINT_TO_POINTER (!popup->ui_built || popup->theme_dirty));
+    g_signal_handlers_disconnect_by_func (popup->window, on_first_draw, popup);
+    g_signal_connect_after (popup->window, "draw",
+                            G_CALLBACK (on_first_draw), popup);
+
     popup->conn         = conn;
     popup->popup_width  = popup_width;
     popup->popup_height = popup_height;
@@ -1808,7 +1792,23 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
         update_devices_section (popup);
         update_vpn_section     (popup);
     }
+
+    /* Pedir escaneo al abrir. Va dentro de la instantánea: la lista de
+     * adaptadores sale de memoria, sin llamadas al bus con espera (el pedido
+     * en sí no espera respuesta). Solo a los adaptadores que pueden escanear
+     * (estado 30 = desconectado o más): a uno "no disponible" (20) o no
+     * administrado (10) NM le contesta con un error y deja un aviso. */
+    {
+        GSList *devs = nm_get_wifi_devices (conn);
+        for (GSList *l = devs; l; l = l->next) {
+            NmDevice *dev = l->data;
+            if (nm_get_device_state (conn, dev->object_path) >= 30)
+                nm_request_scan (conn, dev->object_path);
+        }
+        nm_device_list_free (devs);
+    }
     nm_cache_end ();
+    open_mark_set (popup, "net-open-data");   /* medición */
 
     /* Suscribirse a señales DBus de NM (las gestiona el popup mientras está abierto). */
     if (!popup->signal_ids)
@@ -1833,15 +1833,7 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
                           G_CALLBACK (on_window_mapped), gd);
     }
 
-    /* Pedir escaneo al abrir. */
-    {
-        GSList *devs = nm_get_wifi_devices (conn);
-        for (GSList *l = devs; l; l = l->next) {
-            NmDevice *dev = l->data;
-            nm_request_scan (conn, dev->object_path);
-        }
-        nm_device_list_free (devs);
-    }
+    open_mark_set (popup, "net-open-shown");   /* medición */
 }
 
 void

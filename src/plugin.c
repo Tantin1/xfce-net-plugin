@@ -82,6 +82,11 @@ typedef struct {
     /* Una sola notificación, que se reemplaza en el lugar: los avisos
      * nuevos no se apilan. NULL hasta el primer aviso. */
     NotifyNotification *notif;
+    /* TRUE mientras la notificación está en pantalla. Al abrir el popup solo
+     * se pide cerrarla si sigue a la vista: cerrarla es una llamada que
+     * espera respuesta del servicio de notificaciones, y como la
+     * notificación se reutiliza, antes se hacía en CADA apertura. */
+    gboolean            notif_visible;
 #endif
     gboolean        show_notifications;
     gboolean        show_forget_active;
@@ -982,17 +987,30 @@ popup_is_open (NetPlugin *np)
     return np->popup && gtk_widget_get_visible (np->popup->window);
 }
 
+/* El servicio de notificaciones avisa que la notificación se fue (sola,
+ * por un clic o porque se pidió cerrarla). */
+static void
+on_notif_closed (NotifyNotification *n, NetPlugin *np)
+{
+    (void) n;
+    np->notif_visible = FALSE;
+}
+
 static void
 notify_show (NetPlugin *np, const gchar *summary, const gchar *body,
              const gchar *icon)
 {
     if (!np->show_notifications || popup_is_open (np))
         return;
-    if (!np->notif)
+    if (!np->notif) {
         np->notif = notify_notification_new (summary, body, icon);
-    else
+        g_signal_connect (np->notif, "closed",
+                          G_CALLBACK (on_notif_closed), np);
+    } else {
         notify_notification_update (np->notif, summary, body, icon);
-    notify_notification_show (np->notif, NULL);
+    }
+    if (notify_notification_show (np->notif, NULL))
+        np->notif_visible = TRUE;
 }
 
 /* Un cambio: su título y su texto. Varios: título general ("Red") y una
@@ -1206,12 +1224,23 @@ on_button_toggled (GtkToggleButton *btn, NetPlugin *np)
         return;
     }
     if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (np->button))) {
+        /* Medición de la apertura: momento del clic. popup.c lo lee cuando
+         * la ventana se dibuja por primera vez y anota cuánto tardó (solo se
+         * ve con G_MESSAGES_DEBUG=xfce-net-plugin). */
+        {
+            gint64 *t0 = g_new (gint64, 1);
+            *t0 = g_get_monotonic_time ();
+            g_object_set_data_full (G_OBJECT (np->popup->window),
+                                    "net-open-t0", t0, g_free);
+        }
 #ifdef HAVE_LIBNOTIFY
         /* Una notificación que todavía esté a la vista se cierra al abrir el
          * popup, así no lo tapa (con el popup abierto tampoco salen nuevas,
          * ver notify_show). Si ya se había ido sola, no pasa nada. */
-        if (np->notif)
+        if (np->notif && np->notif_visible) {
             notify_notification_close (np->notif, NULL);
+            np->notif_visible = FALSE;
+        }
 #endif
         np->popup->show_separators   = np->show_separators;
         np->popup->show_forget_active = np->show_forget_active;
