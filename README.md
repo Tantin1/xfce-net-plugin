@@ -14,7 +14,7 @@
 - Search available networks using the search button, `Ctrl+F`, or by typing.
 - Context actions for connection details, automatic connection, sharing and forgetting saved networks.
 - Connection information including IP addresses, gateway, DNS, IPv6, channel and BSSID.
-- Optional QR codes for sharing a connected Wi-Fi network (requires libqrencode at build time).
+- QR codes for sharing a connected Wi-Fi network.
 - Optional desktop notifications (requires libnotify at build time).
 - Captive-portal notice when NetworkManager connectivity checking is enabled.
 - Configurable panel button, icon appearance, popup size and popup style.
@@ -44,18 +44,18 @@ Install the required development tools and libraries:
 **Arch Linux and derivatives:**
 
 ```bash
-sudo pacman -S --needed base-devel git cmake pkgconf gettext gtk3 xfce4-panel xfconf
+sudo pacman -S --needed base-devel git cmake pkgconf gettext gtk3 xfce4-panel xfconf qrencode
 # Optional features and Meson builds:
-sudo pacman -S --needed qrencode libnotify meson ninja
+sudo pacman -S --needed libnotify meson ninja
 ```
 
 **Debian 12 / Debian 13:**
 
 ```bash
 sudo apt install build-essential git cmake pkg-config gettext \
-  libgtk-3-dev libxfce4panel-2.0-dev libxfconf-0-dev
+  libgtk-3-dev libxfce4panel-2.0-dev libxfconf-0-dev libqrencode-dev
 # Optional features and Meson builds:
-sudo apt install libqrencode-dev libnotify-dev meson ninja-build
+sudo apt install libnotify-dev meson ninja-build
 ```
 
 Clone the repository:
@@ -90,7 +90,7 @@ Then open **Panel Preferences → Items → Add** and select **Network Connectio
 - **Settings:** each panel instance stores its own settings in Xfconf, in the `xfce4-panel` channel under its instance-specific `/plugins/plugin-N` path. Earlier `~/.config/xfce4/panel/xfce-net-plugin.ini` settings are imported once for migration; that file is no longer the active settings store.
 - **Using `nm-applet` simultaneously:** if both programs act as NetworkManager password agents, password prompts may compete. Disable **Respond to password requests** in this plugin's Properties → Network, or disable the `nm-applet` autostart entry.
 - **Captive portals:** the notice relies on NetworkManager connectivity checking. On Debian, the `network-manager-config-connectivity-debian` package can enable the distribution's connectivity-check configuration.
-- **Optional features:** QR sharing and desktop notifications are available only when their respective libraries were present during compilation.
+- **Optional features:** desktop notifications are available only when libnotify was present during compilation. QR sharing is always included: libqrencode is required to build.
 
 ## License and author
 
@@ -116,7 +116,7 @@ The original plugin source code is licensed under the **GNU General Public Licen
 - Búsqueda de redes mediante el botón, `Ctrl+F` o escribiendo directamente.
 - Acciones contextuales para detalles, conexión automática, compartir y olvidar redes guardadas.
 - Información de IP, puerta de enlace, DNS, IPv6, canal y BSSID.
-- Códigos QR opcionales para compartir redes Wi-Fi (requiere libqrencode al compilar).
+- Códigos QR para compartir redes Wi-Fi.
 - Notificaciones opcionales (requiere libnotify al compilar).
 - Avisos de portal cautivo si NetworkManager tiene habilitada la comprobación de conectividad.
 - Personalización del botón, icono, tamaño y estilo de la ventana emergente.
@@ -144,18 +144,18 @@ Consultá [GitHub Releases](https://github.com/Tantin1/xfce-net-plugin/releases)
 **Arch Linux y derivadas:**
 
 ```bash
-sudo pacman -S --needed base-devel git cmake pkgconf gettext gtk3 xfce4-panel xfconf
+sudo pacman -S --needed base-devel git cmake pkgconf gettext gtk3 xfce4-panel xfconf qrencode
 # Funciones opcionales y compilación con Meson:
-sudo pacman -S --needed qrencode libnotify meson ninja
+sudo pacman -S --needed libnotify meson ninja
 ```
 
 **Debian 12 / Debian 13:**
 
 ```bash
 sudo apt install build-essential git cmake pkg-config gettext \
-  libgtk-3-dev libxfce4panel-2.0-dev libxfconf-0-dev
+  libgtk-3-dev libxfce4panel-2.0-dev libxfconf-0-dev libqrencode-dev
 # Funciones opcionales y compilación con Meson:
-sudo apt install libqrencode-dev libnotify-dev meson ninja-build
+sudo apt install libnotify-dev meson ninja-build
 ```
 
 Cloná el repositorio:
@@ -190,7 +190,7 @@ Después, abrí **Preferencias del panel → Elementos → Añadir** y seleccion
 - **Configuración:** cada instancia guarda sus ajustes en Xfconf, en el canal `xfce4-panel`, bajo su ruta `/plugins/plugin-N`. La configuración antigua de `~/.config/xfce4/panel/xfce-net-plugin.ini` se importa una sola vez; ya no es el almacenamiento activo.
 - **Con `nm-applet` en ejecución:** ambos pueden intentar responder a las solicitudes de contraseña. Desactivá **Responder a las solicitudes de contraseña** en Propiedades → Red o quitá `nm-applet` del inicio automático.
 - **Portales cautivos:** el aviso necesita la comprobación de conectividad de NetworkManager. En Debian, el paquete `network-manager-config-connectivity-debian` puede habilitar la configuración de comprobación de conectividad de la distribución.
-- **Funciones opcionales:** los códigos QR y las notificaciones requieren que sus bibliotecas estuvieran presentes al compilar.
+- **Funciones opcionales:** las notificaciones requieren que libnotify estuviera presente al compilar. Los códigos QR se incluyen siempre: libqrencode es obligatoria para compilar.
 
 ## Licencia y autor
 

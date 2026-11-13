@@ -19,7 +19,9 @@ pkg_check_modules(XFCE4PANEL REQUIRED libxfce4panel-2.0>=4.18)
 # Configuración por copia del plugin, como los nativos (Debian: libxfconf-0-dev).
 pkg_check_modules(XFCONF     REQUIRED libxfconf-0>=4.18)
 pkg_check_modules(LIBNOTIFY           libnotify>=0.7)
-pkg_check_modules(LIBQRENCODE         libqrencode)
+# Obligatoria: el código QR para compartir una red tiene que estar siempre
+# (Arch: qrencode; Debian/Ubuntu: libqrencode-dev).
+pkg_check_modules(LIBQRENCODE REQUIRED libqrencode)
 
 set(GETTEXT_PACKAGE "xfce-net-plugin")
 set(LOCALE_DIR "${CMAKE_INSTALL_PREFIX}/share/locale")
@@ -35,12 +37,9 @@ if(LIBNOTIFY_FOUND)
 else()
     message(STATUS "libnotify: NO encontrada, notificaciones desactivadas")
 endif()
-if(LIBQRENCODE_FOUND)
-    add_definitions(-DHAVE_LIBQRENCODE)
-    message(STATUS "libqrencode: encontrada, códigos QR activados")
-else()
-    message(STATUS "libqrencode: NO encontrada, códigos QR desactivados")
-endif()
+# libqrencode es obligatoria: HAVE_LIBQRENCODE queda siempre definida (las
+# marcas del código que la consultan se conservan sin cambios).
+add_definitions(-DHAVE_LIBQRENCODE)
 
 add_library(xfce-net-plugin MODULE
     plugin.c

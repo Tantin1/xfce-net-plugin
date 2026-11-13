@@ -24,7 +24,9 @@ xfce4panel = dependency('libxfce4panel-2.0', version : '>= 4.18')
 xfconf     = dependency('libxfconf-0',       version : '>= 4.18')
 intl       = dependency('intl')
 libnotify  = dependency('libnotify',         version : '>= 0.7', required : false)
-libqrencode = dependency('libqrencode',                                required : false)
+# Obligatoria: el código QR para compartir una red tiene que estar siempre.
+libqrencode = dependency('libqrencode',
+  not_found_message : 'Falta libqrencode: instalá qrencode (Arch) o libqrencode-dev (Debian/Ubuntu)')
 
 # Ruta de instalación del plugin.
 # Auto, en este orden:
@@ -66,20 +68,16 @@ add_project_arguments(
   language : 'c',
 )
 
-plugin_deps = [gtk3, xfce4panel, xfconf, intl]
+plugin_deps = [gtk3, xfce4panel, xfconf, intl, libqrencode]
+# libqrencode es obligatoria: HAVE_LIBQRENCODE queda siempre definida (las
+# marcas del código que la consultan se conservan sin cambios).
+add_project_arguments('-DHAVE_LIBQRENCODE', language : 'c')
 if libnotify.found()
   plugin_deps += libnotify
   add_project_arguments('-DHAVE_LIBNOTIFY', language : 'c')
   message('libnotify: encontrada, notificaciones activadas')
 else
   message('libnotify: NO encontrada, notificaciones desactivadas')
-endif
-if libqrencode.found()
-  plugin_deps += libqrencode
-  add_project_arguments('-DHAVE_LIBQRENCODE', language : 'c')
-  message('libqrencode: encontrada, códigos QR activados')
-else
-  message('libqrencode: NO encontrada, códigos QR desactivados')
 endif
 
 # Recurso embebido con los íconos propios del plugin (candado fallback)

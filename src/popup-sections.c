@@ -417,6 +417,23 @@ fill_eth_section (NetPopup *popup)
     gtk_widget_show_all (popup->eth_section);
 }
 
+/* ---------- línea de estado: texto completo si está cortado ----------
+ *
+ * La línea de estado no pide lugar (ver rebuild_ui): usa el ancho que haya y,
+ * si el texto no entra, lo corta con "…". Al pasar el mouse se ve el texto
+ * completo, pero solo cuando está cortado. */
+static gboolean
+on_status_query_tooltip (GtkWidget *label, gint x, gint y, gboolean keyboard,
+                         GtkTooltip *tooltip, gpointer user_data)
+{
+    (void) x; (void) y; (void) keyboard; (void) user_data;
+    PangoLayout *layout = gtk_label_get_layout (GTK_LABEL (label));
+    if (!layout || !pango_layout_is_ellipsized (layout))
+        return FALSE;
+    gtk_tooltip_set_text (tooltip, gtk_label_get_text (GTK_LABEL (label)));
+    return TRUE;
+}
+
 /* ---------- update functions: actualizan widgets in-place ---------- */
 
 void
@@ -1064,7 +1081,7 @@ rebuild_ui (NetPopup *popup)
     gtk_widget_set_margin_start  (top_row, 6);
     gtk_widget_set_margin_end    (top_row, 12);
     gtk_widget_set_margin_top    (top_row, 8);
-    gtk_widget_set_margin_bottom (top_row, 8);
+    /* Sin margen inferior: debajo va la línea de estado, que lo pone ella. */
 
     {
         GIcon *disc_gicon = net_themed_icon_new ("network-wireless-disconnected-symbolic", "nm-no-connection");
@@ -1082,25 +1099,68 @@ rebuild_ui (NetPopup *popup)
     gtk_stack_add_named (GTK_STACK (popup->status_stack), popup->status_icon,    "icon");
     gtk_stack_add_named (GTK_STACK (popup->status_stack), popup->status_spinner, "spinner");
     gtk_stack_set_visible_child_name (GTK_STACK (popup->status_stack), "icon");
-    gtk_widget_set_margin_bottom (popup->status_stack, 22);
+    /* Antes llevaba un margen inferior para quedar a la altura de la línea
+     * de Wi-Fi, con la línea de estado debajo dentro de la misma barra. La
+     * línea de estado ahora va en su propio renglón: centrado, ya queda a la
+     * altura de la línea de Wi-Fi. */
+    gtk_widget_set_valign (popup->status_stack, GTK_ALIGN_CENTER);
     gtk_box_pack_start (GTK_BOX (top_row), popup->status_stack, FALSE, FALSE, 0);
 
     GtkWidget *center_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
+    /* Centrada, como el ícono y los botones. Actualizar y la lupa son más
+     * altos que la línea de Wi-Fi y fijan el alto de la barra: sin esto la
+     * línea quedaba pegada arriba y el ícono, centrado, más abajo que ella. */
+    gtk_widget_set_valign (center_box, GTK_ALIGN_CENTER);
     gtk_box_pack_start (GTK_BOX (top_row), center_box, TRUE, TRUE, 0);
 
 
-    /* Botón Actualizar */
+    /* Botón Actualizar. Adentro, una pila (GtkStack) con sus dos estados,
+     * cada uno un bloque de ícono + texto: en reposo (flechas,
+     * "Actualizar") y buscando (engranaje girando, "Actualizando…"). Al
+     * buscar solo se cambia qué bloque se ve. Una pila mide siempre lo que
+     * su elemento más grande, así que el botón tiene un ancho fijo, el del
+     * bloque más largo en el idioma que sea, y el popup no se ensancha al
+     * buscar. Cada bloque va centrado: el más corto queda en el medio del
+     * botón, con el mismo espacio a cada lado. Los cambios de estado los
+     * hace refresh_button_set_busy (popup.c). */
     popup->refresh_button = gtk_button_new ();
-    GtkWidget *refresh_box  = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
-    GtkWidget *refresh_icon = gtk_image_new_from_icon_name (
-                                  "view-refresh-symbolic", GTK_ICON_SIZE_MENU);
-    gtk_box_pack_start (GTK_BOX (refresh_box), refresh_icon, FALSE, FALSE, 0);
-    popup->refresh_label = gtk_label_new (popup->scanning ? _("Updating…") : _("Refresh"));
-    gtk_box_pack_start (GTK_BOX (refresh_box), popup->refresh_label, FALSE, FALSE, 0);
-    gtk_container_add  (GTK_CONTAINER (popup->refresh_button), refresh_box);
+
+    GtkWidget *idle_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+    gtk_widget_set_halign (idle_box, GTK_ALIGN_CENTER);
+    gtk_box_pack_start (GTK_BOX (idle_box),
+                        gtk_image_new_from_icon_name ("view-refresh-symbolic",
+                                                      GTK_ICON_SIZE_MENU),
+                        FALSE, FALSE, 0);
+    popup->refresh_label = gtk_label_new (_("Refresh"));
+    gtk_box_pack_start (GTK_BOX (idle_box), popup->refresh_label, FALSE, FALSE, 0);
+
+    GtkWidget *busy_box        = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+    GtkWidget *refresh_spinner = gtk_spinner_new ();
+    gtk_widget_set_halign (busy_box, GTK_ALIGN_CENTER);
+    gtk_box_pack_start (GTK_BOX (busy_box), refresh_spinner, FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (busy_box), gtk_label_new (_("Updating…")),
+                        FALSE, FALSE, 0);
+
+    GtkWidget *refresh_stack = gtk_stack_new ();
+    gtk_stack_set_transition_type (GTK_STACK (refresh_stack),
+                                   GTK_STACK_TRANSITION_TYPE_NONE);
+    gtk_stack_add_named (GTK_STACK (refresh_stack), idle_box, "idle");
+    gtk_stack_add_named (GTK_STACK (refresh_stack), busy_box, "busy");
+
+    g_object_set_data (G_OBJECT (popup->refresh_button), "refresh-stack",   refresh_stack);
+    g_object_set_data (G_OBJECT (popup->refresh_button), "refresh-spinner", refresh_spinner);
+
+    /* Estado inicial. Una pila solo acepta como visible a un elemento ya
+     * mostrado: por eso se muestran antes de elegir. */
+    gtk_widget_show_all (refresh_stack);
+    gtk_stack_set_visible_child_name (GTK_STACK (refresh_stack),
+                                      popup->scanning ? "busy" : "idle");
+    if (popup->scanning)
+        gtk_spinner_start (GTK_SPINNER (refresh_spinner));
+
+    gtk_container_add  (GTK_CONTAINER (popup->refresh_button), refresh_stack);
     gtk_button_set_relief (GTK_BUTTON (popup->refresh_button), GTK_RELIEF_NONE);
     gtk_widget_set_valign (popup->refresh_button, GTK_ALIGN_CENTER);
-    gtk_widget_set_margin_bottom (popup->refresh_button, 16);
     gtk_widget_set_sensitive (popup->refresh_button, !popup->scanning);
     g_signal_connect (popup->refresh_button, "clicked",
                       G_CALLBACK (on_refresh_clicked), popup);
@@ -1117,7 +1177,6 @@ rebuild_ui (NetPopup *popup)
         gtk_button_set_relief (GTK_BUTTON (search_btn), GTK_RELIEF_NONE);
         gtk_widget_set_tooltip_text (search_btn, _("Search networks"));
         gtk_widget_set_valign (search_btn, GTK_ALIGN_CENTER);
-        gtk_widget_set_margin_bottom (search_btn, 16);
         g_signal_connect (search_btn, "clicked",
                           G_CALLBACK (on_search_button_clicked), popup);
         gtk_box_pack_end (GTK_BOX (top_row), search_btn, FALSE, FALSE, 0);
@@ -1139,14 +1198,46 @@ rebuild_ui (NetPopup *popup)
         G_CALLBACK (on_wifi_switch_toggled), popup);
     gtk_box_pack_start (GTK_BOX (wifi_row), popup->wifi_switch, FALSE, FALSE, 0);
 
-    /* Label de estado */
-    popup->status_label = gtk_label_new (NULL);
-    gtk_label_set_xalign (GTK_LABEL (popup->status_label), 0.0);
-    gtk_label_set_ellipsize (GTK_LABEL (popup->status_label), PANGO_ELLIPSIZE_END);
-    gtk_label_set_max_width_chars (GTK_LABEL (popup->status_label), 28);
-    gtk_box_pack_start (GTK_BOX (center_box), popup->status_label, FALSE, FALSE, 0);
-
     gtk_box_pack_start (GTK_BOX (popup->top_box), top_row, FALSE, FALSE, 0);
+
+    /* Línea de estado ("Conectado a …"), en su propio renglón debajo de la
+     * barra: puede seguir por debajo de la lupa y de Actualizar.
+     *
+     * Antes iba al lado de los botones y pedía lugar para hasta 28 letras: si
+     * el texto era largo (una red de nombre largo, otro idioma), el popup se
+     * ensanchaba más allá del ancho configurado. Ahora no pide lugar (máximo
+     * de 1 letra como ancho "deseado") y se estira para ocupar lo que haya:
+     * el popup respeta siempre el ancho configurado y, si el texto no entra,
+     * se corta con "…" (el texto completo se ve al pasar el mouse).
+     *
+     * Empieza alineada con "Wi-Fi": a su izquierda va un espacio vacío que
+     * mide lo mismo que el ícono de arriba (grupo de tamaño), así la
+     * alineación se mantiene con cualquier tamaño de ícono del tema. */
+    {
+        GtkWidget *status_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+        gtk_widget_set_margin_start  (status_row, 6);    /* = la barra de arriba */
+        gtk_widget_set_margin_end    (status_row, 12);
+        gtk_widget_set_margin_top    (status_row, 2);
+        gtk_widget_set_margin_bottom (status_row, 8);
+
+        GtkWidget    *indent = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+        GtkSizeGroup *group  = gtk_size_group_new (GTK_SIZE_GROUP_HORIZONTAL);
+        gtk_size_group_add_widget (group, popup->status_stack);
+        gtk_size_group_add_widget (group, indent);
+        g_object_unref (group);   /* lo mantienen vivo sus widgets */
+        gtk_box_pack_start (GTK_BOX (status_row), indent, FALSE, FALSE, 0);
+
+        popup->status_label = gtk_label_new (NULL);
+        gtk_label_set_xalign (GTK_LABEL (popup->status_label), 0.0);
+        gtk_label_set_ellipsize (GTK_LABEL (popup->status_label), PANGO_ELLIPSIZE_END);
+        gtk_label_set_max_width_chars (GTK_LABEL (popup->status_label), 1);
+        gtk_widget_set_has_tooltip (popup->status_label, TRUE);
+        g_signal_connect (popup->status_label, "query-tooltip",
+                          G_CALLBACK (on_status_query_tooltip), NULL);
+        gtk_box_pack_start (GTK_BOX (status_row), popup->status_label, TRUE, TRUE, 0);
+
+        gtk_box_pack_start (GTK_BOX (popup->top_box), status_row, FALSE, FALSE, 0);
+    }
 
     /* Franja de portal cautivo (oculta hasta que NM lo informe). */
     {

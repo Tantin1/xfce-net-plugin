@@ -714,17 +714,36 @@ on_device_switch_toggled (GtkSwitch *sw, gboolean state, gpointer user_data)
 
 /* ---------- Actualizar (botón) ---------- */
 
+/* Pone el botón Actualizar en reposo (flechas, "Actualizar", habilitado) o
+ * buscando (engranaje girando, "Actualizando…", deshabilitado). Solo cambia
+ * qué bloque se ve en su pila (la arma rebuild_ui, en popup-sections.c): el
+ * ancho del botón no cambia. */
+static void
+refresh_button_set_busy (NetPopup *popup, gboolean busy)
+{
+    GtkWidget *btn = popup->refresh_button;
+    if (!btn || !GTK_IS_WIDGET (btn))
+        return;
+
+    gtk_widget_set_sensitive (btn, !busy);
+
+    GtkWidget *stack   = g_object_get_data (G_OBJECT (btn), "refresh-stack");
+    GtkWidget *spinner = g_object_get_data (G_OBJECT (btn), "refresh-spinner");
+    if (spinner) {
+        if (busy) gtk_spinner_start (GTK_SPINNER (spinner));
+        else      gtk_spinner_stop  (GTK_SPINNER (spinner));
+    }
+    if (stack)
+        gtk_stack_set_visible_child_name (GTK_STACK (stack), busy ? "busy" : "idle");
+}
+
 static gboolean
 on_refresh_reenable (gpointer popup_ptr)
 {
     NetPopup *popup = popup_ptr;
     popup->scanning = FALSE;
     popup->scan_timeout_id = 0;
-    if (popup->refresh_button && GTK_IS_WIDGET (popup->refresh_button)) {
-        gtk_widget_set_sensitive (popup->refresh_button, TRUE);
-        if (popup->refresh_label)
-            gtk_label_set_text (GTK_LABEL (popup->refresh_label), _("Refresh"));
-    }
+    refresh_button_set_busy (popup, FALSE);
     return G_SOURCE_REMOVE;
 }
 
@@ -755,12 +774,11 @@ on_portal_signin_clicked (GtkWidget *btn, NetPopup *popup)
 void
 on_refresh_clicked (GtkWidget *btn, NetPopup *popup)
 {
+    (void) btn;
     if (popup->scanning) return;
 
     popup->scanning = TRUE;
-    gtk_widget_set_sensitive (btn, FALSE);
-    if (popup->refresh_label)
-        gtk_label_set_text (GTK_LABEL (popup->refresh_label), _("Updating…"));
+    refresh_button_set_busy (popup, TRUE);
     popup->scan_timeout_id =
         g_timeout_add (SCAN_COOLDOWN_MS, on_refresh_reenable, popup);
 
@@ -1050,47 +1068,137 @@ on_hidden_network_clicked (GtkWidget *btn, NetPopup *popup)
     }
 }
 
+/* ---------- Configuración avanzada ----------
+ *
+ * Abre nm-connection-editor, el editor de conexiones del propio proyecto
+ * NetworkManager (el mismo que abre nm-applet). Si no está instalado, abre
+ * nmtui (viene con NetworkManager) en una terminal (nmtui_terminal_command).
+ * Si no hay con qué, el botón queda deshabilitado y, al pasar el mouse,
+ * dice qué instalar (advanced_button_sync).
+ *
+ * Antes también probaba cmst y connman-gtk: son gestores de ConnMan, otro
+ * sistema de red; con ConnMan este plugin no funciona, así que nunca
+ * servían. Y si no encontraba nada, el botón no hacía nada visible. */
+
+/* ¿Existe el programa? (el primer elemento de un comando) */
+static gboolean
+program_exists (const gchar *program)
+{
+    gchar *found = g_find_program_in_path (program);
+    gboolean ok = (found != NULL);
+    g_free (found);
+    return ok;
+}
+
+/* Comando para abrir nmtui en una terminal, o NULL si no hay ninguna.
+ * Orden: lo que eligió el usuario primero, después las terminales comunes.
+ *   1. xdg-terminal-exec: el método estándar de freedesktop para "abrir en
+ *      la terminal preferida".
+ *   2. exo-open: la terminal preferida de Xfce.
+ *   3. $TERMINAL: la convención de muchos usuarios para su terminal.
+ *   4. Terminales comunes, cada una con su forma de recibir el programa
+ *      (no todas aceptan -e: gnome-terminal y wezterm usan --, foot y
+ *      kitty lo toman directo).
+ * Liberar con g_free(). */
+static gchar *
+nmtui_terminal_command (void)
+{
+    if (program_exists ("xdg-terminal-exec"))
+        return g_strdup ("xdg-terminal-exec nmtui");
+    if (program_exists ("exo-open"))
+        return g_strdup ("exo-open --launch TerminalEmulator nmtui");
+
+    const gchar *user_term = g_getenv ("TERMINAL");
+    if (user_term && *user_term) {
+        gchar **argv = NULL;
+        if (g_shell_parse_argv (user_term, NULL, &argv, NULL) &&
+            argv && argv[0] && program_exists (argv[0])) {
+            g_strfreev (argv);
+            return g_strdup_printf ("%s -e nmtui", user_term);
+        }
+        g_strfreev (argv);
+    }
+
+    static const gchar *terms[][2] = {
+        { "xfce4-terminal",      "xfce4-terminal -e nmtui" },
+        { "x-terminal-emulator", "x-terminal-emulator -e nmtui" },
+        { "foot",                "foot nmtui" },
+        { "kitty",               "kitty nmtui" },
+        { "alacritty",           "alacritty -e nmtui" },
+        { "wezterm",             "wezterm start -- nmtui" },
+        { "konsole",             "konsole -e nmtui" },
+        { "gnome-terminal",      "gnome-terminal -- nmtui" },
+        { "tilix",               "tilix -e nmtui" },
+        { "lxterminal",          "lxterminal -e nmtui" },
+        { "mate-terminal",       "mate-terminal -e nmtui" },
+        { "qterminal",           "qterminal -e nmtui" },
+        { "terminator",          "terminator -x nmtui" },
+        { "urxvt",               "urxvt -e nmtui" },
+        { "st",                  "st -e nmtui" },
+        { "xterm",               "xterm -e nmtui" },
+    };
+    for (gsize i = 0; i < G_N_ELEMENTS (terms); i++)
+        if (program_exists (terms[i][0]))
+            return g_strdup (terms[i][1]);
+    return NULL;
+}
+
+/* Comando a ejecutar, o NULL si no hay herramienta. Liberar con g_free(). */
+static gchar *
+advanced_tool_command (void)
+{
+    gchar *found = g_find_program_in_path ("nm-connection-editor");
+    if (found) {
+        g_free (found);
+        return g_strdup ("nm-connection-editor");
+    }
+
+    found = g_find_program_in_path ("nmtui");
+    if (!found)
+        return NULL;
+    g_free (found);
+    return nmtui_terminal_command ();
+}
+
+/* Habilita o deshabilita el botón según haya herramienta. Se llama en cada
+ * apertura: si se instala nm-connection-editor con el panel abierto, el
+ * botón se habilita la próxima vez sin reiniciar nada. */
+static void
+advanced_button_sync (NetPopup *popup)
+{
+    GtkWidget *btn = g_object_get_data (G_OBJECT (popup->window), "net-adv-btn");
+    if (!btn)
+        return;
+    gchar *cmd = advanced_tool_command ();
+    gtk_widget_set_sensitive (btn, cmd != NULL);
+    gtk_widget_set_tooltip_text (btn, cmd ? NULL
+        : _("Requires nm-connection-editor (or nmtui and a terminal)"));
+    g_free (cmd);
+}
+
 void
 on_advanced_clicked (GtkWidget *btn, gpointer user_data)
 {
-    (void) btn; (void) user_data;
+    (void) btn;
+    NetPopup *popup = user_data;
 
-    if (g_find_program_in_path ("nm-connection-editor")) {
-        g_spawn_command_line_async ("nm-connection-editor", NULL);
+    gchar *cmd = advanced_tool_command ();
+    if (!cmd) {
+        /* Lo desinstalaron con el popup abierto. */
+        advanced_button_sync (popup);
         return;
     }
-    if (g_find_program_in_path ("cmst")) {
-        g_spawn_command_line_async ("cmst", NULL);
-        return;
+
+    /* Cerrar el popup: si no, queda encima de la ventana nueva y con la
+     * captura del mouse y el teclado. */
+    popup_hide (popup);
+
+    GError *err = NULL;
+    if (!g_spawn_command_line_async (cmd, &err)) {
+        g_warning ("xfce-net-plugin: no se pudo abrir \"%s\": %s", cmd, err->message);
+        g_error_free (err);
     }
-    if (g_find_program_in_path ("connman-gtk")) {
-        g_spawn_command_line_async ("connman-gtk", NULL);
-        return;
-    }
-    if (g_find_program_in_path ("nmtui")) {
-        /* Abrir nmtui en una terminal. Primero la terminal preferida de Xfce
-         * (exo-open respeta la que eligió el usuario); después las comunes.
-         * Antes era siempre xterm, que casi nadie tiene en Xfce. */
-        static const gchar *terms[][2] = {
-            { "exo-open",           "exo-open --launch TerminalEmulator nmtui" },
-            { "xfce4-terminal",     "xfce4-terminal -e nmtui" },
-            { "x-terminal-emulator","x-terminal-emulator -e nmtui" },
-            { "xterm",              "xterm -e nmtui" },
-        };
-        for (gsize i = 0; i < G_N_ELEMENTS (terms); i++) {
-            gchar *found = g_find_program_in_path (terms[i][0]);
-            if (found) {
-                g_free (found);
-                g_spawn_command_line_async (terms[i][1], NULL);
-                return;
-            }
-        }
-        g_warning ("xfce-net-plugin: nmtui está instalado pero no se encontró "
-                   "ninguna terminal para abrirlo");
-        return;
-    }
-    g_warning ("xfce-net-plugin: no se encontró ningún gestor de red avanzado "
-               "(nm-connection-editor, cmst, connman-gtk o nmtui)");
+    g_free (cmd);
 }
 
 /* ---------- búsqueda de redes ----------
@@ -1613,7 +1721,8 @@ popup_create (XfcePanelPlugin *plugin, GtkWidget *button)
     gtk_widget_set_margin_top    (adv_btn, 4);
     gtk_widget_set_margin_bottom (adv_btn, 4);
     g_signal_connect (adv_btn, "clicked",
-                      G_CALLBACK (on_advanced_clicked), NULL);
+                      G_CALLBACK (on_advanced_clicked), popup);
+    g_object_set_data (G_OBJECT (win), "net-adv-btn", adv_btn);
     gtk_box_pack_end (GTK_BOX (outer_box), adv_btn, FALSE, FALSE, 0);
 
     GtkWidget *hidden_btn = gtk_button_new_with_label (_("Connect to hidden network…"));
@@ -1776,6 +1885,7 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
     gtk_widget_set_size_request (popup->window, popup_width, -1);
     search_sync_height (popup);   /* lista = alto configurado − borde del tema */
     scroll_bar_sync (popup);      /* barra propia: tipo de barra del sistema */
+    advanced_button_sync (popup); /* Configuración avanzada: ¿hay con qué abrirla? */
 
     /* Los intentos de conexión los sigue el seguidor común, también con el
      * popup cerrado: al armar las filas ya se sabe cómo está cada red. */
@@ -1885,6 +1995,11 @@ popup_hide (NetPopup *popup)
         popup->refresh_idle_id = 0;
     }
     popup->scanning = FALSE;
+    /* Y devolver el botón a su estado de reposo. Antes no se hacía: si se
+     * cerraba el popup mientras decía "Actualizando…", al reabrirlo el botón
+     * seguía deshabilitado (ya no quedaba ningún temporizador que lo
+     * habilitara) hasta reiniciar el panel o cambiar el tema. */
+    refresh_button_set_busy (popup, FALSE);
 
     /* Cerrar expand abierto para que al reabrir el popup esté limpio. */
     if (popup->current_expand_box) {

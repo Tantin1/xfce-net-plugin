@@ -17,12 +17,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # editor: cómo se ofrece nm-connection-editor (botón Configuración
+          # avanzada). En Debian 13 es un paquete propio y se recomienda (apt
+          # lo instala por defecto). En Debian 12 viene dentro de
+          # network-manager-gnome junto con nm-applet, que competiría con el
+          # plugin (dos íconos, dos agentes de contraseñas): solo se sugiere
+          # (no se instala por defecto). Sin él, el botón usa nmtui.
           - distro: Debian 12
             imagen: debian:12
             sufijo: deb12
+            editor: "Suggests: network-manager-gnome"
           - distro: Debian 13
             imagen: debian:13
             sufijo: deb13
+            editor: "Recommends: nm-connection-editor"
           - distro: Arch Linux
             imagen: archlinux:latest
             sufijo: arch
@@ -36,7 +44,7 @@ jobs:
             build-essential meson ninja-build cmake pkg-config gettext \
             dpkg-dev fakeroot \
             libglib2.0-dev-bin libgtk-3-dev libxfce4panel-2.0-dev \
-            libxfconf-0-dev libxfce4ui-2-dev libnotify-dev libqrencode-dev
+            libxfconf-0-dev libnotify-dev libqrencode-dev
 
       - name: Instalar dependencias (Arch)
         if: startsWith(matrix.imagen, 'archlinux')
@@ -71,14 +79,31 @@ jobs:
           esac
           PKG_DESC="Manage Wi-Fi and Ethernet connections from the Xfce panel"
           ARCH=$(dpkg --print-architecture)
-          OUT_DIR="${PKG_NAME}_${PKG_VERSION}-${{ matrix.sufijo }}_${ARCH}"
+          DEB_NAME="${PKG_NAME}_${PKG_VERSION}-${{ matrix.sufijo }}_${ARCH}"
+          # Carpeta del paquete donde las herramientas de Debian la esperan.
+          OUT_DIR="debian/$PKG_NAME"
 
           # 1. Instalar archivos compilados por Meson en el directorio del paquete
           DESTDIR="$PWD/$OUT_DIR" meson install -C _meson
-
-          # 2. Crear los metadatos DEBIAN (dependencias declaradas explícitamente)
           mkdir -p "$OUT_DIR/DEBIAN"
-          
+
+          # 2. Bibliotecas: las calcula dpkg-shlibdeps a partir de con qué quedó
+          #    enlazado el plugin, con el nombre correcto en cada versión de
+          #    Debian (p. ej. libgtk-3-0t64 en Debian 13). Necesita un
+          #    debian/control mínimo.
+          printf 'Source: %s\n\nPackage: %s\nArchitecture: any\n' \
+            "$PKG_NAME" "$PKG_NAME" > debian/control
+          SO_FILE="$(find "$OUT_DIR" -name 'libxfce-net-plugin.so' | head -n 1)"
+          SHLIBS="$(dpkg-shlibdeps -O "$SO_FILE" | sed -n 's/^shlibs:Depends=//p')"
+          if [ -z "$SHLIBS" ]; then
+            echo "No se pudieron calcular las dependencias de bibliotecas" >&2
+            exit 1
+          fi
+          echo "Dependencias de bibliotecas: $SHLIBS"
+
+          # 3. Metadatos del paquete. A mano solo va lo que no es biblioteca:
+          #    network-manager (sin él el plugin no funciona) y el editor de
+          #    conexiones (ver matrix.editor).
           cat <<EOF > "$OUT_DIR/DEBIAN/control"
           Package: $PKG_NAME
           Version: ${PKG_VERSION}~${{ matrix.sufijo }}
@@ -86,7 +111,8 @@ jobs:
           Priority: optional
           Architecture: $ARCH
           Maintainer: Tantin1 <juanperez33840@gmail.com>
-          Depends: libgtk-3-0, libxfce4panel-2.0-4, libxfconf-0-3, libxfce4ui-2-0, libnotify4, libqrencode4
+          Depends: $SHLIBS, network-manager
+          ${{ matrix.editor }}
           Description: $PKG_DESC
            NetworkManager panel interface for Wi-Fi, Ethernet and VPN profiles.
            Provides connection details and an optional password agent.
@@ -120,8 +146,8 @@ jobs:
            is available in /usr/share/common-licenses/GPL-3.
           EOF
 
-          # 3. Construir el paquete .deb
-          dpkg-deb --build --root-owner-group "$OUT_DIR"
+          # 4. Construir el paquete .deb
+          dpkg-deb --build --root-owner-group "$OUT_DIR" "${DEB_NAME}.deb"
 
       - name: Subir paquete .deb a GitHub Actions
         if: startsWith(matrix.imagen, 'debian')

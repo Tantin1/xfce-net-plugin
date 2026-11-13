@@ -13,6 +13,7 @@ arch=('x86_64')
 url='https://github.com/Tantin1/xfce-net-plugin'
 license=('GPL-2.0-or-later' 'GPL-3.0-only')
 depends=('gtk3' 'xfce4-panel' 'xfconf' 'networkmanager' 'libnotify' 'qrencode')
+optdepends=('nm-connection-editor: Advanced settings button')
 makedepends=('meson' 'ninja' 'pkgconf' 'gettext')
 
 # No external downloads: build from the repository containing this file.
