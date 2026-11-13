@@ -38,20 +38,26 @@ jobs:
     steps:
       - name: Instalar dependencias (Debian)
         if: startsWith(matrix.imagen, 'debian')
+        # libxfce4ui-2-dev: el plugin no la usa, pero en Debian 13 la
+        # configuración de compilación del panel (libxfce4panel-2.0.pc) la
+        # pide y libxfce4panel-2.0-dev no la instala sola. Es solo para
+        # compilar: las dependencias del paquete las calcula dpkg-shlibdeps.
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
             build-essential meson ninja-build cmake pkg-config gettext \
             dpkg-dev fakeroot \
             libglib2.0-dev-bin libgtk-3-dev libxfce4panel-2.0-dev \
-            libxfconf-0-dev libnotify-dev libqrencode-dev
+            libxfce4ui-2-dev libxfconf-0-dev libnotify-dev libqrencode-dev
 
       - name: Instalar dependencias (Arch)
         if: startsWith(matrix.imagen, 'archlinux')
         run: |
+          # networkmanager: está en depends del PKGBUILD y makepkg exige que
+          # esté instalado para armar el paquete.
           pacman -Syu --noconfirm --needed \
             base-devel meson ninja cmake pkgconf gettext \
-            gtk3 xfce4-panel xfconf libnotify qrencode
+            gtk3 xfce4-panel xfconf libnotify qrencode networkmanager
 
       - name: Bajar el código
         uses: actions/checkout@v4
@@ -155,6 +161,28 @@ jobs:
         with:
           name: paquete-${{ matrix.sufijo }}
           path: "*.deb"
+
+      - name: Empaquetar .pkg.tar.zst (Arch)
+        if: startsWith(matrix.imagen, 'archlinux')
+        # Usa el mismo packaging/arch/PKGBUILD que se usa a mano, que arma el
+        # paquete con el código de esta copia del repositorio. makepkg no
+        # puede correr como root: se usa un usuario sin privilegios.
+        run: |
+          useradd -m builder
+          chown -R builder "$GITHUB_WORKSPACE"
+          cd packaging/arch
+          runuser -u builder -- env PACKAGER='Tantin1 <juanperez33840@gmail.com>' \
+            makepkg -Cf --noconfirm
+          ls -l ./*.pkg.tar.zst
+
+      - name: Subir paquete de Arch a GitHub Actions
+        if: startsWith(matrix.imagen, 'archlinux')
+        uses: actions/upload-artifact@v4
+        with:
+          name: paquete-${{ matrix.sufijo }}
+          # Solo el paquete principal, no el de símbolos de depuración
+          # (xfce-net-plugin-debug-…) que makepkg arma por defecto.
+          path: "packaging/arch/xfce-net-plugin-[0-9]*.pkg.tar.zst"
 
       - name: Resumen de avisos del compilador
         if: always()
