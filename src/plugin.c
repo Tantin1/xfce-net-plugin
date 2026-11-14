@@ -1012,7 +1012,7 @@ batch_add (NotifyBatch *b, const gchar *summary, const gchar *text,
 static gboolean
 popup_is_open (NetPlugin *np)
 {
-    return np->popup && gtk_widget_get_visible (np->popup->window);
+    return np->popup && popup_is_active (np->popup);
 }
 
 /* El servicio de notificaciones avisa que la notificación se fue (sola,
@@ -1281,14 +1281,21 @@ on_button_toggled (GtkToggleButton *btn, NetPlugin *np)
         popup_show (np->popup, np->plugin, np->button, np->conn,
                     np->popup_width, np->popup_height);
     } else {
-        popup_hide (np->popup);
+        /* Lo cierra el usuario: con fundido de salida si se puede. */
+        popup_close (np->popup);
     }
 }
 
-static void
-on_popup_hidden (GtkWidget *win, NetPlugin *np)
+/* El popup avisa que se cerró (popup.c, cierre lógico): soltar el botón del
+ * panel sin disparar "toggled", que volvería a abrirlo. Antes esto colgaba
+ * de la señal "hide" de la ventana; con el fundido de salida la ventana se
+ * oculta un rato DESPUÉS del cierre, y si en ese rato el usuario reabría el
+ * popup, el "hide" tardío soltaba el botón con el popup recién abierto. */
+void
+net_plugin_popup_closed (gpointer np_ptr)
 {
-    (void) win;
+    NetPlugin *np = np_ptr;
+    if (!np || !np->button) return;
     g_signal_handlers_block_by_func (np->button, on_button_toggled, np);
     gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (np->button), FALSE);
     g_signal_handlers_unblock_by_func (np->button, on_button_toggled, np);
@@ -1357,6 +1364,11 @@ net_plugin_new (XfcePanelPlugin *plugin)
 
     np->button = gtk_toggle_button_new ();
     gtk_button_set_relief (GTK_BUTTON (np->button), GTK_RELIEF_NONE);
+    /* Como los botones de los plugins nativos (xfce_panel_create_toggle_button):
+     * el clic no le da el foco del teclado. Si no, en Wayland, al cerrar el
+     * popup el foco volvía al botón y se dibujaba como si se hubiera llegado
+     * con Tab. Con Tab se sigue pudiendo llegar a él. */
+    gtk_widget_set_focus_on_click (np->button, FALSE);
     gtk_widget_set_tooltip_text (np->button, _("Networks"));
     xfce_panel_plugin_set_shrink (plugin, TRUE);
     xfce_panel_plugin_set_small  (plugin, TRUE);
@@ -1396,8 +1408,7 @@ net_plugin_new (XfcePanelPlugin *plugin)
 
     np->signal_ids = nm_subscribe_signals (np->conn, on_nm_changed, np);
     secret_agent_apply (np);
-    g_signal_connect (np->popup->window, "hide",
-                      G_CALLBACK (on_popup_hidden), np);
+    /* El botón se suelta por net_plugin_popup_closed, no por "hide". */
 
     on_nm_changed (np);
 
