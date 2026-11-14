@@ -416,3 +416,15 @@ msgstr ""
 #: secret-agent.c:269
 msgid "The previous password was not accepted."
 msgstr ""
+
+#: plugin.c
+msgid "Enable animations"
+msgstr ""
+
+#: plugin.c
+msgid "Smooth transitions when network panels, details and the QR code open or close, and when the popup appears. When off, every change is instant."
+msgstr ""
+
+#: popup.c
+msgid "Requires nm-connection-editor (or nmtui and a terminal)"
+msgstr ""

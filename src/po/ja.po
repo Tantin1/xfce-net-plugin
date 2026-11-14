@@ -422,6 +422,18 @@ msgstr "接続に失敗しました"
 msgid "Could not connect"
 msgstr "接続できませんでした"
 
+#: plugin.c
+msgid "Enable animations"
+msgstr "アニメーションを有効にする"
+
+#: plugin.c
+msgid "Smooth transitions when network panels, details and the QR code open or close, and when the popup appears. When off, every change is instant."
+msgstr "ネットワークのパネル、詳細、QR の開閉時と、ポップアップの表示時に滑らかに切り替えます。オフにすると、すべての変化がすぐに反映されます。"
+
+#: popup.c
+msgid "Requires nm-connection-editor (or nmtui and a terminal)"
+msgstr "nm-connection-editor（または nmtui と端末）が必要です"
+
 #~ msgid "Saved network"
 #~ msgstr "保存済みネットワーク"
 

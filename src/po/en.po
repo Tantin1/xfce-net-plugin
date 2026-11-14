@@ -422,6 +422,18 @@ msgstr "Connection failed"
 msgid "Could not connect"
 msgstr "Could not connect"
 
+#: plugin.c
+msgid "Enable animations"
+msgstr "Enable animations"
+
+#: plugin.c
+msgid "Smooth transitions when network panels, details and the QR code open or close, and when the popup appears. When off, every change is instant."
+msgstr "Smooth transitions when network panels, details and the QR code open or close, and when the popup appears. When off, every change is instant."
+
+#: popup.c
+msgid "Requires nm-connection-editor (or nmtui and a terminal)"
+msgstr "Requires nm-connection-editor (or nmtui and a terminal)"
+
 #~ msgid "Saved network"
 #~ msgstr "Saved network"
 

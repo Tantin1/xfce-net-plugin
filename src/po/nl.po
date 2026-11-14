@@ -422,6 +422,18 @@ msgstr "Verbinding mislukt"
 msgid "Could not connect"
 msgstr "Kan geen verbinding maken"
 
+#: plugin.c
+msgid "Enable animations"
+msgstr "Animaties inschakelen"
+
+#: plugin.c
+msgid "Smooth transitions when network panels, details and the QR code open or close, and when the popup appears. When off, every change is instant."
+msgstr "Vloeiende overgangen bij het openen en sluiten van netwerkpanelen, details en de QR-code, en bij het verschijnen van de pop-up. Uitgeschakeld gebeurt elke wijziging direct."
+
+#: popup.c
+msgid "Requires nm-connection-editor (or nmtui and a terminal)"
+msgstr "Vereist nm-connection-editor (of nmtui en een terminal)"
+
 #~ msgid "Saved network"
 #~ msgstr "Opgeslagen netwerk"
 

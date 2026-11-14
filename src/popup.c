@@ -1582,8 +1582,18 @@ popup_create (XfcePanelPlugin *plugin, GtkWidget *button)
                 /* Ventana transparente: se ven las esquinas redondeadas. */
                 "window.net-popup-window.net-rounded { background-color: transparent; background-image: none; }"
                 /* Marco de menú: sin margen ni sombra (quedaría cortada) y
-                 * recto salvo con la clase net-round (popup_set_round). */
-                "menu.net-popup-frame { margin: 0; box-shadow: none; border-radius: 0; }"
+                 * recto salvo con la clase net-round (popup_set_round).
+                 * Sin relleno a los costados: los temas muy redondeados
+                 * (Orchis, Lavanda) le ponen 6 px para que el contenido no
+                 * choque con las esquinas, y entonces las líneas y el
+                 * resaltado de la fila abierta no llegaban al borde. Las
+                 * filas ya tienen su propio margen interno, así que el texto
+                 * queda igual de separado que con los demás temas. El
+                 * relleno de arriba y abajo se mantiene (despeja las
+                 * esquinas). search_sync_height lee el relleno real del
+                 * tema, así que el ancho configurado se respeta igual. */
+                "menu.net-popup-frame { margin: 0; box-shadow: none; border-radius: 0;"
+                "  padding-left: 0; padding-right: 0; }"
                 /* Separadores: sin margen (quedaba una franja sin resaltar
                  * junto a la fila) y con color propio relativo a la letra
                  * del menú: muchos temas los pintan casi del color del fondo
@@ -1811,6 +1821,72 @@ popup_apply_style (NetPopup *popup)
     popup->float_gap = floating ? POPUP_FLOAT_GAP : 0;
 }
 
+/* ---------- fundido de entrada del popup ----------
+ *
+ * Al abrir, la ventana aparece de golpe en su lugar y con su tamaño final;
+ * lo único que se anima es la opacidad del contenido (el marco), de 0 a 1
+ * en POPUP_FADE_MS. No toca posición, tamaño ni la captura de mouse y
+ * teclado (ver "Patrón grab + fallback"). Solo con la ventana transparente
+ * (compositor, rgba_active): sin ella, debajo del contenido se vería el
+ * fondo de la ventana. Respeta las animaciones apagadas del sistema.
+ * Al cerrar NO hay fundido: toda la lógica de cierre supone que el popup
+ * desaparece en el acto. */
+
+#define POPUP_FADE_MS 100
+
+static gboolean
+popup_fade_tick (GtkWidget *frame, GdkFrameClock *clock, gpointer user_data)
+{
+    NetPopup *popup = user_data;
+    gint64   *start = g_object_get_data (G_OBJECT (popup->window), "net-fade-start");
+    gint64    now   = gdk_frame_clock_get_frame_time (clock);
+    if (!start) {
+        start  = g_new (gint64, 1);
+        *start = now;
+        g_object_set_data_full (G_OBJECT (popup->window), "net-fade-start", start, g_free);
+    }
+    gdouble t = (gdouble) (now - *start) / (POPUP_FADE_MS * 1000.0);
+    if (t >= 1.0) {
+        gtk_widget_set_opacity (frame, 1.0);
+        g_object_set_data (G_OBJECT (popup->window), "net-fade-start", NULL);
+        g_object_set_data (G_OBJECT (popup->window), "net-fade-tick", NULL);
+        return G_SOURCE_REMOVE;
+    }
+    gdouble e = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);   /* frena al final */
+    gtk_widget_set_opacity (frame, e);
+    return G_SOURCE_CONTINUE;
+}
+
+/* Corta un fundido en curso y deja el contenido opaco. */
+static void
+popup_fade_stop (NetPopup *popup)
+{
+    guint id = GPOINTER_TO_UINT (g_object_get_data (G_OBJECT (popup->window), "net-fade-tick"));
+    if (id)
+        gtk_widget_remove_tick_callback (popup->frame, id);
+    g_object_set_data (G_OBJECT (popup->window), "net-fade-tick", NULL);
+    g_object_set_data (G_OBJECT (popup->window), "net-fade-start", NULL);
+    gtk_widget_set_opacity (popup->frame, 1.0);
+}
+
+/* Prepara el fundido: se llama justo antes de mostrar la ventana. */
+static void
+popup_fade_begin (NetPopup *popup)
+{
+    popup_fade_stop (popup);
+    gboolean anim = TRUE;
+    g_object_get (gtk_widget_get_settings (popup->window),
+                  "gtk-enable-animations", &anim, NULL);
+    /* "net-no-anim": animaciones apagadas en Propiedades (plugin.c). */
+    if (g_object_get_data (G_OBJECT (popup->window), "net-no-anim"))
+        anim = FALSE;
+    if (!popup->rgba_active || !anim)
+        return;
+    gtk_widget_set_opacity (popup->frame, 0.0);
+    guint id = gtk_widget_add_tick_callback (popup->frame, popup_fade_tick, popup, NULL);
+    g_object_set_data (G_OBJECT (popup->window), "net-fade-tick", GUINT_TO_POINTER (id));
+}
+
 /* ---------- medición de la apertura ----------
  *
  * Mide cuánto tarda el popup desde el clic en el botón del panel (momento
@@ -1925,6 +2001,7 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
         popup->signal_ids = nm_subscribe_signals (conn, on_nm_signal_popup, popup);
 
     popup->button = button;
+    popup_fade_begin (popup);   /* contenido invisible; aparece en 100 ms */
     if (popup_is_wayland (popup->window)) {
         popup_show_wayland (popup, plugin, button);
     } else {
@@ -1954,6 +2031,9 @@ popup_hide (NetPopup *popup)
 
     if (!gtk_widget_get_visible (popup->window))
         return;
+
+    /* Cerrar en medio del fundido: cortarlo y dejar el contenido opaco. */
+    popup_fade_stop (popup);
 
     /* Menú contextual abierto o a medio cerrar: descartarlo. */
     if (popup->menu_idle_id) {

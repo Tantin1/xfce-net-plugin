@@ -28,6 +28,7 @@
 #define DEFAULT_SHOW_NOTIFICATIONS FALSE
 #define DEFAULT_SHOW_FORGET_ACTIVE  FALSE
 #define DEFAULT_SECRET_AGENT        TRUE
+#define DEFAULT_ANIMATIONS          TRUE
 #define DEFAULT_REMEMBER_DISABLED   FALSE
 #define DEFAULT_PREFER_NM_ICONS     FALSE
 #define DEFAULT_POPUP_STYLE         NET_POPUP_STYLE_AUTO
@@ -92,6 +93,7 @@ typedef struct {
     gboolean        show_forget_active;
     gboolean        prefer_nm_icons;   /* íconos de nm-applet antes que los estándar */
     gint            popup_style;       /* NET_POPUP_STYLE_*: automático, flotante o pegada */
+    gboolean        animations;        /* deslizar paneles y fundido del popup */
 
     /* Agente de secretos: responde cuando NM pide una contraseña.
      * NULL si está apagado en Propiedades o no se pudo publicar. */
@@ -264,6 +266,7 @@ config_defaults (NetPlugin *np)
     np->remember_disabled    = DEFAULT_REMEMBER_DISABLED;
     np->prefer_nm_icons      = DEFAULT_PREFER_NM_ICONS;
     np->popup_style          = DEFAULT_POPUP_STYLE;
+    np->animations           = DEFAULT_ANIMATIONS;
     if (!np->disabled_ifaces)
         np->disabled_ifaces = g_hash_table_new_full (g_str_hash, g_str_equal,
                                                      g_free, NULL);
@@ -347,6 +350,7 @@ load_config_xfconf (NetPlugin *np)
                                                       DEFAULT_SHOW_FORGET_ACTIVE);
     np->prefer_nm_icons = xfconf_channel_get_bool (ch, "/prefer-nm-icons", DEFAULT_PREFER_NM_ICONS);
     np->popup_style     = xfconf_channel_get_int  (ch, "/popup-style",     DEFAULT_POPUP_STYLE);
+    np->animations      = xfconf_channel_get_bool (ch, "/animations",      DEFAULT_ANIMATIONS);
     np->secret_agent_enabled = xfconf_channel_get_bool (ch, "/secret-agent", DEFAULT_SECRET_AGENT);
     np->remember_disabled    = xfconf_channel_get_bool (ch, "/remember-disabled",
                                                         DEFAULT_REMEMBER_DISABLED);
@@ -400,6 +404,7 @@ save_config (NetPlugin *np)
     xfconf_channel_set_bool (ch, "/show-forget-active", np->show_forget_active);
     xfconf_channel_set_bool (ch, "/prefer-nm-icons",    np->prefer_nm_icons);
     xfconf_channel_set_int  (ch, "/popup-style",        np->popup_style);
+    xfconf_channel_set_bool (ch, "/animations",         np->animations);
     xfconf_channel_set_bool (ch, "/secret-agent",       np->secret_agent_enabled);
     xfconf_channel_set_bool (ch, "/remember-disabled",  np->remember_disabled);
 
@@ -428,6 +433,7 @@ typedef struct {
     GtkWidget   *forget_active_check;
     GtkWidget   *nm_icons_check;
     GtkWidget   *style_combo;
+    GtkWidget   *anim_check;
     GtkWidget   *plugin_spin;
     GtkWidget   *panel_icon_check;
     GtkWidget   *icon_spin;
@@ -513,6 +519,15 @@ on_forget_active_toggled (GtkToggleButton *btn, PropsDialog *pd)
     pd->np->show_forget_active = gtk_toggle_button_get_active (btn);
     save_config (pd->np);
     pd->np->popup->ui_built = FALSE;
+}
+
+/* Animaciones del popup: se aplican en la próxima apertura (ver
+ * "net-no-anim" en on_button_toggled). */
+static void
+on_animations_toggled (GtkToggleButton *btn, PropsDialog *pd)
+{
+    pd->np->animations = gtk_toggle_button_get_active (btn);
+    save_config (pd->np);
 }
 
 /* El popup toma el estilo nuevo en la próxima apertura. */
@@ -842,6 +857,17 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
     gtk_grid_attach (GTK_GRID (grid), pd->style_combo, 1, row, 1, 1);
     row++;
 
+    /* Animaciones: deslizar los paneles de cada red, Detalles y QR, y el
+     * fundido de entrada del popup. Apagadas, todo cambia en el acto. Si el
+     * sistema tiene las animaciones apagadas, GTK no anima aunque esto esté
+     * marcado. */
+    pd->anim_check = gtk_check_button_new_with_label (_("Enable animations"));
+    gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (pd->anim_check), np->animations);
+    gtk_widget_set_tooltip_text (pd->anim_check,
+        _("Smooth transitions when network panels, details and the QR code open or close, and when the popup appears. When off, every change is instant."));
+    gtk_grid_attach (GTK_GRID (grid), pd->anim_check, 0, row, 2, 1);
+    row++;
+
 #ifdef HAVE_LIBNOTIFY
     pd->notifications_check = gtk_check_button_new_with_label (_("Show notifications"));
     gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (pd->notifications_check),
@@ -912,6 +938,8 @@ on_configure_plugin (XfcePanelPlugin *plugin, NetPlugin *np)
                       G_CALLBACK (on_forget_active_toggled), pd);
     g_signal_connect (pd->style_combo, "changed",
                       G_CALLBACK (on_popup_style_changed), pd);
+    g_signal_connect (pd->anim_check, "toggled",
+                      G_CALLBACK (on_animations_toggled), pd);
     g_signal_connect (pd->nm_icons_check, "toggled",
                       G_CALLBACK (on_nm_icons_toggled), pd);
 #ifdef HAVE_LIBNOTIFY
@@ -1245,6 +1273,11 @@ on_button_toggled (GtkToggleButton *btn, NetPlugin *np)
         np->popup->show_separators   = np->show_separators;
         np->popup->show_forget_active = np->show_forget_active;
         np->popup->popup_style        = np->popup_style;
+        /* Animaciones apagadas en Propiedades: el popup lo lee de este dato
+         * de su ventana (popup_anim_enabled en popup-rows.c, fundido en
+         * popup.c). */
+        g_object_set_data (G_OBJECT (np->popup->window), "net-no-anim",
+                           GINT_TO_POINTER (!np->animations));
         popup_show (np->popup, np->plugin, np->button, np->conn,
                     np->popup_width, np->popup_height);
     } else {

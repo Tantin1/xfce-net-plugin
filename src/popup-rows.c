@@ -118,6 +118,147 @@ draw_qr_matrix (GtkWidget *widget, cairo_t *cr, gpointer user_data)
 }
 #endif /* HAVE_LIBQRENCODE */
 
+/* ---------- Detalles y QR: deslizar al mostrar y ocultar ----------
+ *
+ * La sección de detalles y el código QR van cada uno dentro de un
+ * GtkRevealer (sub_wrap, en make_ap_row), igual que el expand. El resto del
+ * código los sigue mostrando y ocultando directo (instantáneo); solo sus
+ * botones (y el menú contextual) los abren y cierran deslizando. Si uno
+ * reemplaza al otro, el que se va lo hace de golpe: nunca dos animaciones a
+ * la vez. Mientras se despliegan, la lista acompaña para que el expand
+ * siga a la vista. */
+
+static gboolean scroll_to_expand_idle (gpointer user_data);
+static void     expand_follow_on_alloc (GtkWidget *wrap, GdkRectangle *alloc,
+                                        gpointer user_data);
+static gboolean popup_anim_enabled (NetPopup *popup);
+#define SUB_ANIM_MS 150
+
+/* Envuelve una sección en un revelador abierto y sin transición. */
+static GtkWidget *
+sub_wrap (GtkWidget *child)
+{
+    GtkWidget *rev = gtk_revealer_new ();
+    gtk_revealer_set_transition_type (GTK_REVEALER (rev), GTK_REVEALER_TRANSITION_TYPE_NONE);
+    gtk_revealer_set_reveal_child (GTK_REVEALER (rev), TRUE);
+    gtk_container_add (GTK_CONTAINER (rev), child);
+    gtk_widget_show (rev);
+    g_object_set_data (G_OBJECT (child), "net-sub-revealer", rev);
+    return rev;
+}
+
+static void on_sub_revealed (GObject *revealer, GParamSpec *pspec, gpointer rd_ptr);
+
+/* Deja el revelador como siempre: abierto, sin transición, sin avisos. */
+static void
+sub_reset (GtkRevealer *rev, RowData *rd)
+{
+    g_signal_handlers_disconnect_by_func (rev, on_sub_revealed, rd);
+    g_object_set_data (G_OBJECT (rev), "net-closing", NULL);
+    gtk_revealer_set_transition_type (rev, GTK_REVEALER_TRANSITION_TYPE_NONE);
+    gtk_revealer_set_reveal_child (rev, TRUE);
+}
+
+/* Fin de una animación (al abrir o al cerrar). */
+static void
+on_sub_revealed (GObject *revealer, GParamSpec *pspec, gpointer rd_ptr)
+{
+    (void) pspec;
+    RowData     *rd      = rd_ptr;
+    GtkRevealer *rev     = GTK_REVEALER (revealer);
+    gboolean     shown   = gtk_revealer_get_child_revealed (rev);
+    gboolean     closing = GPOINTER_TO_INT (g_object_get_data (revealer, "net-closing"));
+    if (closing == shown)
+        return;   /* todavía no terminó */
+
+    if (rd->expand_box)
+        g_signal_handlers_disconnect_by_func (rd->expand_box,
+                                              expand_follow_on_alloc, rd->popup);
+    if (closing) {
+        GtkWidget *child = gtk_bin_get_child (GTK_BIN (rev));
+        if (child)
+            gtk_widget_hide (child);
+        sub_reset (rev, rd);
+    } else {
+        g_signal_handlers_disconnect_by_func (rev, on_sub_revealed, rd);
+        g_idle_add (scroll_to_expand_idle, rd->popup);
+    }
+}
+
+/* ¿Está a la vista (y no plegándose)? */
+static gboolean
+sub_is_open (GtkWidget *child)
+{
+    if (!child || !gtk_widget_get_visible (child))
+        return FALSE;
+    GtkWidget *rev = g_object_get_data (G_OBJECT (child), "net-sub-revealer");
+    return !(rev && g_object_get_data (G_OBJECT (rev), "net-closing"));
+}
+
+/* Oculta de golpe (cuando la otra sección la reemplaza). */
+static void
+sub_hide_now (RowData *rd, GtkWidget *child)
+{
+    if (!child)
+        return;
+    gtk_widget_hide (child);
+    GtkRevealer *rev = g_object_get_data (G_OBJECT (child), "net-sub-revealer");
+    if (rev)
+        sub_reset (rev, rd);
+}
+
+/* Muestra deslizando hacia abajo (o invierte un pliegue en curso). */
+static void
+sub_open (RowData *rd, GtkWidget *child)
+{
+    GtkRevealer *rev = g_object_get_data (G_OBJECT (child), "net-sub-revealer");
+    if (!rev || !popup_anim_enabled (rd->popup)) {
+        if (rev)
+            sub_reset (rev, rd);
+        gtk_widget_show (child);
+        return;
+    }
+    gboolean reverse = gtk_widget_get_visible (child) &&
+                       g_object_get_data (G_OBJECT (rev), "net-closing");
+    g_signal_handlers_disconnect_by_func (rev, on_sub_revealed, rd);
+    g_object_set_data (G_OBJECT (rev), "net-closing", NULL);
+    if (!reverse) {
+        /* Cerrado sin transición, mostrar y recién ahí abrir con transición
+         * (un revelador sin mapear salta al final sin animar). */
+        gtk_revealer_set_transition_type (rev, GTK_REVEALER_TRANSITION_TYPE_NONE);
+        gtk_revealer_set_reveal_child (rev, FALSE);
+        gtk_widget_show (child);
+    }
+    if (rd->expand_box) {
+        g_signal_handlers_disconnect_by_func (rd->expand_box,
+                                              expand_follow_on_alloc, rd->popup);
+        g_signal_connect (rd->expand_box, "size-allocate",
+                          G_CALLBACK (expand_follow_on_alloc), rd->popup);
+    }
+    g_signal_connect (rev, "notify::child-revealed", G_CALLBACK (on_sub_revealed), rd);
+    gtk_revealer_set_transition_type (rev, GTK_REVEALER_TRANSITION_TYPE_SLIDE_DOWN);
+    gtk_revealer_set_transition_duration (rev, SUB_ANIM_MS);
+    gtk_revealer_set_reveal_child (rev, TRUE);
+}
+
+/* Pliega hacia arriba y oculta al terminar. Si el popup o el expand se
+ * cierran a mitad, GTK termina la animación en el acto y avisa igual. */
+static void
+sub_close (RowData *rd, GtkWidget *child)
+{
+    GtkRevealer *rev = g_object_get_data (G_OBJECT (child), "net-sub-revealer");
+    if (!rev || !gtk_widget_get_mapped (child) || !popup_anim_enabled (rd->popup)) {
+        sub_hide_now (rd, child);
+        return;
+    }
+    g_signal_handlers_disconnect_by_func (rev, on_sub_revealed, rd);
+    g_object_set_data (G_OBJECT (rev), "net-closing", GINT_TO_POINTER (1));
+    g_signal_connect (rev, "notify::child-revealed", G_CALLBACK (on_sub_revealed), rd);
+    gtk_revealer_set_transition_type (rev, GTK_REVEALER_TRANSITION_TYPE_SLIDE_UP);
+    gtk_revealer_set_transition_duration (rev, SUB_ANIM_MS);
+    gtk_revealer_set_reveal_child (rev, FALSE);
+}
+
 /* ---------- callback botón "Mostrar QR" ---------- */
 
 static void
@@ -131,8 +272,8 @@ on_qr_clicked (GtkWidget *btn, gpointer rd_ptr)
     GtkWidget *da  = rd->qr_drawing_area;
     if (!da) return;
 
-    if (gtk_widget_get_visible (da)) {
-        gtk_widget_hide (da);
+    if (sub_is_open (da)) {
+        sub_close (rd, da);   /* se pliega */
         {
             GtkWidget *lbl = g_object_get_data (G_OBJECT (btn), "qr-label");
             if (lbl) gtk_label_set_text (GTK_LABEL (lbl), _("Show QR"));
@@ -140,9 +281,10 @@ on_qr_clicked (GtkWidget *btn, gpointer rd_ptr)
         return;
     }
 
-    /* Cerrar panel de detalles si estaba abierto */
+    /* Cerrar panel de detalles si estaba abierto (de golpe: nunca dos
+     * animaciones a la vez) */
     if (rd->details_box && gtk_widget_get_visible (rd->details_box)) {
-        gtk_widget_hide (rd->details_box);
+        sub_hide_now (rd, rd->details_box);
         if (rd->details_arrow)
             gtk_image_set_from_icon_name (GTK_IMAGE (rd->details_arrow),
                                           "pan-down-symbolic", GTK_ICON_SIZE_MENU);
@@ -190,7 +332,7 @@ on_qr_clicked (GtkWidget *btn, gpointer rd_ptr)
     g_object_set_data (G_OBJECT (da), "qrcode", qr);
 
     g_signal_connect (da, "draw", G_CALLBACK (draw_qr_matrix), qr);
-    gtk_widget_show (da);
+    sub_open (rd, da);   /* se desliza hacia abajo */
     gtk_widget_queue_draw (da);
     {
         GtkWidget *lbl = g_object_get_data (G_OBJECT (btn), "qr-label");
@@ -314,6 +456,191 @@ scroll_to_expand_on_alloc (GtkWidget *expand, GdkRectangle *alloc, gpointer user
     g_idle_add (scroll_to_expand_idle, user_data);
 }
 
+/* ---------- animación al abrir el expand ----------
+ *
+ * El expand de cada fila (rd->expand_box) es una caja que envuelve un
+ * GtkRevealer con el contenido (ver make_ap_row). Normalmente el revelador
+ * está abierto y sin transición, así que mostrar u ocultar el expand es
+ * instantáneo, como siempre, desde cualquier lugar del código (cerrar,
+ * reabrir tras un refresco o un fallo, Olvidar, etc.). Solo al abrirlo con
+ * clic o teclado (row_toggle_expand) se cierra el revelador sin transición,
+ * se muestra el expand y se lo abre deslizando hacia abajo. Si el sistema
+ * tiene las animaciones apagadas, GTK lo abre de golpe.
+ *
+ * Mientras se despliega, la lista acompaña: en cada cuadro se corre lo
+ * mínimo para que el expand siga a la vista (en vez de un salto al final).
+ * La ventana del popup no cambia de tamaño: la lista tiene alto fijo.
+ *
+ * Cierre: solo se anima cuando el usuario cierra el expand abierto (otro
+ * clic, Enter o Espacio en la misma fila): se pliega hacia arriba y al
+ * terminar se oculta la caja. Todos los demás cierres (conectar, fallar,
+ * Olvidar, refrescos, cerrar el popup) siguen siendo instantáneos. Si el
+ * usuario abre OTRA red mientras uno se pliega, el que se pliega termina de
+ * golpe: nunca hay dos animaciones a la vez (la de arriba correría a la de
+ * abajo mientras crece). Si vuelve a abrir la MISMA, GTK invierte la
+ * animación desde donde está. */
+
+#define EXPAND_ANIM_MS 150
+
+/* ¿Animar? No, si se apagaron en Propiedades (dato "net-no-anim" de la
+ * ventana, lo pone plugin.c al abrir). Las animaciones apagadas del sistema
+ * las respeta GTK por su cuenta. */
+static gboolean
+popup_anim_enabled (NetPopup *popup)
+{
+    return !(popup && popup->window &&
+             g_object_get_data (G_OBJECT (popup->window), "net-no-anim"));
+}
+
+/* En cada cuadro de la animación: mantener el expand a la vista. */
+static void
+expand_follow_on_alloc (GtkWidget *wrap, GdkRectangle *alloc, gpointer user_data)
+{
+    (void) alloc;
+    NetPopup *popup = user_data;
+    if (popup->current_expand_box != wrap) {
+        /* Se cerró (o se abrió otro) a mitad de la animación. */
+        g_signal_handlers_disconnect_by_func (wrap, expand_follow_on_alloc, user_data);
+        return;
+    }
+    g_idle_add (scroll_to_expand_idle, popup);
+}
+
+/* Fin de la animación: dejar de seguir y acomodar una última vez. */
+static void
+on_expand_revealed (GObject *revealer, GParamSpec *pspec, gpointer user_data)
+{
+    (void) pspec;
+    if (!gtk_revealer_get_child_revealed (GTK_REVEALER (revealer)))
+        return;
+    GtkWidget *wrap = gtk_widget_get_parent (GTK_WIDGET (revealer));
+    g_signal_handlers_disconnect_by_func (revealer, on_expand_revealed, user_data);
+    if (wrap)
+        g_signal_handlers_disconnect_by_func (wrap, expand_follow_on_alloc, user_data);
+    g_idle_add (scroll_to_expand_idle, user_data);
+}
+
+/* Expand que se está plegando, o NULL. Puntero débil: si la fila se
+ * destruye (refresco) a mitad del pliegue, vuelve solo a NULL. */
+static GtkWidget *collapsing_wrap = NULL;
+
+static void on_expand_collapsed (GObject *revealer, GParamSpec *pspec, gpointer user_data);
+static void on_collapsing_unmap (GtkWidget *revealer, gpointer user_data);
+
+/* Termina el pliegue en curso de golpe: oculta la caja y deja el revelador
+ * abierto y sin transición, como siempre. */
+static void
+expand_collapse_finish (void)
+{
+    GtkWidget *wrap = collapsing_wrap;
+    if (!wrap)
+        return;
+    g_object_remove_weak_pointer (G_OBJECT (wrap), (gpointer *) &collapsing_wrap);
+    collapsing_wrap = NULL;
+
+    GtkRevealer *rev = g_object_get_data (G_OBJECT (wrap), "net-revealer");
+    if (rev) {
+        g_signal_handlers_disconnect_by_func (rev, on_expand_collapsed, NULL);
+        g_signal_handlers_disconnect_by_func (rev, on_collapsing_unmap, NULL);
+    }
+    gtk_widget_hide (wrap);
+    if (rev) {
+        gtk_revealer_set_transition_type (rev, GTK_REVEALER_TRANSITION_TYPE_NONE);
+        gtk_revealer_set_reveal_child (rev, TRUE);
+    }
+}
+
+/* Fin del pliegue. */
+static void
+on_expand_collapsed (GObject *revealer, GParamSpec *pspec, gpointer user_data)
+{
+    (void) pspec; (void) user_data;
+    if (gtk_revealer_get_child_revealed (GTK_REVEALER (revealer)))
+        return;
+    expand_collapse_finish ();
+}
+
+/* El popup se cerró a mitad del pliegue: sin pantalla la animación no
+ * avanza y la caja quedaría a medio cerrar para la próxima apertura. */
+static void
+on_collapsing_unmap (GtkWidget *revealer, gpointer user_data)
+{
+    (void) revealer; (void) user_data;
+    expand_collapse_finish ();
+}
+
+/* Pliega el expand de la fila hacia arriba y lo oculta al terminar. Quien
+ * llama ya lo sacó de current_expand_box. */
+static void
+expand_hide_animated (RowData *rd)
+{
+    GtkWidget   *wrap = rd->expand_box;
+    GtkRevealer *rev  = g_object_get_data (G_OBJECT (wrap), "net-revealer");
+    if (!rev || !gtk_widget_get_mapped (wrap) || !popup_anim_enabled (rd->popup)) {
+        gtk_widget_hide (wrap);
+        return;
+    }
+    expand_collapse_finish ();   /* otro que se estuviera plegando */
+
+    g_signal_handlers_disconnect_by_func (wrap, expand_follow_on_alloc, rd->popup);
+    g_signal_handlers_disconnect_by_func (rev, on_expand_revealed, rd->popup);
+
+    collapsing_wrap = wrap;
+    g_object_add_weak_pointer (G_OBJECT (wrap), (gpointer *) &collapsing_wrap);
+    g_signal_connect (rev, "notify::child-revealed",
+                      G_CALLBACK (on_expand_collapsed), NULL);
+    g_signal_connect (rev, "unmap", G_CALLBACK (on_collapsing_unmap), NULL);
+
+    gtk_revealer_set_transition_type (rev, GTK_REVEALER_TRANSITION_TYPE_SLIDE_UP);
+    gtk_revealer_set_transition_duration (rev, EXPAND_ANIM_MS);
+    gtk_revealer_set_reveal_child (rev, FALSE);
+    /* Con las animaciones del sistema apagadas, GTK cierra de golpe y avisa
+     * en el acto (on_expand_collapsed ya terminó). */
+}
+
+/* Muestra el expand de la fila deslizándolo hacia abajo. */
+static void
+expand_show_animated (RowData *rd)
+{
+    GtkWidget *wrap = rd->expand_box;
+    GtkRevealer *rev = g_object_get_data (G_OBJECT (wrap), "net-revealer");
+    if (!rev || !popup_anim_enabled (rd->popup)) {
+        /* Sin animación: de golpe, como antes. */
+        expand_collapse_finish ();
+        gtk_widget_show (wrap);
+        return;
+    }
+
+    gboolean reverse = (collapsing_wrap == wrap);
+    if (reverse) {
+        /* Se estaba plegando esta misma: invertir desde donde está. */
+        g_object_remove_weak_pointer (G_OBJECT (wrap), (gpointer *) &collapsing_wrap);
+        collapsing_wrap = NULL;
+        g_signal_handlers_disconnect_by_func (rev, on_expand_collapsed, NULL);
+        g_signal_handlers_disconnect_by_func (rev, on_collapsing_unmap, NULL);
+    } else {
+        /* Otra se estaba plegando: termina de golpe (nunca dos a la vez). */
+        expand_collapse_finish ();
+        /* Empezar cerrado (sin transición: es instantáneo), mostrar la caja
+         * (con el popup a la vista queda mapeada en el acto) y recién ahí
+         * abrir con transición: un revelador sin mapear salta al final. */
+        gtk_revealer_set_transition_type (rev, GTK_REVEALER_TRANSITION_TYPE_NONE);
+        gtk_revealer_set_reveal_child (rev, FALSE);
+        gtk_widget_show (wrap);
+    }
+
+    g_signal_handlers_disconnect_by_func (wrap, expand_follow_on_alloc, rd->popup);
+    g_signal_handlers_disconnect_by_func (rev, on_expand_revealed, rd->popup);
+    g_signal_connect (wrap, "size-allocate",
+                      G_CALLBACK (expand_follow_on_alloc), rd->popup);
+    g_signal_connect (rev, "notify::child-revealed",
+                      G_CALLBACK (on_expand_revealed), rd->popup);
+
+    gtk_revealer_set_transition_type (rev, GTK_REVEALER_TRANSITION_TYPE_SLIDE_DOWN);
+    gtk_revealer_set_transition_duration (rev, EXPAND_ANIM_MS);
+    gtk_revealer_set_reveal_child (rev, TRUE);
+}
+
 /* Saca el realce "abierta" (.net-row-open) de TODAS las filas. Se usa cuando
  * el expand se cierra desde lugares que no conocen la fila concreta (confirmar
  * conexión, timeout, olvidar). Recorre las secciones del content_box igual que
@@ -371,8 +698,12 @@ row_toggle_expand (RowData *rd)
     clear_open_highlight (rd->popup);
 
     if (rd->popup->current_expand_box) {
-        gtk_widget_hide (rd->popup->current_expand_box);
+        GtkWidget *prev = rd->popup->current_expand_box;
         rd->popup->current_expand_box = NULL;
+        if (ya_abierto)
+            expand_hide_animated (rd);   /* el usuario lo cierra: se pliega */
+        else
+            gtk_widget_hide (prev);      /* se abre otra: este se va de golpe */
     }
 
     if (!ya_abierto) {
@@ -385,8 +716,8 @@ row_toggle_expand (RowData *rd)
             if (rd->pass_entry)
                 gtk_entry_set_text (GTK_ENTRY (rd->pass_entry), "");
         }
-        gtk_widget_show (rd->expand_box);
         rd->popup->current_expand_box = rd->expand_box;
+        expand_show_animated (rd);   /* desliza hacia abajo (ver arriba) */
         /* Marcar esta fila como abierta (realce visible con mouse y teclado). */
         if (rd->row_box)
             gtk_style_context_add_class (
@@ -761,10 +1092,10 @@ on_details_clicked (GtkWidget *btn, gpointer rd_ptr)
     GtkWidget *db = rd->details_box;
     if (!db) return;
 
-    if (!gtk_widget_get_visible (db)) {
-        /* Cerrar QR si estaba abierto */
+    if (!sub_is_open (db)) {
+        /* Cerrar QR si estaba abierto (de golpe: nunca dos animaciones) */
         if (rd->qr_drawing_area && gtk_widget_get_visible (rd->qr_drawing_area)) {
-            gtk_widget_hide (rd->qr_drawing_area);
+            sub_hide_now (rd, rd->qr_drawing_area);
             if (rd->qr_btn) {
                 GtkWidget *lbl = g_object_get_data (G_OBJECT (rd->qr_btn), "qr-label");
                 if (lbl) gtk_label_set_text (GTK_LABEL (lbl), _("Show QR"));
@@ -773,12 +1104,12 @@ on_details_clicked (GtkWidget *btn, gpointer rd_ptr)
         if (rd->details_arrow)
             gtk_image_set_from_icon_name (GTK_IMAGE (rd->details_arrow),
                                           "pan-up-symbolic", GTK_ICON_SIZE_MENU);
-        gtk_widget_show (db);
+        sub_open (rd, db);    /* se desliza hacia abajo */
     } else {
         if (rd->details_arrow)
             gtk_image_set_from_icon_name (GTK_IMAGE (rd->details_arrow),
                                           "pan-down-symbolic", GTK_ICON_SIZE_MENU);
-        gtk_widget_hide (db);
+        sub_close (rd, db);   /* se pliega */
     }
 }
 
@@ -840,7 +1171,7 @@ on_menu_details (GtkMenuItem *item, gpointer rd_ptr)
     (void) item;
     RowData *rd = rd_ptr;
     row_open_expand (rd);
-    if (rd->details_box && !gtk_widget_get_visible (rd->details_box))
+    if (rd->details_box && !sub_is_open (rd->details_box))
         on_details_clicked (NULL, rd);
 }
 
@@ -852,7 +1183,7 @@ on_menu_qr (GtkMenuItem *item, gpointer rd_ptr)
     RowData *rd = rd_ptr;
     row_open_expand (rd);
     if (rd->qr_btn && rd->qr_drawing_area &&
-        !gtk_widget_get_visible (rd->qr_drawing_area))
+        !sub_is_open (rd->qr_drawing_area))
         on_qr_clicked (rd->qr_btn, rd);
 }
 #endif
@@ -1360,7 +1691,7 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path,
         qr_drawing_area = gtk_drawing_area_new ();
         gtk_widget_set_size_request (qr_drawing_area, 180, 180);
         gtk_widget_set_halign (qr_drawing_area, GTK_ALIGN_CENTER);
-        gtk_box_pack_start (GTK_BOX (expand_box), qr_drawing_area, FALSE, FALSE, 4);
+        gtk_box_pack_start (GTK_BOX (expand_box), sub_wrap (qr_drawing_area), FALSE, FALSE, 4);
         gtk_widget_hide (qr_drawing_area);
         gtk_widget_set_no_show_all (qr_drawing_area, TRUE);
     }
@@ -1422,7 +1753,7 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path,
             details_add_row (details_box, _("BSSID:"), ap->bssid);
         }
 
-        gtk_box_pack_start (GTK_BOX (expand_box), details_box, FALSE, FALSE, 0);
+        gtk_box_pack_start (GTK_BOX (expand_box), sub_wrap (details_box), FALSE, FALSE, 0);
         gtk_widget_hide (details_box);
         gtk_widget_set_no_show_all (details_box, TRUE);
     }
@@ -1466,14 +1797,36 @@ make_ap_row (NmAccessPoint *ap, NetPopup *popup, const gchar *device_path,
         gtk_widget_show (action_btn);
     gtk_widget_show (action_row);
 
-    gtk_widget_set_no_show_all (expand_box, TRUE);
-    gtk_widget_hide (expand_box);
-    gtk_box_pack_start (GTK_BOX (outer), expand_box, FALSE, FALSE, 0);
+    /* El contenido del expand va dentro de un GtkRevealer, para poder
+     * abrirlo deslizando (expand_show_animated), y el revelador dentro de
+     * una caja que hace de expand para todo el resto del código: es la que
+     * se muestra, se oculta y se guarda en rd->expand_box. Así la jerarquía
+     * fila → caja de la fila → expand no cambia (open_expand_is, en
+     * popup-sections.c, sube dos niveles desde el expand). El revelador
+     * queda abierto y sin transición: mostrar u ocultar la caja sigue siendo
+     * instantáneo. */
+    GtkWidget *expand_rev  = gtk_revealer_new ();
+    GtkWidget *expand_wrap = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+    gtk_revealer_set_transition_type (GTK_REVEALER (expand_rev),
+                                      GTK_REVEALER_TRANSITION_TYPE_NONE);
+    gtk_revealer_set_reveal_child (GTK_REVEALER (expand_rev), TRUE);
+    gtk_container_add (GTK_CONTAINER (expand_rev), expand_box);
+    gtk_box_pack_start (GTK_BOX (expand_wrap), expand_rev, FALSE, FALSE, 0);
+    gtk_widget_show (expand_box);
+    gtk_widget_show (expand_rev);
+    g_object_set_data (G_OBJECT (expand_wrap), "net-revealer", expand_rev);
+    /* El aviso de error se busca en el expand (rd->expand_box). */
+    g_object_set_data (G_OBJECT (expand_wrap), "error-label",
+                       g_object_get_data (G_OBJECT (expand_box), "error-label"));
+
+    gtk_widget_set_no_show_all (expand_wrap, TRUE);
+    gtk_widget_hide (expand_wrap);
+    gtk_box_pack_start (GTK_BOX (outer), expand_wrap, FALSE, FALSE, 0);
 
     /* ---- RowData ---- */
     RowData *rd     = g_new0 (RowData, 1);
     rd->popup       = popup;
-    rd->expand_box  = expand_box;
+    rd->expand_box  = expand_wrap;
     rd->action_btn  = action_btn;
     rd->ssid        = g_strdup (ap->ssid);
     rd->ap_path     = g_strdup (ap->object_path);
