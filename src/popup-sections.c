@@ -969,7 +969,7 @@ refresh_ui_cb (gpointer user_data)
     popup->refresh_idle_id = 0;
 
     if (!popup->ui_built) return G_SOURCE_REMOVE;
-    if (!gtk_widget_get_visible (popup->window)) return G_SOURCE_REMOVE;
+    if (!popup_is_active (popup)) return G_SOURCE_REMOVE;
 
     /* Instantánea: todo el refresco lee de una sola foto del bus. */
     nm_cache_begin (popup->conn);
@@ -988,7 +988,7 @@ void
 schedule_refresh_ui (NetPopup *popup)
 {
     if (!popup) return;
-    if (!gtk_widget_get_visible (popup->window)) return;
+    if (!popup_is_active (popup)) return;
     /* Coalescer: si ya hay un refresh pendiente, no encolar otro. El número
      * queda en refresh_idle_id para poder cancelarlo al ocultar o destruir. */
     if (popup->refresh_idle_id)
@@ -1033,7 +1033,7 @@ on_attempt_event (const gchar *ssid, const gchar *device_path,
                   AttemptEvent event, gpointer user_data)
 {
     NetPopup *popup = user_data;
-    if (!popup->ui_built || !gtk_widget_get_visible (popup->window))
+    if (!popup->ui_built || !popup_is_active (popup))
         return;   /* al abrirse, las filas se arman con el estado actual */
 
     gboolean ends = (event == ATTEMPT_EVENT_CONNECTED ||

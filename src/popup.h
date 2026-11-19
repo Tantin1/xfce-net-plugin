@@ -107,6 +107,17 @@ typedef struct {
     gboolean   style_applied;   /* ya se eligió el visual al menos una vez */
     gboolean   rgba_active;     /* ventana con transparencia (esquinas del tema) */
     gint       float_gap;       /* separación del panel y de los bordes, en px (0 = pegada) */
+
+    /* Cierre con fundido (nov-2026, parche 19). Mientras "closing" es TRUE
+     * el popup ya está cerrado para todo el código (sin captura, sin
+     * señales, botón del panel suelto) pero la ventana sigue a la vista
+     * desvaneciéndose. Usar popup_is_active, no la visibilidad de la
+     * ventana, para saber si está abierto. */
+    gboolean   closing;
+    guint      close_tick_id;     /* función por cuadro del fundido de salida */
+    guint      close_timeout_id;  /* tope: termina el cierre aunque no haya cuadros */
+    gint64     close_start;       /* momento del primer cuadro (0 = todavía no) */
+    gdouble    close_from;        /* opacidad con la que arrancó el fundido */
 } NetPopup;
 
 /* Estilo de la ventana (Propiedades → Apariencia → "Popup style"). */
@@ -128,12 +139,24 @@ GtkWidget *make_signal_icon (gint strength, gboolean secure, gint icon_size);
  * recordarlo al reiniciar. */
 void net_plugin_device_toggled (gpointer np_ptr, const gchar *iface, gboolean enabled);
 
+/* Avisa al plugin que el popup se cerró (cierre lógico: antes del fundido
+ * de salida, si lo hay), para que suelte el botón del panel. */
+void net_plugin_popup_closed (gpointer np_ptr);
+
 
 NetPopup *popup_create  (XfcePanelPlugin *plugin, GtkWidget *button);
 void      popup_show    (NetPopup *popup, XfcePanelPlugin *plugin,
                          GtkWidget *button, GDBusConnection *conn,
                          gint popup_width, gint popup_height);
+/* Cierre instantáneo, el de siempre. Si había un fundido de salida en
+ * curso, lo termina de golpe. Para cierres automáticos y para cuando
+ * enseguida se abre otra ventana que necesita el teclado. */
 void      popup_hide    (NetPopup *popup);
+/* Cierre pedido por el usuario (Escape, clic afuera, botón del panel): con
+ * fundido de salida si se puede; si no, igual que popup_hide. */
+void      popup_close   (NetPopup *popup);
+/* ¿Abierto de verdad? FALSE también mientras se desvanece. */
+gboolean  popup_is_active (NetPopup *popup);
 void      popup_destroy (NetPopup *popup);
 
 #endif /* POPUP_H */

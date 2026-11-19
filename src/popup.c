@@ -96,6 +96,7 @@ popup_set_round (NetPopup *popup, gint radius)
 static gboolean on_button_press (GtkWidget *widget, GdkEventButton *event, NetPopup *popup);
 static gboolean on_focus_out    (GtkWidget *widget, GdkEventFocus *ev, NetPopup *popup);
 static gboolean popup_is_wayland (GtkWidget *w);
+static gboolean popup_surface_alive (NetPopup *popup);
 
 /* Libera una cadena sensible (contraseña) sobreescribiéndola primero con
  * ceros, para que el texto no quede flotando en la memoria liberada.
@@ -313,7 +314,7 @@ static void
 on_theme_changed (GObject *settings, GParamSpec *pspec, NetPopup *popup)
 {
     (void) settings; (void) pspec;
-    if (!gtk_widget_get_visible (popup->window))
+    if (!popup_is_active (popup))
         popup->theme_dirty = TRUE;
 }
 
@@ -389,7 +390,7 @@ wl_on_button_press (GtkWidget *w, GdkEventButton *ev, NetPopup *popup)
         return GDK_EVENT_PROPAGATE;     /* clic dentro del popup */
     if (popup->ctx_menu || popup->menu_idle_id)
         return GDK_EVENT_PROPAGATE;
-    popup_hide (popup);
+    popup_close (popup);    /* lo cierra el usuario: con fundido */
     return GDK_EVENT_STOP;
 }
 
@@ -404,6 +405,18 @@ wl_on_popup_gone (GtkWidget *w, GdkEvent *ev, NetPopup *popup)
               ev->type == GDK_GRAB_BROKEN ? "grab-broken" : "unmap");
     /* Abrir el menú contextual le saca el grab al popup: no es cerrar. */
     if (popup->ctx_menu || popup->menu_idle_id)
+        return FALSE;
+    /* Fundido de salida en curso y la ventana sigue en pantalla: el aviso
+     * viene de haber soltado la captura nosotros, no del compositor. Se
+     * deja terminar el fundido. Si el compositor sí la sacó (clic en otra
+     * ventana durante el fundido), ya no hay nada que desvanecer y se
+     * termina de golpe con popup_hide. */
+    if (popup->closing && popup_surface_alive (popup))
+        return FALSE;
+    /* Aviso atrasado de un cierre anterior: llega cuando el popup ya se
+     * volvió a abrir (reabrir durante el fundido oculta y muestra en el
+     * mismo paso). Si la ventana está en pantalla, no es para esta. */
+    if (ev->type == GDK_UNMAP && popup_surface_alive (popup))
         return FALSE;
     if (gtk_widget_get_visible (popup->window))
         popup_hide (popup);
@@ -1348,11 +1361,17 @@ static gboolean
 on_key_press (GtkWidget *widget, GdkEventKey *event, NetPopup *popup)
 {
     (void) widget;
+    /* Desvaneciéndose: ya está cerrado, las teclas que todavía lleguen
+     * (en Wayland el teclado sigue acá hasta que la ventana se va) se
+     * descartan. */
+    if (popup->closing)
+        return GDK_EVENT_STOP;
+
     if (search_handle_key (popup, event))
         return GDK_EVENT_STOP;
 
     if (event->keyval == GDK_KEY_Escape) {
-        popup_hide (popup);
+        popup_close (popup);    /* lo cierra el usuario: con fundido */
         return GDK_EVENT_STOP;
     }
 
@@ -1386,7 +1405,7 @@ on_focus_out (GtkWidget *widget, GdkEventFocus *ev, NetPopup *popup)
      * "clickear afuera", no hay que cerrar. */
     if (popup->ctx_menu || popup->menu_idle_id)
         return FALSE;
-    popup_hide (popup);
+    popup_close (popup);
     return FALSE;
 }
 
@@ -1401,7 +1420,7 @@ on_button_press (GtkWidget *widget, GdkEventButton *event, NetPopup *popup)
 
     if (event->x_root < x || event->x_root > x + w ||
         event->y_root < y || event->y_root > y + h)
-        popup_hide (popup);
+        popup_close (popup);    /* lo cierra el usuario: con fundido */
 
     return GDK_EVENT_PROPAGATE;
 }
@@ -1829,8 +1848,7 @@ popup_apply_style (NetPopup *popup)
  * teclado (ver "Patrón grab + fallback"). Solo con la ventana transparente
  * (compositor, rgba_active): sin ella, debajo del contenido se vería el
  * fondo de la ventana. Respeta las animaciones apagadas del sistema.
- * Al cerrar NO hay fundido: toda la lógica de cierre supone que el popup
- * desaparece en el acto. */
+ * El fundido de salida está más abajo (popup_close). */
 
 #define POPUP_FADE_MS 100
 
@@ -1954,6 +1972,11 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
     g_signal_connect_after (popup->window, "draw",
                             G_CALLBACK (on_first_draw), popup);
 
+    /* Reabrir mientras se desvanece (o con la ventana todavía a la vista):
+     * terminar ese cierre de golpe antes de mostrar. popup_apply_style y
+     * la ubicación necesitan la ventana oculta. */
+    popup_hide (popup);
+
     popup->conn         = conn;
     popup->popup_width  = popup_width;
     popup->popup_height = popup_height;
@@ -2023,16 +2046,76 @@ popup_show (NetPopup *popup, XfcePanelPlugin *plugin, GtkWidget *button,
     open_mark_set (popup, "net-open-shown");   /* medición */
 }
 
-void
-popup_hide (NetPopup *popup)
+/* ---------- cierre del popup ----------
+ *
+ * El cierre está partido en dos:
+ *
+ *   cierre LÓGICO (popup_close_logical): todo lo que hace que el popup deje
+ *   de estar abierto para el resto del programa. Soltar la captura de mouse
+ *   y teclado, desconectar el manejador de clics, desuscribirse del bus,
+ *   cancelar temporizadores, soltar el botón del panel. Es instantáneo
+ *   siempre.
+ *
+ *   cierre VISUAL (popup_close_visual): dejar el contenido como nuevo
+ *   (panel abierto, búsqueda, botón Actualizar) y ocultar la ventana.
+ *
+ * popup_hide hace los dos seguidos: el cierre de siempre. popup_close hace
+ * el lógico, desvanece el contenido en POPUP_FADE_OUT_MS y recién entonces
+ * hace el visual. Entre uno y otro (popup->closing) la ventana se ve pero
+ * no recibe clics ni teclas, y nada del programa la considera abierta
+ * (popup_is_active).
+ *
+ * Igual que el fundido de entrada: la ventana no cambia de tamaño ni de
+ * lugar, solo la opacidad del marco, y solo con la ventana transparente.
+ *
+ * Wayland: cuando el cierre lo decide el compositor (clic en otra ventana
+ * o en el escritorio) la ventana ya fue sacada de la pantalla antes de
+ * avisarnos: no queda nada que desvanecer y ese cierre es instantáneo
+ * (wl_on_popup_gone → popup_hide). Los cierres que decide el plugin
+ * (Escape, clic en el panel o en el botón) sí se desvanecen. */
+
+#define POPUP_FADE_OUT_MS 100
+
+gboolean
+popup_is_active (NetPopup *popup)
+{
+    return popup && popup->window &&
+           gtk_widget_get_visible (popup->window) && !popup->closing;
+}
+
+/* ¿La ventana sigue de verdad en pantalla? En Wayland el compositor puede
+ * sacarla por su cuenta: GDK la da por oculta aunque GTK todavía la crea
+ * visible. */
+static gboolean
+popup_surface_alive (NetPopup *popup)
+{
+    GdkWindow *w = gtk_widget_get_window (popup->window);
+    return w && gdk_window_is_visible (w);
+}
+
+/* Que los clics atraviesen (o no) la ventana. Mientras se desvanece no
+ * tiene que atajar clics: van a lo que haya debajo. */
+static void
+popup_set_click_through (NetPopup *popup, gboolean through)
+{
+    if (through) {
+        cairo_region_t *empty = cairo_region_create ();
+        gtk_widget_input_shape_combine_region (popup->window, empty);
+        cairo_region_destroy (empty);
+    } else {
+        gtk_widget_input_shape_combine_region (popup->window, NULL);
+    }
+}
+
+static void
+popup_close_logical (NetPopup *popup)
 {
     GdkDisplay *display;
     GdkSeat    *seat;
 
-    if (!gtk_widget_get_visible (popup->window))
-        return;
+    popup->closing = TRUE;
 
-    /* Cerrar en medio del fundido: cortarlo y dejar el contenido opaco. */
+    /* Cerrar en medio del fundido de entrada: cortarlo. */
     popup_fade_stop (popup);
 
     /* Menú contextual abierto o a medio cerrar: descartarlo. */
@@ -2075,10 +2158,44 @@ popup_hide (NetPopup *popup)
         popup->refresh_idle_id = 0;
     }
     popup->scanning = FALSE;
-    /* Y devolver el botón a su estado de reposo. Antes no se hacía: si se
-     * cerraba el popup mientras decía "Actualizando…", al reabrirlo el botón
-     * seguía deshabilitado (ya no quedaba ningún temporizador que lo
-     * habilitara) hasta reiniciar el panel o cambiar el tema. */
+
+    /* Wayland: mientras el popup tuvo la captura, el botón del panel no se
+     * enteró de que el mouse se fue, y quedaba resaltado hasta volver a
+     * pasar por encima. También quedaba visible el indicador de foco del
+     * teclado (el mismo que aparece al tabear). Se limpian los dos. */
+    if (popup->button && popup_is_wayland (popup->window)) {
+        gtk_widget_unset_state_flags (popup->button,
+                                      GTK_STATE_FLAG_PRELIGHT | GTK_STATE_FLAG_ACTIVE);
+        GtkWidget *top = gtk_widget_get_toplevel (popup->button);
+        if (GTK_IS_WINDOW (top))
+            gtk_window_set_focus_visible (GTK_WINDOW (top), FALSE);
+    }
+
+    /* Soltar el botón del panel YA, no cuando la ventana se oculte: así un
+     * clic en el botón durante el fundido reabre el popup. */
+    if (popup->plugin_ref)
+        net_plugin_popup_closed (popup->plugin_ref);
+}
+
+static void
+popup_close_visual (NetPopup *popup)
+{
+    /* Fundido de salida: cortarlo y dejar todo como para la próxima vez. */
+    if (popup->close_tick_id) {
+        gtk_widget_remove_tick_callback (popup->frame, popup->close_tick_id);
+        popup->close_tick_id = 0;
+    }
+    if (popup->close_timeout_id) {
+        g_source_remove (popup->close_timeout_id);
+        popup->close_timeout_id = 0;
+    }
+    popup->close_start = 0;
+
+    /* Devolver el botón Actualizar a su estado de reposo. Antes no se
+     * hacía: si se cerraba el popup mientras decía "Actualizando…", al
+     * reabrirlo el botón seguía deshabilitado (ya no quedaba ningún
+     * temporizador que lo habilitara) hasta reiniciar el panel o cambiar
+     * el tema. */
     refresh_button_set_busy (popup, FALSE);
 
     /* Cerrar expand abierto para que al reabrir el popup esté limpio. */
@@ -2093,30 +2210,108 @@ popup_hide (NetPopup *popup)
     /* La búsqueda no sobrevive al cierre: al reabrir se ven todas las redes. */
     search_close (popup);
 
-    /* Wayland: mientras el popup tuvo la captura, el botón del panel no se
-     * enteró de que el mouse se fue, y quedaba resaltado hasta volver a
-     * pasar por encima. También quedaba visible el indicador de foco del
-     * teclado (el mismo que aparece al tabear). Se limpian los dos. */
-    if (popup->button && popup_is_wayland (popup->window)) {
-        gtk_widget_unset_state_flags (popup->button,
-                                      GTK_STATE_FLAG_PRELIGHT | GTK_STATE_FLAG_ACTIVE);
-        GtkWidget *top = gtk_widget_get_toplevel (popup->button);
-        if (GTK_IS_WINDOW (top))
-            gtk_window_set_focus_visible (GTK_WINDOW (top), FALSE);
-    }
-
     /* El bloqueo de señales que había acá no matcheaba ningún manejador:
      * los del botón están registrados con el complemento como dato, no con
-     * el botón mismo, así que el block/unblock era código muerto. La
-     * protección real contra la recursión vive en on_popup_hidden de
-     * plugin.c. */
+     * el botón mismo, así que el block/unblock era código muerto. El botón
+     * del panel se suelta en el cierre lógico (net_plugin_popup_closed). */
     gtk_widget_hide (popup->window);
+
+    /* Recién con la ventana oculta: contenido opaco y clics normales para
+     * la próxima apertura (antes de ocultar se vería un destello). */
+    gtk_widget_set_opacity (popup->frame, 1.0);
+    popup_set_click_through (popup, FALSE);
+    popup->closing = FALSE;
+}
+
+/* Cierre instantáneo. También termina de golpe un fundido de salida. */
+void
+popup_hide (NetPopup *popup)
+{
+    if (!gtk_widget_get_visible (popup->window))
+        return;
+    if (!popup->closing)
+        popup_close_logical (popup);
+    popup_close_visual (popup);
+}
+
+static gboolean
+popup_fade_out_tick (GtkWidget *frame, GdkFrameClock *clock, gpointer user_data)
+{
+    NetPopup *popup = user_data;
+    gint64    now   = gdk_frame_clock_get_frame_time (clock);
+    if (!popup->close_start)
+        popup->close_start = now;
+    gdouble t = (gdouble) (now - popup->close_start) / (POPUP_FADE_OUT_MS * 1000.0);
+    if (t >= 1.0) {
+        /* GTK quita esta función al devolver REMOVE: que el cierre visual
+         * no la quite otra vez. */
+        popup->close_tick_id = 0;
+        popup_close_visual (popup);
+        return G_SOURCE_REMOVE;
+    }
+    /* Cae rápido al principio y frena al final. */
+    gtk_widget_set_opacity (frame, popup->close_from * (1.0 - t) * (1.0 - t));
+    return G_SOURCE_CONTINUE;
+}
+
+/* Tope: si no llegan cuadros (en Wayland el compositor deja de pedirlos
+ * cuando la ventana no se ve), el cierre termina igual. */
+static gboolean
+popup_fade_out_timeout (gpointer user_data)
+{
+    NetPopup *popup = user_data;
+    popup->close_timeout_id = 0;
+    if (popup->closing)
+        popup_close_visual (popup);
+    return G_SOURCE_REMOVE;
+}
+
+/* Cierre pedido por el usuario: con fundido de salida si se puede. */
+void
+popup_close (NetPopup *popup)
+{
+    if (!gtk_widget_get_visible (popup->window) || popup->closing)
+        return;
+
+    /* Mismas condiciones que el fundido de entrada, y además que la ventana
+     * esté de verdad en pantalla. */
+    gboolean anim = TRUE;
+    g_object_get (gtk_widget_get_settings (popup->window),
+                  "gtk-enable-animations", &anim, NULL);
+    if (g_object_get_data (G_OBJECT (popup->window), "net-no-anim"))
+        anim = FALSE;
+    if (!anim || !popup->rgba_active ||
+        !gtk_widget_get_mapped (popup->window) || !popup_surface_alive (popup)) {
+        WL_DEBUG ("cierre sin fundido: animaciones=%d transparente=%d mapeada=%d en pantalla=%d",
+                  anim, popup->rgba_active, gtk_widget_get_mapped (popup->window),
+                  popup_surface_alive (popup));
+        popup_hide (popup);
+        return;
+    }
+
+    /* Si se cierra en medio del fundido de entrada, la salida arranca desde
+     * la opacidad que tenía (popup_close_logical la deja en 1). */
+    gdouble from = gtk_widget_get_opacity (popup->frame);
+
+    popup_close_logical (popup);
+
+    popup->close_from  = from;
+    popup->close_start = 0;
+    gtk_widget_set_opacity (popup->frame, from);
+    popup_set_click_through (popup, TRUE);
+    popup->close_tick_id = gtk_widget_add_tick_callback (popup->frame,
+                               popup_fade_out_tick, popup, NULL);
+    popup->close_timeout_id = g_timeout_add (POPUP_FADE_OUT_MS + 150,
+                                             popup_fade_out_timeout, popup);
 }
 
 void
 popup_destroy (NetPopup *popup)
 {
     if (!popup) return;
+    /* El plugin se está liberando: no avisarle del cierre (su botón puede
+     * no existir ya). */
+    popup->plugin_ref = NULL;
     popup_hide (popup);
     /* La configuración de GTK sobrevive al popup: soltar el aviso de tema. */
     if (popup->theme_handler)
