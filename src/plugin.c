@@ -1189,6 +1189,10 @@ on_nm_changed_cb (gpointer user_data)
             g_string_append (tip, _(" · Sign-in required"));
 
         gtk_widget_set_tooltip_text (np->button, tip->str);
+        /* Poner el texto vuelve a activar la ayuda emergente: con el popup
+         * abierto, mantenerla apagada (se prende al cerrarlo). */
+        if (popup_is_open (np))
+            gtk_widget_set_has_tooltip (np->button, FALSE);
         g_string_free (tip, TRUE);
     }
 
@@ -1278,6 +1282,8 @@ on_button_toggled (GtkToggleButton *btn, NetPlugin *np)
          * popup.c). */
         g_object_set_data (G_OBJECT (np->popup->window), "net-no-anim",
                            GINT_TO_POINTER (!np->animations));
+        /* Con el popup abierto, la ayuda emergente del botón sobra. */
+        gtk_widget_set_has_tooltip (np->button, FALSE);
         popup_show (np->popup, np->plugin, np->button, np->conn,
                     np->popup_width, np->popup_height);
     } else {
@@ -1299,6 +1305,8 @@ net_plugin_popup_closed (gpointer np_ptr)
     g_signal_handlers_block_by_func (np->button, on_button_toggled, np);
     gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (np->button), FALSE);
     g_signal_handlers_unblock_by_func (np->button, on_button_toggled, np);
+    /* Popup cerrado: vuelve la ayuda emergente del botón. */
+    gtk_widget_set_has_tooltip (np->button, TRUE);
 }
 
 /* ---------- construcción del plugin ---------- */
